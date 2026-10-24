@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build Aidiction as a flatpak, and lay out the signed repository that
-# app.akergez.Aidiction.flatpakref points at.
+# Build Aiddiction as a flatpak, and lay out the signed repository that
+# app.akergez.Aiddiction.flatpakref points at.
 #
 #   build-aux/publish-flatpak.sh             build this machine's architecture
 #                                            into .flatpak-repo, nothing else
@@ -23,15 +23,15 @@
 #   FLATPAK_GPG_PASSPHRASE  that key's passphrase, required alongside it
 #   FLATPAK_HOMEPAGE     the project page named in the ref file
 #   FLATPAK_BUNDLE_DIR   also pack each architecture as a single-file
-#                        aidiction-<version>-<arch>.flatpak into this directory
+#                        aiddiction-<version>-<arch>.flatpak into this directory
 #   FLATPAK_BUNDLE_VERSION  the version in that name, required alongside it
 set -Eeuo pipefail
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd -- "$root"
 
-app_id=app.akergez.Aidiction
-app_title='Aidiction'
+app_id=app.akergez.Aiddiction
+app_title='Aiddiction'
 app_branch=${FLATPAK_BRANCH:-stable}
 
 repo_dir=$root/.flatpak-repo
@@ -163,7 +163,7 @@ if [[ -n ${FLATPAK_BUNDLE_DIR:-} ]]; then
   # One bundle per architecture the repository holds.
   for ref in "$repo_dir/refs/heads/app/$app_id"/*/; do
     bundle_arch=$(basename -- "$ref")
-    bundle=$FLATPAK_BUNDLE_DIR/aidiction-$bundle_version-$bundle_arch.flatpak
+    bundle=$FLATPAK_BUNDLE_DIR/aiddiction-$bundle_version-$bundle_arch.flatpak
     flatpak build-bundle --arch="$bundle_arch" \
       --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo \
       "$repo_dir" "$bundle" "$app_id" "$app_branch"

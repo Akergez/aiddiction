@@ -3,15 +3,15 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Aidiction</string>
+    <string>Aiddiction</string>
     <key>CFBundleDisplayName</key>
-    <string>Aidiction</string>
+    <string>Aiddiction</string>
     <key>CFBundleIdentifier</key>
-    <string>app.akergez.Aidiction</string>
+    <string>app.akergez.Aiddiction</string>
     <key>CFBundleExecutable</key>
-    <string>aidiction</string>
+    <string>aiddiction</string>
     <key>CFBundleIconFile</key>
-    <string>Aidiction</string>
+    <string>Aiddiction</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleInfoDictionaryVersion</key>

@@ -1,4 +1,4 @@
-# Aidiction — план реализации оркестратора проектов агентов
+# Aiddiction — план реализации оркестратора проектов агентов
 
 Клиент-серверное приложение: сервер на Rust управляет проектами (директориями
 на своей машине) и запускает в них ACP-агентов отдельными процессами; клиент на
@@ -48,7 +48,7 @@ Rust/GPUI (`gpui-kit`) — десктоп и Android — подключаетс�
 
 ```
 ┌──────────────────────────────┐            ┌───────────────────────────────────────────┐
-│ Клиент aidiction (GPUI)      │  HTTPS     │ aidiction-server (axum + tokio)           │
+│ Клиент aiddiction (GPUI)      │  HTTPS     │ aiddiction-server (axum + tokio)           │
 │                              │  REST      │                                           │
 │ Settings (серверы)           ├───────────►│ /api/v1/...  проекты, каталог, инстансы   │
 │ ServerConnection ── events ◄─┼──── WS ────┤ /api/v1/events   (статусы, прогресс)      │
@@ -82,16 +82,16 @@ Rust/GPUI (`gpui-kit`) — десктоп и Android — подключаетс�
 ## 3. Структура репозитория
 
 ```
-aidiction/
+aiddiction/
 ├── Cargo.toml                    # workspace, [workspace.package] version, профили dev/release/dist
 ├── rust-toolchain.toml           # channel = "1.95" (как в money-manager-ng)
 ├── CLAUDE.md                     # команды, архитектура, правила (заводится на этапе 1)
 ├── crates/
-│   ├── aidiction-api/            # общие типы REST/событий (serde), без tokio/gpui
-│   ├── aidiction-server/         # бинарь сервера
-│   ├── aidiction-client/         # HTTP/WS-клиент сервера + ACP-транспорт; без gpui
-│   ├── aidiction/                # приложение: lib + cdylib + тонкий main.rs
-│   └── aidiction-fake-agent/     # ACP-агент-заглушка со сценариями (тесты, демо)
+│   ├── aiddiction-api/            # общие типы REST/событий (serde), без tokio/gpui
+│   ├── aiddiction-server/         # бинарь сервера
+│   ├── aiddiction-client/         # HTTP/WS-клиент сервера + ACP-транспорт; без gpui
+│   ├── aiddiction/                # приложение: lib + cdylib + тонкий main.rs
+│   └── aiddiction-fake-agent/     # ACP-агент-заглушка со сценариями (тесты, демо)
 ├── android/                      # Gradle-проект из money-manager-ng/android
 ├── build-aux/
 │   ├── build-android.sh
@@ -102,10 +102,10 @@ aidiction/
     └── API.md                    # спецификация REST/WS (заводится на этапе 2)
 ```
 
-Правило слоёв (как в matterfast/money-manager): `aidiction-api` и
-`aidiction-client` не зависят от GPUI и **никогда** не начинают зависеть.
-`aidiction-server` не зависит от `aidiction-client`. Приложение зависит от
-`gpui-kit` и `aidiction-client`.
+Правило слоёв (как в matterfast/money-manager): `aiddiction-api` и
+`aiddiction-client` не зависят от GPUI и **никогда** не начинают зависеть.
+`aiddiction-server` не зависит от `aiddiction-client`. Приложение зависит от
+`gpui-kit` и `aiddiction-client`.
 
 ### Workspace `Cargo.toml` (скелет)
 
@@ -147,7 +147,7 @@ incremental = false
 strip = true
 ```
 
-## 4. Сервер (`aidiction-server`)
+## 4. Сервер (`aiddiction-server`)
 
 ### 4.1 Стек
 
@@ -161,11 +161,11 @@ strip = true
 
 ### 4.2 Конфигурация и данные
 
-`$XDG_CONFIG_HOME/aidiction-server/config.toml`:
+`$XDG_CONFIG_HOME/aiddiction-server/config.toml`:
 
 ```toml
 listen = "127.0.0.1:7878"
-projects_root = "~/aidiction-projects"   # все проекты — поддиректории
+projects_root = "~/aiddiction-projects"   # все проекты — поддиректории
 # tls = { cert = "...", key = "..." }
 
 [limits]
@@ -189,7 +189,7 @@ env = { }
 Каталог агентов собирается из трёх источников (`AgentSource` в API):
 `builtin` (Claude, Codex), `config` (`[[agents]]` из файла, только чтение
 через API) и `custom` — добавленные клиентами через `POST /agents`, хранятся
-в `$XDG_DATA_HOME/aidiction-server/agents.json`. Форма описания агента — как
+в `$XDG_DATA_HOME/aiddiction-server/agents.json`. Форма описания агента — как
 у Zed в `agent_servers`: `command`, `args`, `env`. `command` выполняется
 `bash -c '<command> "$@"'` в директории проекта, аргументы идут после него.
 Клиент получает каталог с командами (чтобы человек видел, что запустится на
@@ -197,12 +197,12 @@ env = { }
 на `•••` — там могут быть API-ключи.
 
 Токен доступа: при первом запуске генерируется случайный (32 байта, base64url),
-хранится как хеш (argon2/sha256) в `$XDG_DATA_HOME/aidiction-server/auth`,
-сам токен печатается в консоль один раз (`aidiction-server token --rotate`
+хранится как хеш (argon2/sha256) в `$XDG_DATA_HOME/aiddiction-server/auth`,
+сам токен печатается в консоль один раз (`aiddiction-server token --rotate`
 выпускает новый). Секреты агентов (API-ключи) — только в `env` конфига или в
 окружении сервера, клиенту никогда не отдаются.
 
-`$XDG_DATA_HOME/aidiction-server/state.sqlite` — таблицы:
+`$XDG_DATA_HOME/aiddiction-server/state.sqlite` — таблицы:
 
 - `projects(id TEXT PK uuid-v7, name, dir_name UNIQUE, origin_kind 'empty'|'git', git_url, git_branch, created_at, last_opened_at)`
 - `git_jobs(id, project_id, state 'running'|'done'|'failed', progress, message, started_at, finished_at)`
@@ -214,7 +214,7 @@ env = { }
 
 ### 4.3 REST API (`/api/v1`, JSON, `Authorization: Bearer <token>`)
 
-Типы — в `aidiction-api`, сериализуются `serde` с `rename_all = "camelCase"`.
+Типы — в `aiddiction-api`, сериализуются `serde` с `rename_all = "camelCase"`.
 Ошибки — `{ "error": { "code": "project_not_found", "message": "…" } }` с
 корректным HTTP-статусом.
 
@@ -274,7 +274,7 @@ pub struct Instance {
    у Pi `session/new` весит ~113 КБ, см. комментарий в acp-ws-bridge), запись
    в stdin через `mpsc` с добавлением `\n`, stderr → `stderr_tail` + `tracing`.
 4. `initialize` (`protocolVersion: 1`, `clientCapabilities: { fs: {readTextFile, writeTextFile}, terminal: true }`,
-   `clientInfo: { name: "aidiction-server", version }`) в гонке с
+   `clientInfo: { name: "aiddiction-server", version }`) в гонке с
    `child.wait()` — как в Zed: если процесс умер раньше ответа, ошибка запуска
    содержит хвост stderr.
 5. Состояние `Ready`, событие `instance.state` в `/events`.
@@ -318,9 +318,9 @@ struct ProxyState {
 | C→A | любой запрос | Подменить `id` на уникальный `upstream id`, запомнить исходный; ответ вернуть **только** спросившему соединению с восстановленным `id`. |
 | C→A | `session/prompt` | Как выше + записать `sessionId` в журнал как «prompt in flight». Если на эту сессию уже идёт `session/load` от другого соединения — придержать load до конца prompt'а (баг Devin из multiagent-ui). |
 | C→A | `session/cancel` (уведомление) | Переслать. |
-| C→A | ответ на запрос агента | Найти в `pending_agent`, переслать агенту, удалить. Первый ответ выигрывает, остальным соединениям разослать `$/aidiction/agent_request_resolved`. |
+| C→A | ответ на запрос агента | Найти в `pending_agent`, переслать агенту, удалить. Первый ответ выигрывает, остальным соединениям разослать `$/aiddiction/agent_request_resolved`. |
 | A→C | `fs/read_text_file`, `fs/write_text_file` | **Обслужить на сервере**: путь канонизировать, требовать нахождения внутри проекта, `line`/`limit` для чтения, запись через temp-файл + rename. Клиенту не отправлять. |
-| A→C | `terminal/*` | **Обслужить на сервере** (`TerminalManager`: процесс в cwd проекта, буфер вывода с `outputByteLimit`, `wait_for_exit`, `kill`, `release`). Клиенту не отправлять; вывод терминала клиент видит через `ToolCallContent::Terminal` — поэтому сервер дополнительно шлёт клиенту расширение `$/aidiction/terminal_output { terminalId, chunk }` (Zed использует аналогичный `terminal_output` в `_meta`). |
+| A→C | `terminal/*` | **Обслужить на сервере** (`TerminalManager`: процесс в cwd проекта, буфер вывода с `outputByteLimit`, `wait_for_exit`, `kill`, `release`). Клиенту не отправлять; вывод терминала клиент видит через `ToolCallContent::Terminal` — поэтому сервер дополнительно шлёт клиенту расширение `$/aiddiction/terminal_output { terminalId, chunk }` (Zed использует аналогичный `terminal_output` в `_meta`). |
 | A→C | `session/request_permission`, `session/elicitation`, прочие запросы | Владельцу сессии, если он подключён; иначе всем соединениям инстанса; иначе держать в `pending_agent` и отдать первому подключившемуся. |
 | A→C | `session/update` и другие уведомления с `sessionId` | Записать в журнал сессии, отправить владельцу (если нет — всем, кто «смотрит» сессию). |
 | A→C | без `sessionId` | Всем соединениям. |
@@ -328,9 +328,9 @@ struct ProxyState {
 **Журнал и переподключение.** Клиент на телефоне теряет сокет постоянно.
 Каждое уведомление получает монотонный `seq` в пределах сессии, прокси держит
 последние N (например, 5000 сообщений / 8 МБ) в памяти. При подключении клиент
-шлёт расширение `$/aidiction/attach { sessionId, afterSeq }` — прокси доигрывает
+шлёт расширение `$/aiddiction/attach { sessionId, afterSeq }` — прокси доигрывает
 хвост журнала (каждое сообщение оборачивается в
-`_meta.aidiction.seq`), отправляет висящие `pending_agent` запросы этой сессии
+`_meta.aiddiction.seq`), отправляет висящие `pending_agent` запросы этой сессии
 и делает соединение владельцем. Если хвост уже вытеснен — ответ
 `{ truncated: true }`, клиент делает обычный `session/load` (агент проиграет
 историю целиком). Сервер не хранит журнал на диске в MVP.
@@ -389,7 +389,7 @@ WS, сервер → клиент, JSON `{ "type": "...", ... }`:
 ### 4.9 Модули сервера
 
 ```
-crates/aidiction-server/src/
+crates/aiddiction-server/src/
 ├── main.rs            # CLI (serve | token --rotate | check-config), tracing, graceful shutdown
 ├── config.rs          # Config, Catalog, загрузка/валидация
 ├── auth.rs            # токен, middleware
@@ -420,14 +420,14 @@ crates/aidiction-server/src/
 
 ## 5. Общие крейты
 
-### 5.1 `aidiction-api`
+### 5.1 `aiddiction-api`
 
 DTO REST и событий, коды ошибок, `API_VERSION`, имена расширений ACP
-(`$/aidiction/attach`, `$/aidiction/terminal_output`,
-`$/aidiction/agent_request_resolved`) и их параметры. Только `serde`,
+(`$/aiddiction/attach`, `$/aiddiction/terminal_output`,
+`$/aiddiction/agent_request_resolved`) и их параметры. Только `serde`,
 `uuid`, `chrono`.
 
-### 5.2 `aidiction-client` (без GPUI)
+### 5.2 `aiddiction-client` (без GPUI)
 
 - `ServerClient` поверх `reqwest` (`rustls-tls`, без native-tls — проще для
   Android; на Android — `rustls-platform-verifier`, как в matterfast).
@@ -440,13 +440,13 @@ DTO REST и событий, коды ошибок, `API_VERSION`, имена р�
   Переподключение здесь **не** делается: обрыв = конец ACP-соединения,
   восстановление — уровнем выше (см. 6.5).
 
-## 6. Клиент (`aidiction`)
+## 6. Клиент (`aiddiction`)
 
 ### 6.1 Каркас (как money-manager-ng)
 
 ```
-crates/aidiction/src/
-├── main.rs            # fn main() { aidiction::run() }
+crates/aiddiction/src/
+├── main.rs            # fn main() { aiddiction::run() }
 ├── lib.rs             # run(), android_main(), start(cx)
 ├── runtime.rs         # мост GPUI ↔ Tokio — копия подхода matterfast/runtime.rs
 ├── paths.rs           # XDG-пути (на Android указывают в internal_data_path)
@@ -457,12 +457,12 @@ crates/aidiction/src/
 ├── projects/          # список проектов, NewProjectDialog
 ├── session/           # AgentSession (ACP), Thread-модель
 ├── chat/              # отрисовка треда, композер, tool calls, permissions
-├── script.rs          # AIDICTION_SCRIPT для UI-тестов
-└── demo.rs            # AIDICTION_DEMO: fake-сервер в процессе
+├── script.rs          # AIDDICTION_SCRIPT для UI-тестов
+└── demo.rs            # AIDDICTION_DEMO: fake-сервер в процессе
 ```
 
-Зависимости приложения: `gpui-kit = "0.7.0"`, `aidiction-client`,
-`aidiction-api`, `agent-client-protocol`, `tokio`, `futures`,
+Зависимости приложения: `gpui-kit = "0.7.0"`, `aiddiction-client`,
+`aiddiction-api`, `agent-client-protocol`, `tokio`, `futures`,
 `async-channel`, `serde`, `serde_json`, `dirs`, `tracing`,
 `tracing-subscriber`, `keyring` (только desktop; на Android токен хранится в
 приватной директории), Android-блок как в money-manager-ng (см. раздел 7).
@@ -488,12 +488,12 @@ crates/aidiction/src/
 ```rust
 // session/connection.rs — эскиз; сигнатуры сверить с исходниками
 // agent-client-protocol 1.1.0 и Zed, ничего не придумывать.
-let (sink, stream) = acp_socket.split_lines();            // aidiction-client
+let (sink, stream) = acp_socket.split_lines();            // aiddiction-client
 let transport = agent_client_protocol::Lines::new(sink, stream);
 let (dispatch_tx, dispatch_rx) = futures::channel::mpsc::unbounded::<ForegroundWork>();
 let (conn_tx, conn_rx) = futures::channel::oneshot::channel();
 
-let io = connect_client_future("aidiction", transport, dispatch_tx, conn_tx);
+let io = connect_client_future("aiddiction", transport, dispatch_tx, conn_tx);
 runtime::runtime().spawn(io);                              // транспорт живёт на Tokio
 
 // главный поток GPUI: разбор очереди ForegroundWork → AgentSession
@@ -504,7 +504,7 @@ cx.spawn(async move |this, cx| {
 
 Обработчики, которые регистрирует клиент: `session/request_permission`,
 `session/elicitation` (форма → `questionnaire`), уведомления
-`session/update`, расширения `$/aidiction/*`. Обработчики
+`session/update`, расширения `$/aiddiction/*`. Обработчики
 `fs/*` и `terminal/*` **не** регистрируются и в `clientCapabilities` не
 объявляются — их обслуживает сервер (клиентский `initialize` всё равно
 отвечается сервером из кеша).
@@ -518,7 +518,7 @@ cx.spawn(async move |this, cx| {
    поддерживается: такой агент нужно залогинить на сервере вручную; клиент
    показывает понятное сообщение.)
 4. Новая сессия: `session/new { cwd: "." , mcpServers: [] }`. Существующая —
-   `$/aidiction/attach { sessionId, afterSeq: 0 }`, при `truncated` или
+   `$/aiddiction/attach { sessionId, afterSeq: 0 }`, при `truncated` или
    отсутствии в журнале — `session/load`, если `agentCapabilities.loadSession`.
 5. Промпт: `session/prompt { sessionId, prompt: [ContentBlock::Text, …] }`;
    пока он не завершился — композер показывает «Стоп» (`session/cancel`).
@@ -532,7 +532,7 @@ cx.spawn(async move |this, cx| {
   (`pending/in_progress/completed/failed`, `spinner`), раскрываемое
   содержимое: текст/markdown, diff (MVP: построчный unified-diff своими
   силами по `oldText/newText`; позже — подсветка), терминал (моноширинный
-  блок, хвост из `$/aidiction/terminal_output`).
+  блок, хвост из `$/aiddiction/terminal_output`).
 - Plan — список с чекбоксами-статусами над композером.
 - Запрос прав — инлайн-карточка в треде у соответствующего tool call с
   кнопками из `options` (`allow_once`, `allow_always`, `reject_once`,
@@ -551,11 +551,11 @@ cx.spawn(async move |this, cx| {
 
 - `AgentSession` хранит `last_seq` по сессии. При обрыве сокета — состояние
   `Reconnecting`, повтор с задержкой 0.5 → 1 → 2 → … → 15 c, затем снова
-  `initialize` + `$/aidiction/attach { afterSeq: last_seq }`. Уведомления
+  `initialize` + `$/aiddiction/attach { afterSeq: last_seq }`. Уведомления
   с `seq ≤ last_seq` игнорируются (идемпотентность).
 - Ожидающий ответ `session/prompt` после обрыва считается потерянным для
   клиента, но не для агента: итог хода клиент узнаёт из доигранного журнала
-  (сервер пишет в журнал и синтетическое `$/aidiction/prompt_finished
+  (сервер пишет в журнал и синтетическое `$/aiddiction/prompt_finished
   { stopReason }`, когда агент отвечает на prompt).
 - На Android при уходе в фон сокеты не держим насильно; при возвращении
   (`on_resume`/фокус окна) — немедленное переподключение.
@@ -589,10 +589,10 @@ Layout как в money-manager-ng (`shell/layout.rs`): ширина < 44 rem —
 
 ### 6.7 Хранение настроек клиента
 
-`$XDG_CONFIG_HOME/aidiction/settings.json`:
+`$XDG_CONFIG_HOME/aiddiction/settings.json`:
 `{ servers: [{ id, name, url }], activeServer, ui: {...}, lastSeq: { "<server>/<session>": n } }`.
 Токены — в системном keyring на десктопе (`keyring` crate, сервис
-`aidiction`, ключ `server:<id>`), на Android — `secrets.json` в
+`aiddiction`, ключ `server:<id>`), на Android — `secrets.json` в
 `internal_data_path` (приватная директория приложения; при желании позже —
 Android Keystore через JNI).
 
@@ -600,7 +600,7 @@ Android Keystore через JNI).
 
 Повторяем схему money-manager-ng один в один, меняя имена.
 
-1. `crates/aidiction/Cargo.toml`:
+1. `crates/aiddiction/Cargo.toml`:
    ```toml
    [lib]
    crate-type = ["lib", "cdylib"]
@@ -615,7 +615,7 @@ Android Keystore через JNI).
    tracing = { workspace = true, features = ["log"] }
    ```
 2. `lib.rs::android_main` — копия money-manager-ng: `STARTED`-флаг
-   (повторный вызов → `exit(0)`), `android_logger` с тегом `aidiction`,
+   (повторный вызов → `exit(0)`), `android_logger` с тегом `aiddiction`,
    `jni::install_panic_hook()`, `XDG_CONFIG_HOME/XDG_DATA_HOME` →
    `app.internal_data_path()`, `jni::init_platform(&app)`,
    `Application::with_platform(platform.into_rc()).with_assets(..).run(start)`.
@@ -623,9 +623,9 @@ Android Keystore через JNI).
    активности (посмотреть, как это сделано в matterfast `lib.rs`).
 3. `android/` — скопировать Gradle-проект из `money-manager-ng/android`
    (Java-классы `dev/gpui/mobile` из примера gpui-mobile), заменить
-   `namespace/applicationId` на `app.akergez.aidiction`,
-   `nativeLibraryName = "aidiction"`, переменную версии
-   `AIDICTION_VERSION`. `minSdk = 26`, `abiFilters = arm64-v8a`. Манифест:
+   `namespace/applicationId` на `app.akergez.aiddiction`,
+   `nativeLibraryName = "aiddiction"`, переменную версии
+   `AIDDICTION_VERSION`. `minSdk = 26`, `abiFilters = arm64-v8a`. Манифест:
    только `INTERNET`.
 4. `build-aux/build-android.sh` — адаптированная копия (cargo-ndk,
    профиль `dist`, подпись из `ANDROID_KEYSTORE_B64`).
@@ -634,7 +634,7 @@ Android Keystore через JNI).
    export ANDROID_HOME=$HOME/Android/Sdk
    export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973
    cargo ndk -t arm64-v8a --platform 26 -o android/app/src/main/jniLibs \
-       build -p aidiction --lib --release
+       build -p aiddiction --lib --release
    (cd android && ./gradlew assembleDebug)
    adb install -r android/app/build/outputs/apk/debug/app-debug.apk
    ```
@@ -658,15 +658,15 @@ Android Keystore через JNI).
 | Уровень | Что | Как |
 |---|---|---|
 | Юнит, сервер | `routing.rs` (переименование id, владельцы, приостановка load, первый ответ на permission выигрывает), `journal.rs` (seq, вытеснение, truncated), канонизация путей, slug, парсер прогресса git | Таблицы вход/ожидаемые действия, без I/O |
-| Интеграция, сервер | Полный цикл через `aidiction-fake-agent`: создать проект → запустить инстанс → два WS-клиента → prompt → уведомления только владельцу → обрыв → attach с `afterSeq` → доигрывание; падение агента → ошибки ожидающим; fs-запросы агента вне проекта отклоняются | `#[tokio::test]`, сервер на случайном порту во временном `projects_root` |
+| Интеграция, сервер | Полный цикл через `aiddiction-fake-agent`: создать проект → запустить инстанс → два WS-клиента → prompt → уведомления только владельцу → обрыв → attach с `afterSeq` → доигрывание; падение агента → ошибки ожидающим; fs-запросы агента вне проекта отклоняются | `#[tokio::test]`, сервер на случайном порту во временном `projects_root` |
 | Fake agent | Сценарии: `echo`, `stream` (много чанков), `tool-calls` (с diff и terminal), `permission`, `big-frame` (сообщение > 128 КБ), `crash-after-N`, `slow` (для watchdog) | Реализован на стороне `Agent` крейта `agent-client-protocol`; сценарий из флага `--scenario` |
 | Клиент, логика | `Thread::apply(SessionUpdate)` — склейка чанков, обновление tool call, plan; идемпотентность по `seq` | Обычные тесты + `#[gpui_kit::test]` для сущностей |
-| Клиент, UI | Скриптовые сценарии `crates/aidiction/tests/ui/*.script` (`wait/click/key/type/shot/expect/quit`), `build-aux/ui-tests.sh --headless` в контейнере с sway — как в money-manager-ng | `AIDICTION_DEMO=1` поднимает сервер с fake-агентом в процессе; `AIDICTION_SIZE=400x800` для телефонного layout |
+| Клиент, UI | Скриптовые сценарии `crates/aiddiction/tests/ui/*.script` (`wait/click/key/type/shot/expect/quit`), `build-aux/ui-tests.sh --headless` в контейнере с sway — как в money-manager-ng | `AIDDICTION_DEMO=1` поднимает сервер с fake-агентом в процессе; `AIDDICTION_SIZE=400x800` для телефонного layout |
 | E2E с реальным агентом | Ручной чек-лист: Claude Code ACP, Gemini CLI — создание проекта из git, правка файла агентом с разрешением, отмена хода | Перед релизом |
 | Android | Сборка APK в CI; ручная проверка на устройстве: ввод, поворот, фон/возврат с переподключением | `build-aux/build-android.sh` |
 
 Правило из референсов: никогда не запускать клиент «попробовать» против
-реального сервера с реальными проектами — только `AIDICTION_DEMO=1` или
+реального сервера с реальными проектами — только `AIDDICTION_DEMO=1` или
 локальный сервер с временными каталогами
 (`XDG_DATA_HOME=/tmp/aid/data XDG_CONFIG_HOME=/tmp/aid/config`).
 
@@ -676,8 +676,8 @@ Android Keystore через JNI).
 
 ### Этап 1. Скелет workspace (0.5–1 день)
 - Workspace, toolchain, профили, пустые крейты, `CLAUDE.md` с командами.
-- `aidiction-fake-agent` со сценарием `echo`.
-- **Готово, когда:** `cargo test --workspace` зелёный; `cargo run -p aidiction`
+- `aiddiction-fake-agent` со сценарием `echo`.
+- **Готово, когда:** `cargo test --workspace` зелёный; `cargo run -p aiddiction`
   открывает пустое окно gpui-kit.
 
 ### Этап 2. Сервер: проекты и каталог (2–3 дня)
@@ -761,8 +761,8 @@ Android Keystore через JNI).
 
 ### Что работает
 
-- **Сервер** (`crates/aidiction-server`): конфиг + переменные окружения
-  `AIDICTION_*`, токен (генерируется и хранится в data dir), проекты (пустые и
+- **Сервер** (`crates/aiddiction-server`): конфиг + переменные окружения
+  `AIDDICTION_*`, токен (генерируется и хранится в data dir), проекты (пустые и
   `git clone` с прогрессом и `GIT_ASKPASS` для токена), каталог агентов
   (встроенные Claude/Codex, `[[agents]]` из конфига, custom через API),
   запуск агента через `bash -c` в группе процессов, остановка группы по
@@ -771,11 +771,11 @@ Android Keystore через JNI).
 - **ACP-прокси** (`proxy.rs`): серверный `initialize` с кешем (клиентский
   `initialize` ждёт, если агент ещё стартует), переписывание `cwd` в
   `session/new|load|resume`, переименование id запросов per-socket, владельцы
-  сессий, журнал с `seq` и `_aidiction/attach` (ответ раньше доигрывания),
-  эхо промпта в журнал (`user_message_chunk`), `_aidiction/prompt_finished`,
-  «первый ответ на permission выигрывает» + `_aidiction/request_resolved`,
+  сессий, журнал с `seq` и `_aiddiction/attach` (ответ раньше доигрывания),
+  эхо промпта в журнал (`user_message_chunk`), `_aiddiction/prompt_finished`,
+  «первый ответ на permission выигрывает» + `_aiddiction/request_resolved`,
   `fs/read_text_file` и `fs/write_text_file` на сервере в пределах проекта.
-- **Клиент** (`crates/aidiction`): серверы (добавление с проверкой, выбор,
+- **Клиент** (`crates/aiddiction`): серверы (добавление с проверкой, выбор,
   удаление), проекты (список, создание пустого/из git, удаление), каталог
   агентов с сервера и форма custom-агента, запущенные агенты и их сессии,
   чат: markdown, размышления, tool calls с diff, план, запросы прав, стоп,
@@ -791,15 +791,15 @@ Android Keystore через JNI).
 - **Темы** — движок money-manager-ng и matterfast, библиотеки
   `gpui-adaptive-colors` (Material You-схема из цвета системы или выбранного)
   и `gpui-zed-themes` (темы Zed: установка из реестра их же `Browser`,
-  хранение в `<data>/app.akergez.Aidiction/themes`, ношение через `wear`).
+  хранение в `<data>/app.akergez.Aiddiction/themes`, ношение через `wear`).
   В приложении только тонкий слой `appearance.rs` (выбор в настройках) и
   страница Settings: режим System/Light/Dark, цвет, тема для светлого и
   тёмного режима, обзор реестра.
-- **Стандартные места** — общий крейт `aidiction-paths`: XDG-переменная, если
+- **Стандартные места** — общий крейт `aiddiction-paths`: XDG-переменная, если
   задана, иначе стандартный каталог платформы (`dirs`: `~/.config` и
   `~/.local/share` на Linux, Application Support на macOS, AppData на
-  Windows). Сервер: `<config>/aidiction-server/config.toml`,
-  `<data>/aidiction-server/`; клиент: `<config>/app.akergez.Aidiction/settings.json`
+  Windows). Сервер: `<config>/aiddiction-server/config.toml`,
+  `<data>/aiddiction-server/`; клиент: `<config>/app.akergez.Aiddiction/settings.json`
   (серверы и внешний вид).
 - **Существующая папка как проект** — `ProjectSource::Existing { path }`:
   папка берётся как есть (`~` раскрывается, путь канонизируется, одна папка —
@@ -823,21 +823,21 @@ Android Keystore через JNI).
 
 - `cargo test --workspace` — юнит-тесты прокси (маршрутизация, журнал,
   attach, permissions, fs вне проекта), каталога, модели треда, скрипта и
-  сквозной тест `crates/aidiction-server/tests/end_to_end.rs` (сервер +
-  fake-агент + `aidiction-client`).
+  сквозной тест `crates/aiddiction-server/tests/end_to_end.rs` (сервер +
+  fake-агент + `aiddiction-client`).
 - `build-aux/ui-tests.sh --headless` в контейнере `localhost/matterfast-ui` —
-  сценарии `crates/aidiction/tests/ui/*.script` (`first-chat`, `phone`,
-  `custom-agent`, `existing-folder`, `settings`) с `AIDICTION_DEMO=1`.
+  сценарии `crates/aiddiction/tests/ui/*.script` (`first-chat`, `phone`,
+  `custom-agent`, `existing-folder`, `settings`) с `AIDDICTION_DEMO=1`.
 
 ### Android
 
 Обвязка готова: `cdylib`, `android_main` (как в money-manager-ng, тот же rev
-gpui-mobile), Gradle-проект `android/` (`app.akergez.aidiction`),
+gpui-mobile), Gradle-проект `android/` (`app.akergez.aiddiction`),
 `build-aux/build-android.sh`, `build-aux/android-clang.sh` (хостовый clang +
 sysroot и libunwind из NDK + rust-lld — для aarch64-хоста, где у NDK нет
 своего clang).
 
-**Библиотека собирается на этой машине**: `libaidiction.so` (release, 47 МБ),
+**Библиотека собирается на этой машине**: `libaiddiction.so` (release, 47 МБ),
 ELF aarch64 для Android 26, есть `android_main` и `ANativeActivity_onCreate`,
 зависимости только системные (`liblog`, `libandroid`, `libdl`, `libm`, `libc`).
 NDK r27c лежит в `~/Android/ndk/android-ndk-r27c`.

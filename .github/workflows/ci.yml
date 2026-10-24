@@ -41,7 +41,7 @@ env:
   # A commit is built with the `release` profile: `dist` is one codegen unit
   # with LTO, which is worth its time for what ships and not for a build
   # somebody wants to try a fix with.
-  AIDICTION_PROFILE: ${{ startsWith(github.ref, 'refs/tags/v') && 'dist' || 'release' }}
+  AIDDICTION_PROFILE: ${{ startsWith(github.ref, 'refs/tags/v') && 'dist' || 'release' }}
 
 permissions:
   contents: read
@@ -63,11 +63,11 @@ jobs:
       # git is what projects are cloned with; the end-to-end test runs the
       # real server binary with the fake agent.
       - run: cargo test --workspace --locked
-      # The scenarios in crates/aidiction/tests/ui, played into the real
+      # The scenarios in crates/aiddiction/tests/ui, played into the real
       # application under a headless compositor, against the demo server
       # with the fake agent. In the same job as the unit tests so the
       # dependencies are compiled once.
-      - run: cargo build --locked -p aidiction -p aidiction-server -p aidiction-fake-agent
+      - run: cargo build --locked -p aiddiction -p aiddiction-server -p aiddiction-fake-agent
       - run: build-aux/ui-tests.sh --headless
 
   # On a tag: the tag has to be a version, and the version the crates carry.
@@ -100,7 +100,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/linux-deps
-      - run: cargo build --profile "$AIDICTION_PROFILE" --locked -p aidiction
+      - run: cargo build --profile "$AIDDICTION_PROFILE" --locked -p aiddiction
       # No `version` on a commit: the script takes the workspace's own.
       - run: build-aux/package-tarball.sh "${{ needs.version.outputs.version }}"
       - uses: actions/upload-artifact@v4
@@ -202,7 +202,7 @@ jobs:
             ~/.cargo/git/db
           key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-registry-${{ runner.os }}-
-      - run: cargo build --profile "$AIDICTION_PROFILE" --locked -p aidiction
+      - run: cargo build --profile "$AIDDICTION_PROFILE" --locked -p aiddiction
       - run: build-aux/package-macos.sh "${{ needs.version.outputs.version }}"
       - uses: actions/upload-artifact@v4
         with:
@@ -235,7 +235,7 @@ jobs:
             ~/.cargo/git/db
           key: cargo-registry-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-registry-${{ runner.os }}-${{ runner.arch }}-
-      - run: cargo build --profile "$AIDICTION_PROFILE" --locked -p aidiction-server
+      - run: cargo build --profile "$AIDDICTION_PROFILE" --locked -p aiddiction-server
       - run: build-aux/package-server.sh "${{ needs.version.outputs.version }}"
       - uses: actions/upload-artifact@v4
         with:
@@ -257,7 +257,7 @@ jobs:
             ~/.cargo/git/db
           key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-registry-${{ runner.os }}-
-      - run: cargo build --profile "$AIDICTION_PROFILE" --locked -p aidiction-server
+      - run: cargo build --profile "$AIDDICTION_PROFILE" --locked -p aiddiction-server
       - run: build-aux/package-server.sh "${{ needs.version.outputs.version }}"
       - uses: actions/upload-artifact@v4
         with:
@@ -397,6 +397,9 @@ jobs:
           pattern: dist-*
           path: dist
           merge-multiple: true
+      # The one-command server installer, at
+      # releases/latest/download/install-server.sh.
+      - run: cp build-aux/install-server.sh dist/
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -406,35 +409,33 @@ jobs:
           cat > notes.md <<NOTES
           ## The server
 
-          On the machine the projects live on, Linux or macOS. It needs git, and Node on its PATH for Claude Code and Codex (each already signed in there):
+          On the machine the projects live on. It needs git, and Node on its PATH for Claude Code and Codex (each already signed in there). On Linux, as a systemd user service, in one command — run it again to update:
 
-              tar -xzf aidiction-server-$VERSION-linux-x86_64.tar.gz --strip-components=1 -C ~/.local
-              systemctl --user daemon-reload && systemctl --user enable --now aidiction-server
-              ~/.local/bin/aidiction-server token
+              curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/install-server.sh | sh
 
-          The example configuration is in share/doc/aidiction-server.
+          Add `-s -- --linger` after `sh` to keep it running when you log out. It prints the address and the token for the client. On macOS, unpack the tarball and run bin/aiddiction-server; the example configuration is in share/doc/aiddiction-server.
 
           ## The client
 
           **Linux, flatpak**, x86_64 and aarch64, kept up to date by flatpak update:
 
-              flatpak install $PAGES_URL/app.akergez.Aidiction.flatpakref
+              flatpak install $PAGES_URL/app.akergez.Aiddiction.flatpakref
 
           The .flatpak files below are the same build as a single file, for a machine that cannot reach the repository.
 
           **Linux, tarball**, laid out like an install prefix. The libraries listed under Building in the README come from the distribution:
 
-              tar -xzf aidiction-$VERSION-linux-x86_64.tar.gz --strip-components=1 -C ~/.local
+              tar -xzf aiddiction-$VERSION-linux-x86_64.tar.gz --strip-components=1 -C ~/.local
 
-          **Windows, x86_64**: unpack the zip and run aidiction.exe.
+          **Windows, x86_64**: unpack the zip and run aiddiction.exe.
 
           **Android, arm64**, Android 8 and later: open the .apk on the phone and allow the installation.
 
-          **macOS, Apple silicon**: open the .dmg and drag Aidiction into Applications. The application is not signed by an Apple developer account, so macOS holds back a downloaded copy until its quarantine mark is taken off:
+          **macOS, Apple silicon**: open the .dmg and drag Aiddiction into Applications. The application is not signed by an Apple developer account, so macOS holds back a downloaded copy until its quarantine mark is taken off:
 
-              xattr -dr com.apple.quarantine "/Applications/Aidiction.app"
+              xattr -dr com.apple.quarantine "/Applications/Aiddiction.app"
           NOTES
           # Heredoc indentation is YAML's; the text must start at column 0.
           sed -i 's/^          //' notes.md
           gh release create "$GITHUB_REF_NAME" dist/* \
-            --title "Aidiction $VERSION" --notes-file notes.md
+            --title "Aiddiction $VERSION" --notes-file notes.md

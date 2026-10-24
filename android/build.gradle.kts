@@ -1,4 +1,4 @@
-// The Gradle project that packages Aidiction for Android. The
+// The Gradle project that packages Aiddiction for Android. The
 // application is the Rust library; see app/build.gradle.kts and README.md.
 
 buildscript {

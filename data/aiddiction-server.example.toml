@@ -1,0 +1,25 @@
+# aiddiction-server's configuration: ~/.config/aiddiction-server/config.toml
+# (the platform's standard config directory elsewhere). Every key is
+# optional; these are the defaults, commented out.
+
+# Where to listen. To reach the server from a phone, an address the phone can
+# reach — a VPN such as Tailscale, or the LAN — preferably behind a TLS proxy.
+# listen = "127.0.0.1:7878"
+
+# Where new projects are made. Existing folders can be projects wherever
+# they are.
+# projects_root = "~/aiddiction-projects"
+
+# The access token. Without one, the server makes one on first start and
+# keeps it in its data directory (`aiddiction-server token` prints it).
+# token = "…"
+
+# Agents besides the built-in Claude Code and Codex. A command line run by
+# bash in the project's folder, as Zed's `agent_servers` describe one; the
+# same id replaces a built-in agent.
+# [[agents]]
+# id = "gemini"
+# name = "Gemini CLI"
+# command = "gemini"
+# args = ["--experimental-acp"]
+# env = { }

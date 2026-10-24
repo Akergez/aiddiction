@@ -1,0 +1,281 @@
+//! What the server and its clients say to each other over REST and the event
+//! socket, and the names of the ACP extensions the server's proxy adds.
+//!
+//! Nothing here knows about Tokio, HTTP libraries or the interface: the
+//! server and the client crate both build on these types.
+
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+/// Bumped when a change to the REST or socket shapes breaks an older peer.
+pub const API_VERSION: u32 = 1;
+
+/// The ACP extensions the server's proxy speaks besides the protocol itself.
+pub mod ext {
+    /// Client → server request: make this connection the owner of a session
+    /// and replay what it missed. Params [`super::AttachParams`], result
+    /// [`super::AttachResult`].
+    pub const ATTACH: &str = "_aiddiction/attach";
+    /// Server → client notification sent when the agent answers a
+    /// `session/prompt`, so a client that lost the request still learns that
+    /// the turn ended. Params [`super::PromptFinished`].
+    pub const PROMPT_FINISHED: &str = "_aiddiction/prompt_finished";
+    /// Server → client notification: an agent request one client answered is
+    /// settled, the others should drop it. Params `{ "requestId": … }`.
+    pub const REQUEST_RESOLVED: &str = "_aiddiction/request_resolved";
+    /// The key under `_meta` that carries the journal sequence number of a
+    /// replayable notification.
+    pub const SEQ_META: &str = "aiddictionSeq";
+}
+
+pub type ProjectId = Uuid;
+pub type InstanceId = Uuid;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Health {
+    pub ok: bool,
+    pub version: String,
+    pub api_version: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerInfo {
+    pub name: String,
+    pub version: String,
+    pub api_version: u32,
+    pub projects_root: String,
+}
+
+/// How an agent is started, in the shape Zed's `agent_servers` settings use:
+/// a command, its arguments and extra environment. The command is a shell
+/// command line, so `npx -y some-acp` and `FOO=1 my-agent --acp` both work.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentCommand {
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentSource {
+    /// Shipped with the server (Claude, Codex).
+    Builtin,
+    /// From the server's configuration file; read-only over the API.
+    Config,
+    /// Added through the API; can be edited and removed by clients.
+    Custom,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Agent {
+    pub id: String,
+    pub name: String,
+    pub source: AgentSource,
+    /// Shown to clients so a person can tell what will run on the server.
+    pub command: AgentCommand,
+}
+
+/// Body of `POST /agents` and `PUT /agents/{id}`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentInput {
+    pub name: String,
+    #[serde(flatten)]
+    pub command: AgentCommand,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProjectState {
+    Ready,
+    Cloning,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Project {
+    pub id: ProjectId,
+    pub name: String,
+    /// The folder's name: under the projects root, or the last part of `path`.
+    pub dir_name: String,
+    /// A folder elsewhere on the server, taken as it is; `None` for one the
+    /// server made under its projects root. The server never deletes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    pub state: ProjectState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_url: Option<String>,
+    /// The last line `git clone` printed, or why it failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_message: Option<String>,
+    pub created_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum ProjectSource {
+    Empty,
+    /// A folder that already exists on the server (`~` is its user's home).
+    Existing { path: String },
+    Git {
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<String>,
+        /// An HTTPS token; handed to git through `GIT_ASKPASS`, never stored.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token: Option<String>,
+    },
+}
+
+/// `GET /fs/dirs?path=…`: the folders in one folder on the server, for
+/// picking an existing project folder.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirListing {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    pub dirs: Vec<DirEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirEntry {
+    pub name: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewProject {
+    pub name: String,
+    pub source: ProjectSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InstanceState {
+    Starting,
+    Ready,
+    Exited,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionSummary {
+    pub session_id: String,
+    pub title: String,
+    pub created_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Instance {
+    pub id: InstanceId,
+    pub project_id: ProjectId,
+    pub agent_id: String,
+    pub agent_name: String,
+    pub state: InstanceState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    pub sessions: Vec<SessionSummary>,
+    /// The last lines the agent wrote to stderr.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stderr_tail: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartInstance {
+    pub agent_id: String,
+}
+
+/// What the event socket carries. Clients re-read the affected list; the
+/// events say what changed, not how.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum ServerEvent {
+    ProjectsChanged,
+    AgentsChanged,
+    InstancesChanged { project_id: ProjectId },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiError {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ErrorBody {
+    pub error: ApiError,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachParams {
+    pub session_id: String,
+    /// The last journal sequence number this client has applied; 0 for none.
+    #[serde(default)]
+    pub after_seq: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachResult {
+    /// Whether the server knows the session at all. It does not after a
+    /// restart of the agent; the client then asks the agent with
+    /// `session/load`.
+    pub known: bool,
+    /// The journal no longer holds everything after `after_seq`; what was
+    /// replayed starts later, and the client should start its view afresh.
+    pub truncated: bool,
+    /// Whether a `session/prompt` for the session is still running.
+    pub busy: bool,
+    pub last_seq: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptFinished {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_input_reads_zed_shaped_settings() {
+        let input: AgentInput = serde_json::from_str(
+            r#"{"name":"Mine","command":"npx -y my-acp","args":["--acp"],"env":{"A":"1"}}"#,
+        )
+        .unwrap();
+        assert_eq!(input.command.command, "npx -y my-acp");
+        assert_eq!(input.command.args, vec!["--acp"]);
+        assert_eq!(input.command.env["A"], "1");
+    }
+
+    #[test]
+    fn project_source_is_tagged_by_kind() {
+        let source: ProjectSource =
+            serde_json::from_str(r#"{"kind":"git","url":"https://x/y.git"}"#).unwrap();
+        assert!(matches!(source, ProjectSource::Git { branch: None, .. }));
+    }
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Play every scenario in crates/aidiction/tests/ui/ into the real application
+# Play every scenario in crates/aiddiction/tests/ui/ into the real application
 # (in demo mode: its own server with the fake agent) and fail if one does not
 # come out the way it says it should. After matterfast's harness.
 #
@@ -7,7 +7,7 @@
 #   build-aux/ui-tests.sh --headless      under a private headless sway
 #   build-aux/ui-tests.sh [--headless] first-chat   only these
 #
-# A scenario is an AIDICTION_SCRIPT (crates/aidiction/src/script.rs), one step
+# A scenario is an AIDDICTION_SCRIPT (crates/aiddiction/src/script.rs), one step
 # a line, with `# size: 1100x760` in its header. Screenshots (`shot:<name>`)
 # land in $UI_SHOTS (default target/ui-shots).
 #
@@ -24,8 +24,8 @@ set -Eeuo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd -- "$root"
 
-scenarios_dir=crates/aidiction/tests/ui
-app=${AIDICTION_BIN:-target/debug/aidiction}
+scenarios_dir=crates/aiddiction/tests/ui
+app=${AIDDICTION_BIN:-target/debug/aiddiction}
 timeout_s=${UI_TEST_TIMEOUT:-90}
 shots=${UI_SHOTS:-$root/target/ui-shots}
 mkdir -p -- "$shots"
@@ -54,8 +54,8 @@ if [[ ${1:-} == --headless ]]; then
   export SWAYSOCK
 fi
 
-[[ -x $app && -x target/debug/aidiction-server && -x target/debug/aidiction-fake-agent ]] \
-  || cargo build -p aidiction -p aidiction-server -p aidiction-fake-agent
+[[ -x $app && -x target/debug/aiddiction-server && -x target/debug/aiddiction-fake-agent ]] \
+  || cargo build -p aiddiction -p aiddiction-server -p aiddiction-fake-agent
 
 if (( $# )); then
   files=()
@@ -90,8 +90,8 @@ for file in "${files[@]}"; do
 
   status=0
   env XDG_CONFIG_HOME="$home/config" XDG_CACHE_HOME="$home/cache" XDG_DATA_HOME="$home/data" \
-    AIDICTION_DEMO=1 AIDICTION_COLOR=${AIDICTION_COLOR:-#0b57d0} AIDICTION_SIZE="${size:-1100x760}" AIDICTION_SCRIPT="$script" \
-    AIDICTION_SHOT_CMD="$shot_cmd" FAKE_AGENT_DELAY_MS=${FAKE_AGENT_DELAY_MS:-20} \
+    AIDDICTION_DEMO=1 AIDDICTION_COLOR=${AIDDICTION_COLOR:-#0b57d0} AIDDICTION_SIZE="${size:-1100x760}" AIDDICTION_SCRIPT="$script" \
+    AIDDICTION_SHOT_CMD="$shot_cmd" FAKE_AGENT_DELAY_MS=${FAKE_AGENT_DELAY_MS:-20} \
     timeout "$timeout_s" "$app" >"$home/app.log" 2>&1 || status=$?
 
   if (( status == 0 )); then

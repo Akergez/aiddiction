@@ -10,7 +10,7 @@ plugins {
 
 // The version is the release's: CI hands over its tag, without the `v`. A
 // build at the desk takes what the crates say.
-val release: String = providers.environmentVariable("AIDICTION_VERSION").orNull
+val release: String = providers.environmentVariable("AIDDICTION_VERSION").orNull
     ?.takeIf { it.isNotEmpty() }
     ?: Regex("""\[workspace\.package\][^\[]*?\nversion = "([^"]+)"""")
         .find(rootDir.parentFile.resolve("Cargo.toml").readText())!!
@@ -25,11 +25,11 @@ val keystore: String? = providers.environmentVariable("ANDROID_KEYSTORE").orNull
     ?.takeIf { it.isNotEmpty() }
 
 android {
-    namespace = "app.akergez.aidiction"
+    namespace = "app.akergez.aiddiction"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "app.akergez.aidiction"
+        applicationId = "app.akergez.aiddiction"
         minSdk = 26          // Vulkan 1.0 is mandatory from API 26
         targetSdk = 34
         versionCode = major * 1_000_000 + minor * 1_000 + patch
@@ -40,7 +40,7 @@ android {
         }
 
         // What NativeActivity loads: the cdylib's name.
-        manifestPlaceholders["nativeLibraryName"] = "aidiction"
+        manifestPlaceholders["nativeLibraryName"] = "aiddiction"
     }
 
     signingConfigs {
@@ -48,7 +48,7 @@ android {
             create("release") {
                 storeFile = file(keystore)
                 storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: "aidiction"
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: "aiddiction"
                 // A PKCS#12 keystore has one password for itself and its keys.
                 keyPassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
             }

@@ -5,12 +5,12 @@
   The activity is a NativeActivity (through GpuiActivity and
   GpuiInputActivity, which add the splash screen and a real InputConnection
   for the soft keyboard). It loads the shared object named by
-  `android.app.lib_name`, which is the `aidiction` crate built as a
+  `android.app.lib_name`, which is the `aiddiction` crate built as a
   cdylib, and calls `android_main` in it.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Talking to Aidiction servers: the only permission there is. The
+    <!-- Talking to Aiddiction servers: the only permission there is. The
          settings are kept in the application's private directory, so no
          storage permission is declared or ever asked for. -->
     <uses-permission android:name="android.permission.INTERNET" />

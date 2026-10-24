@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  app.akergez.Aiddiction — application icon (128x128)
+  A terminal card with a prompt, and the agent at work as a dot of light in
+  its corner. The card is drawn like money-manager-ng's: two blues for a
+  little depth.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="128" height="128" viewBox="0 0 128 128">
+  <!-- The card's front profile -->
+  <path fill="#0842a0" d="M 30 26 H 98 A 14 14 0 0 1 112 40 V 96 A 14 14 0 0 1 98 110 H 30 A 14 14 0 0 1 16 96 V 40 A 14 14 0 0 1 30 26 Z"/>
+  <!-- The card's top face -->
+  <path fill="#0b57d0" d="M 30 20 H 98 A 14 14 0 0 1 112 34 V 90 A 14 14 0 0 1 98 104 H 30 A 14 14 0 0 1 16 90 V 34 A 14 14 0 0 1 30 20 Z"/>
+  <!-- The prompt: a chevron and the cursor -->
+  <path fill="#e8f0fe" d="M 32 45 L 38 39 L 59 60 L 38 81 L 32 75 L 47 60 Z"/>
+  <path fill="#e8f0fe" d="M 62 74 H 84 A 5 5 0 0 1 84 84 H 62 A 5 5 0 0 1 62 74 Z"/>
+  <!-- The agent -->
+  <circle fill="#c88800" cx="92" cy="44" r="10"/>
+  <circle fill="#f6d32d" cx="92" cy="42" r="10"/>
+</svg>

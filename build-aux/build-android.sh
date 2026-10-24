@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Build Aidiction for Android and pack it into an APK.
+# Build Aiddiction for Android and pack it into an APK.
 #
 #   build-aux/build-android.sh [version]
 #
-# AIDICTION_PROFILE names the cargo profile to build with (`dist`).
+# AIDDICTION_PROFILE names the cargo profile to build with (`dist`).
 #
 # The library is cross-compiled with cargo-ndk and Gradle packs it; see
 # android/README.md. The package is for arm64 phones only.
@@ -15,7 +15,7 @@
 # Signing:
 #   ANDROID_KEYSTORE_B64       base64 of a PKCS#12 keystore holding the key
 #   ANDROID_KEYSTORE_PASSWORD  its password
-#   ANDROID_KEY_ALIAS          the key's name in it (default: aidiction)
+#   ANDROID_KEY_ALIAS          the key's name in it (default: aiddiction)
 #
 # Android installs an update only over a package signed with the same key, so
 # a release has to be signed with the one key every release is signed with: a
@@ -29,7 +29,7 @@ cd -- "$root"
 
 released=${1:-}
 version=${released:-$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)}
-profile=${AIDICTION_PROFILE:-dist}
+profile=${AIDDICTION_PROFILE:-dist}
 ndk_version=$(sed -n 's/^ *ndkVersion = "\(.*\)"/\1/p' android/app/build.gradle.kts)
 
 : "${ANDROID_HOME:?point ANDROID_HOME at the Android SDK}"
@@ -53,11 +53,11 @@ fi
 jni_libs=android/app/src/main/jniLibs
 rm -rf -- "$jni_libs"
 cargo ndk -t arm64-v8a --platform 26 -o "$jni_libs" \
-  build --profile "$profile" --locked -p aidiction --lib
+  build --profile "$profile" --locked -p aiddiction --lib
 
-(cd android && AIDICTION_VERSION=$version ./gradlew --console=plain --quiet assembleRelease)
+(cd android && AIDDICTION_VERSION=$version ./gradlew --console=plain --quiet assembleRelease)
 
-name=aidiction-$version-android-aarch64
+name=aiddiction-$version-android-aarch64
 mkdir -p dist
 cp -- android/app/build/outputs/apk/release/app-release.apk "dist/$name.apk"
 if command -v sha256sum >/dev/null; then

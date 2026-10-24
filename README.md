@@ -1,12 +1,12 @@
-# Aidiction
+# Aiddiction
 
 Projects and ACP agents on your own servers, from the desktop or a phone.
 
-- **aidiction-server** keeps projects (empty folders or `git clone`s) on the
+- **aiddiction-server** keeps projects (empty folders or `git clone`s) on the
   machine it runs on and starts ACP agents in them — Claude Code and Codex out
   of the box, anything else that speaks ACP by a command line — proxying the
   conversation to clients over WebSocket.
-- **aidiction** is the client: pick a server, see its projects, make one
+- **aiddiction** is the client: pick a server, see its projects, make one
   (empty, cloned from git, or a folder already on the server), start an
   agent in it and work with it. Light, dark, Material You colours or any
   theme from Zed's registry. Linux desktop and Android, drawn
@@ -16,17 +16,36 @@ The design is in `docs/PLAN.md`.
 
 ## Running a server
 
+On Linux, as a systemd user service, in one command (run it again to
+update; add `-s -- --linger` after `sh` to keep it running when you log out):
+
 ```sh
-cargo run --release -p aidiction-server
+curl -fsSL https://github.com/Akergez/aiddiction/releases/latest/download/install-server.sh | sh
+```
+
+From a checkout, the same with the server built here:
+
+```sh
+cargo run --release -p aiddiction-server -- install [--linger]
+```
+
+Either way it ends up in `~/.local/bin` and
+`~/.config/systemd/user/aiddiction-server.service`, with the PATH of the shell
+it was installed from (the agents need Node and git from it), and prints the
+address and the token. `aiddiction-server uninstall` removes the service and
+keeps the data. To just run it in a terminal:
+
+```sh
+cargo run --release -p aiddiction-server
 ```
 
 On first start it prints an access token (again with
-`aidiction-server token`) and keeps new projects in `~/aidiction-projects`.
-Its configuration is `~/.config/aidiction-server/config.toml` and its data
-`~/.local/share/aidiction-server/` (the platform's standard directories
+`aiddiction-server token`) and keeps new projects in `~/aiddiction-projects`.
+Its configuration is `~/.config/aiddiction-server/config.toml` and its data
+`~/.local/share/aiddiction-server/` (the platform's standard directories
 elsewhere). It
 listens on `127.0.0.1:7878`; to reach it from a phone, set `listen` in
-`~/.config/aidiction-server/config.toml` to an address the phone can reach
+`~/.config/aiddiction-server/config.toml` to an address the phone can reach
 (a VPN such as Tailscale is the easy way) and put TLS in front of it.
 
 Claude Code and Codex run through their ACP adapters with `npx`, so Node must
@@ -47,11 +66,11 @@ command line run by bash in the project's folder, and environment variables.
 ## Running the client
 
 ```sh
-cargo run --release -p aidiction
+cargo run --release -p aiddiction
 ```
 
 Add the server with its address and token. To try everything without a
-server of your own, `AIDICTION_DEMO=1` starts one with a fake agent (see
+server of your own, `AIDDICTION_DEMO=1` starts one with a fake agent (see
 `CLAUDE.md`). Android: `android/README.md`.
 
 ## Building
@@ -71,8 +90,8 @@ sudo dnf install wayland-devel libxkbcommon-devel libxkbcommon-x11-devel \
 ```
 
 ```sh
-cargo build --release -p aidiction -p aidiction-server   # optimised, quick to rebuild
-cargo build --profile dist -p aidiction                  # what ships: thin LTO, slow
+cargo build --release -p aiddiction -p aiddiction-server   # optimised, quick to rebuild
+cargo build --profile dist -p aiddiction                  # what ships: thin LTO, slow
 cargo test --workspace
 ```
 
@@ -80,14 +99,14 @@ cargo test --workspace
 
 | Target | How | Result |
 |--------|-----|--------|
-| Server, Linux or macOS | `build-aux/package-server.sh` | `dist/aidiction-server-<v>-<os>-<arch>.tar.gz` (with a systemd user unit) |
-| Client, Linux tarball | `build-aux/package-tarball.sh` | `dist/aidiction-<v>-linux-<arch>.tar.gz` |
+| Server, Linux or macOS | `build-aux/package-server.sh` | `dist/aiddiction-server-<v>-<os>-<arch>.tar.gz`; `build-aux/install-server.sh` installs one as a service |
+| Client, Linux tarball | `build-aux/package-tarball.sh` | `dist/aiddiction-<v>-linux-<arch>.tar.gz` |
 | Client, Flatpak | `build-aux/publish-flatpak.sh` | `.flatpak-repo`; with `--site`, a signed repository and `.flatpakref` |
-| Client, Windows (cross-built on Linux) | `build-aux/build-windows.sh x86_64` | `dist/aidiction-<v>-windows-x86_64.zip` |
-| Client, Android | `build-aux/build-android.sh` | `dist/aidiction-<v>-android-aarch64.apk` |
-| Client, macOS | `build-aux/package-macos.sh` | `dist/aidiction-<v>-macos-<arch>.dmg` |
+| Client, Windows (cross-built on Linux) | `build-aux/build-windows.sh x86_64` | `dist/aiddiction-<v>-windows-x86_64.zip` |
+| Client, Android | `build-aux/build-android.sh` | `dist/aiddiction-<v>-android-aarch64.apk` |
+| Client, macOS | `build-aux/package-macos.sh` | `dist/aiddiction-<v>-macos-<arch>.dmg` |
 
-Each script's header says what it needs; `AIDICTION_PROFILE` picks the cargo
+Each script's header says what it needs; `AIDDICTION_PROFILE` picks the cargo
 profile (`dist` by default). `android/README.md` covers the Android build.
 
 ## Continuous integration
@@ -114,7 +133,7 @@ Android installs an update only over a package signed with the same key, so
 every release is signed with one key, made once:
 
 ```sh
-keytool -genkeypair -storetype PKCS12 -keystore release.p12 -alias aidiction \
+keytool -genkeypair -storetype PKCS12 -keystore release.p12 -alias aiddiction \
   -keyalg RSA -keysize 4096 -validity 10000
 base64 -w0 release.p12   # → ANDROID_KEYSTORE_B64
 ```

@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Aidiction is a client-server orchestrator for ACP agents. The server (Rust,
+Aiddiction is a client-server orchestrator for ACP agents. The server (Rust,
 axum) keeps projects — directories under its projects root, empty or cloned
 from git — and runs ACP agents in them as child processes, proxying ACP to
 clients over WebSocket. The client (Rust, GPUI through `gpui-kit`) runs on
@@ -14,9 +14,10 @@ and its section 11 the state of the prototype.
 ```sh
 cargo build --workspace                       # everything; the demo needs all three binaries
 cargo test --workspace                        # unit tests + the server/fake-agent/client end-to-end test
-cargo test -p aidiction-server end_to_end     # just the end-to-end one
-cargo run -p aidiction-server                 # a real server: ~/aidiction-projects, token printed on first run
-cargo run -p aidiction-server -- token        # print the token
+cargo test -p aiddiction-server end_to_end     # just the end-to-end one
+cargo run -p aiddiction-server                 # a real server: ~/aiddiction-projects, token printed on first run
+cargo run -p aiddiction-server -- token        # print the token
+cargo run -p aiddiction-server -- install      # as a systemd user service (real: it starts it)
 cargo clippy --workspace --all-targets
 ```
 
@@ -24,24 +25,24 @@ cargo clippy --workspace --all-targets
 
 ```sh
 XDG_DATA_HOME=/tmp/aid/data XDG_CONFIG_HOME=/tmp/aid/config \
-AIDICTION_DEMO=1 cargo run -p aidiction
+AIDDICTION_DEMO=1 cargo run -p aiddiction
 ```
 
-`AIDICTION_DEMO` starts `aidiction-server` from beside the executable on
+`AIDDICTION_DEMO` starts `aiddiction-server` from beside the executable on
 127.0.0.1:7979 with token `demo` and the fake agent configured, and makes it
 the server in use. Never try things against the default directories: that is
 the person's own server list.
 
-A server for experiments: `AIDICTION_LISTEN`, `AIDICTION_DATA_DIR`,
-`AIDICTION_PROJECTS_ROOT`, `AIDICTION_TOKEN` override its configuration, and
+A server for experiments: `AIDDICTION_LISTEN`, `AIDDICTION_DATA_DIR`,
+`AIDDICTION_PROJECTS_ROOT`, `AIDDICTION_TOKEN` override its configuration, and
 `--config /nonexistent` skips the file.
 
 ### Looking at the interface from a script
 
-`AIDICTION_SCRIPT="until:page=home;click:261,121;type:Demo;key:enter;shot:x;quit"`
-drives the window (`crates/aidiction/src/script.rs`); `AIDICTION_SIZE=WxH` sets
+`AIDDICTION_SCRIPT="until:page=home;click:261,121;type:Demo;key:enter;shot:x;quit"`
+drives the window (`crates/aiddiction/src/script.rs`); `AIDDICTION_SIZE=WxH` sets
 its size (below 44 rem wide is the phone layout). Scenarios with `expect:` /
-`until:` checks live in `crates/aidiction/tests/ui/*.script`; run them
+`until:` checks live in `crates/aiddiction/tests/ui/*.script`; run them
 headless in the sway container, screenshots go to `target/ui-shots/`:
 
 ```sh
@@ -60,14 +61,20 @@ screenshot. When a scripted run checks a change, keep it as a scenario.
 changed, plus `server-linux` / `server-macos` jobs: tests and UI scenarios on
 every push, every package as an artifact, and a release (flatpak to Pages,
 packages attached) only from a `vX.Y.Z` tag that `build-aux/check-version.sh`
-agrees with. Packaging scripts are in `build-aux/` (`package-server.sh` is
-ours; the rest follow money-manager-ng's). The Windows build cross-compiles
+agrees with. Packaging scripts are in `build-aux/` (`package-server.sh` and
+`install-server.sh` are ours; the rest follow money-manager-ng's). The
+service itself is written by `aiddiction-server install`
+(`crates/aiddiction-server/src/install.rs`), not shipped as a file: the unit
+carries the installing shell's PATH so the agents find Node. To try it
+without touching the real session, point `XDG_CONFIG_HOME`, `XDG_DATA_HOME`
+and `XDG_BIN_HOME` at a temporary directory: everything is written there and
+`systemctl --user enable` then fails, as it should. The Windows build cross-compiles
 with cargo-xwin and patches GPUI's build script
 (`build-aux/patches/gpui-pre-windows-0.3.7-cross-shaders.patch`): update the
 patch when `gpui-kit` is updated. The client's desktop file, metainfo, icons
 and macOS plist are in `data/`; the Windows icon is
-`crates/aidiction/windows/aidiction.ico` (regenerate it with the command in
-`crates/aidiction/build.rs`). The server is Unix-only, and so is the client's
+`crates/aiddiction/windows/aiddiction.ico` (regenerate it with the command in
+`crates/aiddiction/build.rs`). The server is Unix-only, and so is the client's
 demo mode.
 
 ### Android
@@ -81,16 +88,16 @@ and linker (host clang + the NDK's sysroot + rust-lld).
 
 | Crate | Role |
 |---|---|
-| `aidiction-paths` | Where both programs keep files: an XDG variable if set, else the platform's standard directory. |
-| `aidiction-api` | REST/event DTOs and the names of the proxy's ACP extensions (`_aidiction/attach`, `_aidiction/prompt_finished`, `_aidiction/request_resolved`, `_meta.aidictionSeq`). No Tokio, no UI. |
-| `aidiction-server` | The server: `config`, `store` (JSON files), `agents` (catalogue), `projects` (dirs, git clone), `instances` (agent processes), `proxy` (ACP), `http` (routes). |
-| `aidiction-client` | REST + event socket + ACP socket on Tokio. No UI, and it must stay that way. |
-| `aidiction` | The application: a library (Android loads it) and a thin `main.rs`. |
-| `aidiction-fake-agent` | A scripted ACP agent (stdio) for tests and the demo. |
+| `aiddiction-paths` | Where both programs keep files: an XDG variable if set, else the platform's standard directory. |
+| `aiddiction-api` | REST/event DTOs and the names of the proxy's ACP extensions (`_aiddiction/attach`, `_aiddiction/prompt_finished`, `_aiddiction/request_resolved`, `_meta.aiddictionSeq`). No Tokio, no UI. |
+| `aiddiction-server` | The server: `config`, `store` (JSON files), `agents` (catalogue), `projects` (dirs, git clone), `instances` (agent processes), `proxy` (ACP), `http` (routes). |
+| `aiddiction-client` | REST + event socket + ACP socket on Tokio. No UI, and it must stay that way. |
+| `aiddiction` | The application: a library (Android loads it) and a thin `main.rs`. |
+| `aiddiction-fake-agent` | A scripted ACP agent (stdio) for tests and the demo. |
 
 ### The proxy is the agent's ACP client
 
-`crates/aidiction-server/src/proxy.rs` is the heart of it, and its rules are
+`crates/aiddiction-server/src/proxy.rs` is the heart of it, and its rules are
 deliberate (most come from multiagent-ui's `acp-ws-bridge.mjs`):
 
 - The server sends `initialize` once per agent process; clients' `initialize`
@@ -101,7 +108,7 @@ deliberate (most come from multiagent-ui's `acp-ws-bridge.mjs`):
   way back; a response goes only to the socket that asked.
 - A session belongs to the socket that last drove it; its notifications go
   there (everyone, when the owner is gone) and into a bounded journal with a
-  sequence number. `_aidiction/attach` answers first, then replays.
+  sequence number. `_aiddiction/attach` answers first, then replays.
 - The prompt is echoed into the journal as `user_message_chunk`: the client
   shows user messages only from there, never adds them itself.
 
@@ -120,8 +127,8 @@ The theme engine is the libraries money-manager-ng and matterfast use —
 `gpui-adaptive-colors` (the Material You scheme) and `gpui-zed-themes`
 (Zed themes, its `Browser`, `Store`, `Registry`). Do not copy their code into
 the app: `appearance.rs` only stores choices in `Settings` and calls them,
-and `ui/settings_page.rs` lays out the page. `AIDICTION_COLOR=#rrggbb` pins
-the colour (the UI tests set it); `AIDICTION_THEMES_API` replaces Zed's
+and `ui/settings_page.rs` lays out the page. `AIDDICTION_COLOR=#rrggbb` pins
+the colour (the UI tests set it); `AIDDICTION_THEMES_API` replaces Zed's
 registry.
 
 ### Client state

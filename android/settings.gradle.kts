@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Aidiction"
+rootProject.name = "Aiddiction"
 include(":app")

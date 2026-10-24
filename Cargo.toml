@@ -8,12 +8,12 @@ edition = "2024"
 rust-version = "1.95"
 license = "GPL-3.0"
 authors = ["Akergez"]
-repository = "https://github.com/Akergez/aidiction"
+repository = "https://github.com/Akergez/aiddiction"
 
 [workspace.dependencies]
-aidiction-api = { path = "crates/aidiction-api" }
-aidiction-client = { path = "crates/aidiction-client" }
-aidiction-paths = { path = "crates/aidiction-paths" }
+aiddiction-api = { path = "crates/aiddiction-api" }
+aiddiction-client = { path = "crates/aiddiction-client" }
+aiddiction-paths = { path = "crates/aiddiction-paths" }
 anyhow = "1"
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }

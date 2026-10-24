@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cross-compile Aidiction for Windows on Linux and pack it into a zip.
+# Cross-compile Aiddiction for Windows on Linux and pack it into a zip.
 #
 #   build-aux/build-windows.sh x86_64 [version]
 #
@@ -30,8 +30,8 @@ case $arch in
   *) echo "unknown architecture: $arch" >&2; exit 2 ;;
 esac
 version=${2:-$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)}
-profile=${AIDICTION_PROFILE:-dist}
-tools=${AIDICTION_WINDOWS_TOOLS:-$root/target/windows-tools}
+profile=${AIDDICTION_PROFILE:-dist}
+tools=${AIDDICTION_WINDOWS_TOOLS:-$root/target/windows-tools}
 
 # The SDK package fxc.exe comes in. Pinned: the shaders are part of what
 # ships, and their compiler should not change underneath a release.
@@ -82,13 +82,13 @@ if ! grep -q GPUI_FXC_RUNNER "$gpui_src/build.rs"; then
   (cd -- "$gpui_src" && git apply "$gpui_patch")
 fi
 
-cargo build --profile "$profile" --locked -p aidiction --target "$target"
+cargo build --profile "$profile" --locked -p aiddiction --target "$target"
 
-name=aidiction-$version-windows-$arch
+name=aiddiction-$version-windows-$arch
 stage=$(mktemp -d)
 trap 'rm -rf -- "$stage"' EXIT
 mkdir -p -- "$stage/$name"
-cp -- "${CARGO_TARGET_DIR:-target}/$target/$profile/aidiction.exe" "$stage/$name/"
+cp -- "${CARGO_TARGET_DIR:-target}/$target/$profile/aiddiction.exe" "$stage/$name/"
 cp -- LICENSE "$stage/$name/LICENSE.txt"
 
 mkdir -p dist

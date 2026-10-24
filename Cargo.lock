@@ -144,12 +144,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "aidiction"
+name = "aiddiction"
 version = "0.1.0"
 dependencies = [
- "aidiction-api",
- "aidiction-client",
- "aidiction-paths",
+ "aiddiction-api",
+ "aiddiction-client",
+ "aiddiction-paths",
  "android-activity",
  "android_logger",
  "async-channel",
@@ -170,7 +170,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "aidiction-api"
+name = "aiddiction-api"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -179,10 +179,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "aidiction-client"
+name = "aiddiction-client"
 version = "0.1.0"
 dependencies = [
- "aidiction-api",
+ "aiddiction-api",
  "futures",
  "reqwest 0.13.5",
  "rustls",
@@ -196,26 +196,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "aidiction-fake-agent"
+name = "aiddiction-fake-agent"
 version = "0.1.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
-name = "aidiction-paths"
+name = "aiddiction-paths"
 version = "0.1.0"
 dependencies = [
  "dirs 6.0.0",
 ]
 
 [[package]]
-name = "aidiction-server"
+name = "aiddiction-server"
 version = "0.1.0"
 dependencies = [
- "aidiction-api",
- "aidiction-client",
- "aidiction-paths",
+ "aiddiction-api",
+ "aiddiction-client",
+ "aiddiction-paths",
  "anyhow",
  "axum",
  "futures",
