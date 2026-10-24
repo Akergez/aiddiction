@@ -1,0 +1,440 @@
+# Every commit is tested and built: the client's Linux tarballs, Windows zip,
+# Android package and macOS disk image, and the server's Linux and macOS
+# tarballs, come out of every run as workflow artifacts, so a change can be tried on the machine it was made for without a
+# release. Everything that is published is published from a version tag, and
+# only from one: `v1.2.3`, on a commit whose crates all say 1.2.3.
+#
+# A run:
+#   test      the unit and UI tests; on a tag, the check that tag and crates
+#             agree
+#   build     the client: Linux tarballs (x86_64, aarch64), a Windows zip
+#             (x86_64), an Android package (aarch64) and a macOS disk image
+#             (aarch64); on a tag, also the flatpak (x86_64, aarch64)
+#   server    the server: Linux tarballs (x86_64, aarch64) and a macOS one
+#             (aarch64)
+#   publish   on a tag only: the flatpak repository to GitHub Pages; a release
+#             with every package attached
+#
+# Every job but one runs on Linux. The Linux builds are native, each
+# architecture on its own runner. The Windows and Android builds are
+# cross-compiled; see build-aux/build-windows.sh for what stands in for a
+# Windows machine. Nothing stands in for a Mac: the toolkit's shaders are
+# compiled by Xcode's Metal compiler, so that build has a runner of its own.
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  # A branch push already runs this for the same commit; a pull request is
+  # only worth a second run when it comes from a fork.
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # A newer push replaces an older run, but never a release half-published.
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # A commit is built with the `release` profile: `dist` is one codegen unit
+  # with LTO, which is worth its time for what ships and not for a build
+  # somebody wants to try a fix with.
+  AIDICTION_PROFILE: ${{ startsWith(github.ref, 'refs/tags/v') && 'dist' || 'release' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # ----------------------------------------------------------------- test
+
+  test:
+    # A pull request from this repository is covered by its branch's push.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/linux-deps
+        with:
+          # What running needs on top of what building needs: sway and Mesa's
+          # software Vulkan are for the UI scenarios.
+          extra: sway mesa-vulkan-drivers
+      # git is what projects are cloned with; the end-to-end test runs the
+      # real server binary with the fake agent.
+      - run: cargo test --workspace --locked
+      # The scenarios in crates/aidiction/tests/ui, played into the real
+      # application under a headless compositor, against the demo server
+      # with the fake agent. In the same job as the unit tests so the
+      # dependencies are compiled once.
+      - run: cargo build --locked -p aidiction -p aidiction-server -p aidiction-fake-agent
+      - run: build-aux/ui-tests.sh --headless
+
+  # On a tag: the tag has to be a version, and the version the crates carry.
+  # Everything built for release waits for this. On a commit the output is
+  # empty, which the packaging scripts read as "the workspace's own version".
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: echo "version=$(build-aux/check-version.sh "$GITHUB_REF_NAME")" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------- build
+
+  tarball:
+    needs: [version, test]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/linux-deps
+      - run: cargo build --profile "$AIDICTION_PROFILE" --locked -p aidiction
+      # No `version` on a commit: the script takes the workspace's own.
+      - run: build-aux/package-tarball.sh "${{ needs.version.outputs.version }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-tarball-${{ matrix.arch }}
+          path: dist/*
+          retention-days: 30
+
+  windows:
+    needs: [version, test]
+    # Always the x86-64 runner: the shader compiler is run through wine, and
+    # the build is a cross-compile anyway.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container: messense/cargo-xwin:latest
+    env:
+      ARCH: x86_64
+      XWIN_CACHE_DIR: ${{ github.workspace }}/.xwin-cache
+    steps:
+      - run: |
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends wine nasm git curl unzip zip
+      - uses: actions/checkout@v4
+      - run: |
+          version=$(sed -n '/^\[toolchain\]/,/^\[/s/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          rustup toolchain install "$version" --profile minimal --target "$ARCH-pc-windows-msvc"
+          rustup default "$version"
+      # The MSVC runtime and Windows SDK cargo-xwin downloads, and fxc.exe.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .xwin-cache
+            target/windows-tools/fxc-*
+          key: windows-sdk-${{ hashFiles('build-aux/build-windows.sh') }}
+          restore-keys: windows-sdk-
+      - run: build-aux/build-windows.sh "$ARCH" "${{ needs.version.outputs.version }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-windows-x86_64
+          path: dist/*
+          retention-days: 30
+
+  android:
+    needs: [version, test]
+    # The x86-64 runner: Google builds the NDK for no other Linux.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CARGO_NDK_VERSION: "4.1.2"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/linux-deps
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: rustup target add aarch64-linux-android
+      - run: cargo install cargo-ndk --locked --version "$CARGO_NDK_VERSION"
+      # The SDK is the runner's own; the versions are those
+      # android/app/build.gradle.kts names.
+      - run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          # `yes` is killed when sdkmanager has read enough, which is not a failure.
+          (yes || true) | "$sdkmanager" --licenses > /dev/null
+          "$sdkmanager" "platforms;android-36" "build-tools;36.0.0" "ndk;27.0.12077973"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/wrapper
+            ~/.gradle/caches/modules-2
+          key: gradle-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-
+      - run: build-aux/build-android.sh "${{ needs.version.outputs.version }}"
+        env:
+          # Only a tagged build is signed with the release key; see the script.
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-android-aarch64
+          path: dist/*
+          retention-days: 30
+
+  macos:
+    needs: [version, test]
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      # The oldest macOS the bundle says it runs on (data/macos/Info.plist).
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install librsvg
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-registry-${{ runner.os }}-
+      - run: cargo build --profile "$AIDICTION_PROFILE" --locked -p aidiction
+      - run: build-aux/package-macos.sh "${{ needs.version.outputs.version }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-macos-aarch64
+          path: dist/*
+          retention-days: 30
+
+  # The server: one native build per architecture, packed as an install
+  # prefix with a systemd user unit (build-aux/package-server.sh). It needs no
+  # windowing libraries, so nothing but the toolchain is installed.
+  server-linux:
+    needs: [version, test]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-registry-${{ runner.os }}-${{ runner.arch }}-
+      - run: cargo build --profile "$AIDICTION_PROFILE" --locked -p aidiction-server
+      - run: build-aux/package-server.sh "${{ needs.version.outputs.version }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-server-linux-${{ matrix.arch }}
+          path: dist/*
+          retention-days: 30
+
+  server-macos:
+    needs: [version, test]
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-registry-${{ runner.os }}-
+      - run: cargo build --profile "$AIDICTION_PROFILE" --locked -p aidiction-server
+      - run: build-aux/package-server.sh "${{ needs.version.outputs.version }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-server-macos-aarch64
+          path: dist/*
+          retention-days: 30
+
+  # flatpak-builder sandboxes the build with bwrap, which has to create its
+  # own namespaces: the container runs privileged.
+  flatpak-x86_64:
+    # Published from a tag only; the jobs after it follow it into the skip.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [version, test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions@sha256:bdbeb241813021cf96f3001ccceea46b8e0c3c46a316172992fd60ad9dfc50e2
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - name: Flatpak runtime
+        run: |
+          # Without a machine id, dbus-run-session refuses to start and
+          # flatpak-builder cannot spawn a build sandbox.
+          dbus-uuidgen > /etc/machine-id
+          # The image carries the GNOME runtime and SDK; the application
+          # builds against the freedesktop ones.
+          flatpak install -y --noninteractive flathub \
+            org.freedesktop.Platform//25.08 \
+            org.freedesktop.Sdk//25.08 \
+            org.freedesktop.Sdk.Extension.rust-stable//25.08
+      - run: build-aux/publish-flatpak.sh
+      # The unsigned ostree repository, handed to the next job. It only has to
+      # outlive the run. It travels as a tar: an artifact drops empty
+      # directories (ostree needs refs/remotes) and file modes.
+      - run: tar -cf flatpak-repo.tar .flatpak-repo
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-repo-x86_64
+          path: flatpak-repo.tar
+          retention-days: 1
+
+  flatpak-aarch64:
+    # Not parallel with x86_64: it builds into the repository that job
+    # produced, so one ostree repository ends up holding both architectures.
+    needs: [version, test, flatpak-x86_64]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions@sha256:bdbeb241813021cf96f3001ccceea46b8e0c3c46a316172992fd60ad9dfc50e2
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: flatpak-repo-x86_64
+          path: handoff
+      - name: Flatpak runtime
+        run: |
+          dbus-uuidgen > /etc/machine-id
+          flatpak install -y --noninteractive flathub \
+            org.freedesktop.Platform//25.08 \
+            org.freedesktop.Sdk//25.08 \
+            org.freedesktop.Sdk.Extension.rust-stable//25.08
+      - run: tar -xf handoff/flatpak-repo.tar
+      - run: build-aux/publish-flatpak.sh
+      - run: tar -cf flatpak-repo.tar .flatpak-repo
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-repo
+          path: flatpak-repo.tar
+          retention-days: 1
+
+  # --------------------------------------------------------------- publish
+
+  # Signs the repository, packs each architecture as a single-file bundle, and
+  # lays the repository out as the Pages site: the repository under /repo, and
+  # the .flatpakref beside it. The signing key is needed here and nowhere else.
+  pages:
+    needs: [version, flatpak-aarch64]
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions@sha256:bdbeb241813021cf96f3001ccceea46b8e0c3c46a316172992fd60ad9dfc50e2
+      options: --privileged
+    # Never let a stale build finish last and publish over a newer one.
+    concurrency: flatpak-pages
+    env:
+      FLATPAK_REPO_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/repo
+      FLATPAK_HOMEPAGE: ${{ github.server_url }}/${{ github.repository }}
+      FLATPAK_BUNDLE_DIR: dist
+      FLATPAK_BUNDLE_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: flatpak-repo
+          path: handoff
+      - run: |
+          tar -xf handoff/flatpak-repo.tar
+          dbus-uuidgen > /etc/machine-id
+          build-aux/publish-flatpak.sh --site public
+        env:
+          FLATPAK_GPG_ID: ${{ secrets.FLATPAK_GPG_ID }}
+          FLATPAK_GPG_KEY_B64: ${{ secrets.FLATPAK_GPG_KEY_B64 }}
+          FLATPAK_GPG_PASSPHRASE: ${{ secrets.FLATPAK_GPG_PASSPHRASE }}
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-flatpak
+          path: dist/*
+
+  deploy:
+    needs: [pages]
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  release:
+    # Every package has to exist before the release links to it.
+    needs: [version, deploy, tarball, windows, android, macos, server-linux, server-macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PAGES_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+        run: |
+          cat > notes.md <<NOTES
+          ## The server
+
+          On the machine the projects live on, Linux or macOS. It needs git, and Node on its PATH for Claude Code and Codex (each already signed in there):
+
+              tar -xzf aidiction-server-$VERSION-linux-x86_64.tar.gz --strip-components=1 -C ~/.local
+              systemctl --user daemon-reload && systemctl --user enable --now aidiction-server
+              ~/.local/bin/aidiction-server token
+
+          The example configuration is in share/doc/aidiction-server.
+
+          ## The client
+
+          **Linux, flatpak**, x86_64 and aarch64, kept up to date by flatpak update:
+
+              flatpak install $PAGES_URL/app.akergez.Aidiction.flatpakref
+
+          The .flatpak files below are the same build as a single file, for a machine that cannot reach the repository.
+
+          **Linux, tarball**, laid out like an install prefix. The libraries listed under Building in the README come from the distribution:
+
+              tar -xzf aidiction-$VERSION-linux-x86_64.tar.gz --strip-components=1 -C ~/.local
+
+          **Windows, x86_64**: unpack the zip and run aidiction.exe.
+
+          **Android, arm64**, Android 8 and later: open the .apk on the phone and allow the installation.
+
+          **macOS, Apple silicon**: open the .dmg and drag Aidiction into Applications. The application is not signed by an Apple developer account, so macOS holds back a downloaded copy until its quarantine mark is taken off:
+
+              xattr -dr com.apple.quarantine "/Applications/Aidiction.app"
+          NOTES
+          # Heredoc indentation is YAML's; the text must start at column 0.
+          sed -i 's/^          //' notes.md
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "Aidiction $VERSION" --notes-file notes.md

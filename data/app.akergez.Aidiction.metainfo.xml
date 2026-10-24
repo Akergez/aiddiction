@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>app.akergez.Aidiction</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <name>Aidiction</name>
+  <summary>Projects and ACP agents on your own servers</summary>
+  <developer id="app.akergez">
+    <name>Akergez</name>
+  </developer>
+
+  <description>
+    <p>
+      Connects to an Aidiction server — your workstation or a machine of your
+      own — lists its projects, makes new ones empty, from a git repository or
+      from a folder already there, and starts AI agents in them: Claude Code
+      and Codex out of the box, any other agent that speaks the Agent Client
+      Protocol by a command line.
+    </p>
+    <p>
+      The conversation with the agent — its answers, the tools it runs, the
+      plan, and the permissions it asks for — follows you between the desktop
+      and the phone.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">app.akergez.Aidiction.desktop</launchable>
+  <url type="homepage">https://github.com/Akergez/aidiction</url>
+  <url type="bugtracker">https://github.com/Akergez/aidiction/issues</url>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.1.0" date="2026-10-25"/>
+  </releases>
+</component>

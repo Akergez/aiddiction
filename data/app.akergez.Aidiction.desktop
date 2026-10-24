@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Aidiction
+GenericName=AI Agent Orchestrator
+Comment=Projects and ACP agents on your own servers
+Exec=aidiction
+Icon=app.akergez.Aidiction
+Terminal=false
+Categories=Development;
+Keywords=ai;agent;acp;claude;codex;projects;
+StartupNotify=true

@@ -1,0 +1,6 @@
+// The application's icon, as resource 1: the id GPUI loads for its window
+// class, and so what the taskbar, Alt-Tab and the title bar show.
+//
+// aidiction.ico is data/icons/hicolor/scalable/apps/app.akergez.Aidiction.svg
+// rendered at 16, 24, 32, 48, 64 and 256 pixels; see build.rs.
+1 ICON "aidiction.ico"

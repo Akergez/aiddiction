@@ -1,0 +1,141 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+Aidiction is a client-server orchestrator for ACP agents. The server (Rust,
+axum) keeps projects — directories under its projects root, empty or cloned
+from git — and runs ACP agents in them as child processes, proxying ACP to
+clients over WebSocket. The client (Rust, GPUI through `gpui-kit`) runs on
+the Linux desktop and on Android. `docs/PLAN.md` (in Russian) is the design
+and its section 11 the state of the prototype.
+
+## Commands
+
+```sh
+cargo build --workspace                       # everything; the demo needs all three binaries
+cargo test --workspace                        # unit tests + the server/fake-agent/client end-to-end test
+cargo test -p aidiction-server end_to_end     # just the end-to-end one
+cargo run -p aidiction-server                 # a real server: ~/aidiction-projects, token printed on first run
+cargo run -p aidiction-server -- token        # print the token
+cargo clippy --workspace --all-targets
+```
+
+### Running without touching real settings
+
+```sh
+XDG_DATA_HOME=/tmp/aid/data XDG_CONFIG_HOME=/tmp/aid/config \
+AIDICTION_DEMO=1 cargo run -p aidiction
+```
+
+`AIDICTION_DEMO` starts `aidiction-server` from beside the executable on
+127.0.0.1:7979 with token `demo` and the fake agent configured, and makes it
+the server in use. Never try things against the default directories: that is
+the person's own server list.
+
+A server for experiments: `AIDICTION_LISTEN`, `AIDICTION_DATA_DIR`,
+`AIDICTION_PROJECTS_ROOT`, `AIDICTION_TOKEN` override its configuration, and
+`--config /nonexistent` skips the file.
+
+### Looking at the interface from a script
+
+`AIDICTION_SCRIPT="until:page=home;click:261,121;type:Demo;key:enter;shot:x;quit"`
+drives the window (`crates/aidiction/src/script.rs`); `AIDICTION_SIZE=WxH` sets
+its size (below 44 rem wide is the phone layout). Scenarios with `expect:` /
+`until:` checks live in `crates/aidiction/tests/ui/*.script`; run them
+headless in the sway container, screenshots go to `target/ui-shots/`:
+
+```sh
+cargo build --workspace
+podman run --rm --userns=keep-id --security-opt label=disable \
+  -v "$PWD":/src -v "$HOME/.cargo/registry":"$HOME/.cargo/registry":ro -w /src \
+  localhost/matterfast-ui build-aux/ui-tests.sh --headless [scenario …]
+```
+
+Click coordinates are for the scenario's `# size:`, read off a headless
+screenshot. When a scripted run checks a change, keep it as a scenario.
+
+### Packaging and CI
+
+`.github/workflows/ci.yml` is money-manager-ng's pipeline with the names
+changed, plus `server-linux` / `server-macos` jobs: tests and UI scenarios on
+every push, every package as an artifact, and a release (flatpak to Pages,
+packages attached) only from a `vX.Y.Z` tag that `build-aux/check-version.sh`
+agrees with. Packaging scripts are in `build-aux/` (`package-server.sh` is
+ours; the rest follow money-manager-ng's). The Windows build cross-compiles
+with cargo-xwin and patches GPUI's build script
+(`build-aux/patches/gpui-pre-windows-0.3.7-cross-shaders.patch`): update the
+patch when `gpui-kit` is updated. The client's desktop file, metainfo, icons
+and macOS plist are in `data/`; the Windows icon is
+`crates/aidiction/windows/aidiction.ico` (regenerate it with the command in
+`crates/aidiction/build.rs`). The server is Unix-only, and so is the client's
+demo mode.
+
+### Android
+
+`android/README.md`. The library is a `cdylib` loaded by a `NativeActivity`
+through gpui-mobile (same rev as money-manager-ng). On this aarch64 host the
+NDK has no clang of its own: `build-aux/android-clang.sh` is the C compiler
+and linker (host clang + the NDK's sysroot + rust-lld).
+
+## Architecture
+
+| Crate | Role |
+|---|---|
+| `aidiction-paths` | Where both programs keep files: an XDG variable if set, else the platform's standard directory. |
+| `aidiction-api` | REST/event DTOs and the names of the proxy's ACP extensions (`_aidiction/attach`, `_aidiction/prompt_finished`, `_aidiction/request_resolved`, `_meta.aidictionSeq`). No Tokio, no UI. |
+| `aidiction-server` | The server: `config`, `store` (JSON files), `agents` (catalogue), `projects` (dirs, git clone), `instances` (agent processes), `proxy` (ACP), `http` (routes). |
+| `aidiction-client` | REST + event socket + ACP socket on Tokio. No UI, and it must stay that way. |
+| `aidiction` | The application: a library (Android loads it) and a thin `main.rs`. |
+| `aidiction-fake-agent` | A scripted ACP agent (stdio) for tests and the demo. |
+
+### The proxy is the agent's ACP client
+
+`crates/aidiction-server/src/proxy.rs` is the heart of it, and its rules are
+deliberate (most come from multiagent-ui's `acp-ws-bridge.mjs`):
+
+- The server sends `initialize` once per agent process; clients' `initialize`
+  is answered from that, so a client can reconnect without restarting the
+  agent. `fs/*` requests are served on the server, inside the project.
+- `cwd` in `session/new|load|resume` is always rewritten to the project.
+- Client request ids are rewritten to proxy-unique ones and restored on the
+  way back; a response goes only to the socket that asked.
+- A session belongs to the socket that last drove it; its notifications go
+  there (everyone, when the owner is gone) and into a bounded journal with a
+  sequence number. `_aidiction/attach` answers first, then replays.
+- The prompt is echoed into the journal as `user_message_chunk`: the client
+  shows user messages only from there, never adds them itself.
+
+`routing` decisions are pure functions of the proxy state and are unit-tested
+in `proxy.rs`; keep new rules there and testable.
+
+### Projects
+
+A project is a folder: made under the projects root (empty or `git clone`),
+or an existing folder adopted as it is (`Project::path` set). Deleting a
+project removes a folder only if the server made it.
+
+### Appearance
+
+The theme engine is the libraries money-manager-ng and matterfast use —
+`gpui-adaptive-colors` (the Material You scheme) and `gpui-zed-themes`
+(Zed themes, its `Browser`, `Store`, `Registry`). Do not copy their code into
+the app: `appearance.rs` only stores choices in `Settings` and calls them,
+and `ui/settings_page.rs` lays out the page. `AIDICTION_COLOR=#rrggbb` pins
+the colour (the UI tests set it); `AIDICTION_THEMES_API` replaces Zed's
+registry.
+
+### Client state
+
+- `runtime.rs` is the only bridge to Tokio (after matterfast): `spawn`,
+  `receive`, `after`. Never touch an entity from a Tokio task.
+- `settings::Settings` (GPUI global over `settings.json`, mode 0600): servers
+  and the active one.
+- `server::ServerConnection` (entity) is the one owner of the REST client and
+  the event socket. Its methods take a `done` callback; that callback runs
+  *after* the entity's update (`cx.defer`), so it may update it again.
+- `session::AgentSession` (entity) is one conversation: its own JSON-RPC over
+  the ACP socket, reconnection with `afterSeq`, and the `thread::Thread`
+  (pure, tested) the chat draws.
+- `ui::shell::Shell` holds the page and the open chats; pages are `impl Shell`
+  blocks in `ui/*.rs`. Read the gpui-kit skill's Coding Guides before changing
+  structure.

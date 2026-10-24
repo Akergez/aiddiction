@@ -1,0 +1,32 @@
+# A new empty project, the fake agent started in it, a prompt that asks to
+# write a file, the permission granted, and the finished turn.
+# size: 1100x760
+until:page=home
+wait:1000
+expect:projects=0
+click:261,121
+until:dialog=open
+type:Demo
+key:enter
+until:page=project
+expect:projects=1
+wait:300
+# Start: the fake agent, third in the catalogue.
+click:1038,343
+until:page=chat
+expect:chats=1
+type:please make a file
+key:enter
+until:permissions=1
+expect:busy=yes
+shot:first-chat-permission
+# Allow.
+click:342,672
+until:busy=no
+expect:permissions=0
+wait:300
+# Unfold the tool call.
+click:700,538
+wait:300
+shot:first-chat-done
+quit

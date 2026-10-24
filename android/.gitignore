@@ -1,0 +1,10 @@
+# Gradle's state and output.
+/.gradle
+/build
+/app/build
+
+# Where the SDK is on this machine; Android Studio writes it.
+/local.properties
+
+# The Rust library, built by `cargo ndk` and not kept.
+/app/src/main/jniLibs

@@ -1,0 +1,45 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "GPL-3.0"
+authors = ["Akergez"]
+repository = "https://github.com/Akergez/aidiction"
+
+[workspace.dependencies]
+aidiction-api = { path = "crates/aidiction-api" }
+aidiction-client = { path = "crates/aidiction-client" }
+aidiction-paths = { path = "crates/aidiction-paths" }
+anyhow = "1"
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "process", "io-util", "fs", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v7", "serde"] }
+
+[profile.dev]
+# The toolkit is most of the build; without its debug information a debug
+# build links in seconds.
+debug = "line-tables-only"
+
+# The toolkit lays out and paints every frame; unoptimised it does so at a
+# fraction of the display's rate.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+incremental = true
+
+[profile.dist]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+incremental = false
+strip = true

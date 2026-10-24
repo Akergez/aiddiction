@@ -1,0 +1,24 @@
+# A custom agent added from a project page: the server keeps it, and it
+# joins the catalogue every client sees.
+# size: 1100x760
+until:page=home
+wait:1000
+click:261,121
+until:dialog=open
+type:Agents
+key:enter
+until:page=project
+until:agents=3
+wait:300
+click:1022,130
+until:dialog=open
+type:My fake
+key:tab
+type:/src/target/debug/aidiction-fake-agent
+wait:200
+shot:custom-agent-form
+key:enter
+until:agents=4
+wait:300
+shot:custom-agent-added
+quit

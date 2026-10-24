@@ -1,0 +1,13 @@
+[package]
+name = "aidiction-api"
+description = "Types shared by the Aidiction server and its clients"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true

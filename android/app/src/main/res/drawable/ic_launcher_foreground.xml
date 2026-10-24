@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The application icon, from data/icons/hicolor/scalable/apps: the same
+     paths, scaled by half and centred so that all of it stays inside the
+     circle a launcher may cut out of the middle. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.5"
+        android:scaleY="0.5"
+        android:translateX="22"
+        android:translateY="22">
+        <!-- The card's front profile -->
+        <path
+            android:fillColor="#0842a0"
+            android:pathData="M 30 26 H 98 A 14 14 0 0 1 112 40 V 96 A 14 14 0 0 1 98 110 H 30 A 14 14 0 0 1 16 96 V 40 A 14 14 0 0 1 30 26 Z" />
+        <!-- The card's top face -->
+        <path
+            android:fillColor="#0b57d0"
+            android:pathData="M 30 20 H 98 A 14 14 0 0 1 112 34 V 90 A 14 14 0 0 1 98 104 H 30 A 14 14 0 0 1 16 90 V 34 A 14 14 0 0 1 30 20 Z" />
+        <!-- The prompt: a chevron and the cursor -->
+        <path
+            android:fillColor="#e8f0fe"
+            android:pathData="M 32 45 L 38 39 L 59 60 L 38 81 L 32 75 L 47 60 Z M 62 74 H 84 A 5 5 0 0 1 84 84 H 62 A 5 5 0 0 1 62 74 Z" />
+        <!-- The agent -->
+        <path
+            android:fillColor="#c88800"
+            android:pathData="M 92 34 A 10 10 0 1 1 92 54 A 10 10 0 1 1 92 34 Z" />
+        <path
+            android:fillColor="#f6d32d"
+            android:pathData="M 92 32 A 10 10 0 1 1 92 52 A 10 10 0 1 1 92 32 Z" />
+    </group>
+</vector>

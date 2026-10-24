@@ -1,0 +1,68 @@
+id: app.akergez.Aidiction
+# The plain freedesktop runtime: the interface draws itself through GPUI on
+# Vulkan and needs nothing from GTK.
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: aidiction
+
+# No filesystem access at all: the settings and the installed themes live in
+# the sandbox's own config and data directories. The projects are on the
+# servers, not here.
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Talking to Aidiction servers, and Zed's theme registry.
+  - --share=network
+  # The desktop's accent colour and light/dark preference, from the portal.
+  - --talk-name=org.freedesktop.portal.Desktop
+
+modules:
+  - name: aidiction
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/aidiction/cargo
+      # This repository builds from crates.io rather than from a generated
+      # offline source list: it is published from our own CI, not Flathub,
+      # so a network-isolated build buys nothing but a megabyte of churn in
+      # cargo-sources.json on every dependency bump.
+      build-args:
+        - --share=network
+    build-commands:
+      - cargo build --profile dist --locked -p aidiction
+      - install -Dm755 target/dist/aidiction /app/bin/aidiction
+      - install -Dm644 data/app.akergez.Aidiction.desktop /app/share/applications/app.akergez.Aidiction.desktop
+      - install -Dm644 data/app.akergez.Aidiction.metainfo.xml /app/share/metainfo/app.akergez.Aidiction.metainfo.xml
+      - install -Dm644 LICENSE -t /app/share/licenses/app.akergez.Aidiction
+      # The icon ships rasterized. Both `flatpak build-export` and
+      # appstreamcli load icons through glycin, which has no SVG loader in the
+      # images this is built on, so an exported SVG fails the build outright. The
+      # source of truth is still the SVG in data/.
+      - rsvg-convert -w 128 -h 128 -o icon-128.png
+        data/icons/hicolor/scalable/apps/app.akergez.Aidiction.svg
+      - rsvg-convert -w 256 -h 256 -o icon-256.png
+        data/icons/hicolor/scalable/apps/app.akergez.Aidiction.svg
+      - install -Dm644 icon-128.png
+        /app/share/icons/hicolor/128x128/apps/app.akergez.Aidiction.png
+      - install -Dm644 icon-256.png
+        /app/share/icons/hicolor/256x256/apps/app.akergez.Aidiction.png
+    sources:
+      - type: dir
+        path: ..
+        # Everything the publish script itself writes into the checkout. The
+        # ostree repository and the builder's state directory are large; the
+        # state directory also holds live mounts, which cannot be copied.
+        skip:
+          - .git
+          - .flatpak-build
+          - .flatpak-repo
+          - .flatpak-state
+          - .cargo-home
+          - dist
+          - target

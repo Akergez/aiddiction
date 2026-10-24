@@ -1,0 +1,25 @@
+# A systemd user service for aidiction-server.
+#
+#   tar -xzf aidiction-server-<v>-linux-<arch>.tar.gz --strip-components=1 -C ~/.local
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now aidiction-server
+#   ~/.local/bin/aidiction-server token
+#
+# The agents are started from here, so whatever they need must be on this
+# PATH: Node for the npx-run adapters (Claude Code, Codex), and the CLIs they
+# drive. A Node from nvm is not on systemd's PATH; add its bin directory
+# below, or `systemctl --user edit aidiction-server`.
+[Unit]
+Description=Aidiction server: projects and ACP agents
+After=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/aidiction-server
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+# SIGTERM: the server stops its agents on the way out.
+KillMode=mixed
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target

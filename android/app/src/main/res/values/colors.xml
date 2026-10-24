@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- What the window is before the first frame is drawn: the dark theme's
+         background, so the splash does not flash on the way to it. -->
+    <color name="gpui_surface">#FF0A0A0A</color>
+    <!-- What the launcher icon's card stands on. -->
+    <color name="launcher_background">#FFFFFFFF</color>
+</resources>

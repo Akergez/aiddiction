@@ -1,0 +1,12 @@
+/target
+/android/app/src/main/jniLibs
+/android/.gradle
+/android/app/build
+/android/build
+/android/local.properties
+/.cache
+/dist
+/.flatpak-build
+/.flatpak-repo
+/.flatpak-state
+/.cargo-home

@@ -1,0 +1,27 @@
+# The phone layout: one page at a time, the projects as the home page, and a
+# back button in the title bar.
+# size: 400x800
+until:page=home
+wait:1000
+shot:phone-home
+click:374,121
+until:dialog=open
+type:Phone
+key:enter
+until:page=project
+wait:300
+shot:phone-project
+# Start the fake agent; its row is the third.
+click:338,343
+until:page=chat
+type:hello from the phone
+key:enter
+until:busy=no
+wait:300
+shot:phone-chat
+# Back to the project: the running agent and its conversation are listed.
+click:24,17
+until:page=project
+wait:500
+shot:phone-running
+quit

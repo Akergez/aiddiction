@@ -1,0 +1,24 @@
+# A folder already on the server becomes a project named after it. The path
+# is typed rather than picked from the home folder's listing, which differs
+# between the container and a CI runner.
+# size: 1100x760
+until:page=home
+wait:1000
+click:261,121
+until:dialog=open
+click:620,133
+wait:800
+shot:existing-folder-browse
+# The folder field.
+click:550,263
+key:ctrl-a
+type:/tmp
+wait:300
+shot:existing-folder-picked
+# Create, with the name left empty: the folder's own.
+click:654,540
+until:page=project
+expect:projects=1
+wait:300
+shot:existing-folder-project
+quit

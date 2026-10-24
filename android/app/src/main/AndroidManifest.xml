@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+  The Android shell around the Rust application.
+
+  The activity is a NativeActivity (through GpuiActivity and
+  GpuiInputActivity, which add the splash screen and a real InputConnection
+  for the soft keyboard). It loads the shared object named by
+  `android.app.lib_name`, which is the `aidiction` crate built as a
+  cdylib, and calls `android_main` in it.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Talking to Aidiction servers: the only permission there is. The
+         settings are kept in the application's private directory, so no
+         storage permission is declared or ever asked for. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Vulkan where there is one, OpenGL ES 3 where there is not. -->
+    <uses-feature
+        android:name="android.hardware.vulkan.level"
+        android:required="false"
+        android:version="0"
+    />
+    <uses-feature
+        android:name="android.hardware.vulkan.version"
+        android:required="false"
+        android:version="0x00401000"
+    />
+    <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="false"
+    />
+
+    <!-- allowBackup is off: a backup would carry the servers' tokens out of
+         the application's private directory. -->
+    <application
+        android:allowBackup="false"
+        android:hardwareAccelerated="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/GpuiTheme"
+    >
+
+        <!--
+          `configChanges` keeps the activity across rotation and the keyboard
+          appearing: the Rust side is told through the NDK instead.
+          `singleTask`: one activity, one set of open conversations.
+        -->
+        <activity
+            android:name="dev.gpui.mobile.GpuiActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|navigation|uiMode|density"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="unspecified"
+            android:theme="@style/GpuiSplashTheme"
+            android:windowSoftInputMode="adjustResize"
+        >
+
+            <!-- Without the `lib` prefix and the `.so` suffix; set in
+                 build.gradle.kts. -->
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="${nativeLibraryName}"
+            />
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+    </application>
+
+</manifest>
