@@ -115,7 +115,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.0"
+version = "1.1.0"
 edition = "2024"
 rust-version = "1.95"
 license = "GPL-3.0"

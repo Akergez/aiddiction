@@ -28,6 +28,9 @@ use crate::instances::Supervisor;
 use crate::projects::Projects;
 use crate::store::Store;
 
+/// How long a stopping server waits for its clients to hang up.
+const SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(3);
+
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -106,14 +109,25 @@ async fn serve(config: Config, store: Arc<Store>, token: String, new_token: bool
     }
 
     let app = http::router(state.clone());
+    let deadline_state = state.clone();
     axum::serve(listener, app)
-        .with_graceful_shutdown(async {
+        .with_graceful_shutdown(async move {
             let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
                 .expect("a SIGTERM handler");
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {}
                 _ = terminate.recv() => {}
             }
+            // A graceful shutdown waits for every connection to close, and a
+            // client's event socket need never close: past this, the server
+            // stops its agents and goes regardless.
+            tokio::spawn(async move {
+                tokio::time::sleep(SHUTDOWN_DEADLINE).await;
+                tracing::warn!("connections still open after {} s; stopping anyway", SHUTDOWN_DEADLINE.as_secs());
+                deadline_state.supervisor.stop_all();
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                std::process::exit(0);
+            });
         })
         .await?;
     state.supervisor.stop_all();
