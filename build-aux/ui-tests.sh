@@ -72,7 +72,8 @@ cleanup() {
 trap cleanup EXIT
 
 shot_cmd=$work/shot.sh
-printf '#!/bin/sh\nexec grim "%s/$1.png"\n' "$shots" > "$shot_cmd"
+# Screenshots are for looking at; without grim there are none, quietly.
+printf '#!/bin/sh\ncommand -v grim >/dev/null || exit 0\nexec grim "%s/$1.png"\n' "$shots" > "$shot_cmd"
 chmod +x "$shot_cmd"
 
 header() { sed -n "s/^# *$2: *//p" "$1" | head -n1; }

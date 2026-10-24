@@ -215,9 +215,11 @@ impl ProjectForm {
         Ok(NewProject { name, source })
     }
 
+    /// A fixed height, however many folders there are: the dialog must not
+    /// change size (and move its buttons) as the listing changes.
     fn render_folders(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme().clone();
-        let mut list = v_flex().id("folders").max_h_48().overflow_y_scroll().border_1().border_color(theme.border).rounded(theme.radius);
+        let mut list = v_flex().id("folders").h_48().overflow_y_scroll().border_1().border_color(theme.border).rounded(theme.radius);
         let Some(listing) = &self.listing else {
             return list.child(div().p_2().text_sm().text_color(theme.muted_foreground).child("Reading the server's folders…"));
         };

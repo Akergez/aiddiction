@@ -15,8 +15,8 @@ key:ctrl-a
 type:/tmp
 wait:300
 shot:existing-folder-picked
-# Create, with the name left empty: the folder's own.
-click:654,540
+# Create (Enter in the field), with the name left empty: the folder's own.
+key:enter
 until:page=project
 expect:projects=2
 wait:300
