@@ -3,13 +3,13 @@
 # size: 1100x760
 until:page=home
 wait:1000
-expect:projects=0
+expect:projects=1
 click:261,121
 until:dialog=open
 type:Demo
 key:enter
 until:page=project
-expect:projects=1
+expect:projects=2
 wait:300
 # Start: the fake agent, third in the catalogue.
 click:1038,343

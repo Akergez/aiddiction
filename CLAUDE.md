@@ -49,11 +49,13 @@ headless in the sway container, screenshots go to `target/ui-shots/`:
 cargo build --workspace
 podman run --rm --userns=keep-id --security-opt label=disable \
   -v "$PWD":/src -v "$HOME/.cargo/registry":"$HOME/.cargo/registry":ro -w /src \
-  localhost/matterfast-ui build-aux/ui-tests.sh --headless [scenario …]
+  localhost/aiddiction-ui build-aux/ui-tests.sh --headless [scenario …]
 ```
 
 Click coordinates are for the scenario's `# size:`, read off a headless
 screenshot. When a scripted run checks a change, keep it as a scenario.
+`localhost/aiddiction-ui` is matterfast's image with git added
+(`build-aux/ui-tests.Containerfile`; build it with the command in its header).
 
 ### Packaging and CI
 
@@ -94,6 +96,8 @@ and linker (host clang + the NDK's sysroot + rust-lld).
 | `aiddiction-client` | REST + event socket + ACP socket on Tokio. No UI, and it must stay that way. |
 | `aiddiction` | The application: a library (Android loads it) and a thin `main.rs`. |
 | `aiddiction-fake-agent` | A scripted ACP agent (stdio) for tests and the demo. |
+| `diffreview` | The diff review model after revdiff, with no UI: unified-diff parsing, annotations and revdiff's exact output format (and its parser), `DiffRequest` → git arguments, `git::LocalRepo`, the prompt that hands a review to an agent. The server uses it. |
+| `diffreview-ui` | The review view on gpui-kit over `diffreview`: the files as gpui-kit's `Tree` (built by `diffreview::tree`), diff rows coloured by gpui-kit's tree-sitter highlighter (`highlight.rs`: both versions of the file rebuilt from the diff and parsed whole), annotations, revdiff's keys. Gets diffs through `ReviewBackend`; `LocalBackend` is git on this machine (what a standalone tool needs). Knows nothing of Aiddiction. |
 
 ### The proxy is the agent's ACP client
 
@@ -114,6 +118,21 @@ deliberate (most come from multiagent-ui's `acp-ws-bridge.mjs`):
 
 `routing` decisions are pure functions of the proxy state and are unit-tested
 in `proxy.rs`; keep new rules there and testable.
+
+### Review
+
+`diffreview` + `diffreview-ui` are meant to be reused as they are by a
+standalone local review tool, so they never depend on Aiddiction's crates.
+In Aiddiction the server runs `diffreview::git::LocalRepo` in the project
+(`POST /projects/{id}/review/diff`, `GET /projects/{id}/review/refs`), the
+client's `review::ServerBackend` implements `ReviewBackend` over REST, and
+"Send to agent" (`ui/review.rs`) prompts the project's last ready
+conversation with `diffreview::prompt::for_agent(output)` and clears the
+review: revdiff's annotate → fix → review loop. The output format must stay
+byte-for-byte revdiff's (`annotation.rs` tests pin it).
+
+The demo makes a sample git repository with uncommitted changes as its first
+project (`demo.rs`), so scenarios count it among the projects.
 
 ### Projects
 

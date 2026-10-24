@@ -807,6 +807,32 @@ Android Keystore через JNI).
   **никогда** не удаляется. В форме нового проекта — вариант «Existing folder»
   с обзором папок сервера (`GET /fs/dirs`).
 
+### Ревью diff (как revdiff)
+
+Встроенное ревью изменений проекта по образцу
+[revdiff](https://github.com/umputun/revdiff): файлы слева деревом папок
+(цепочки из одной папки свёрнуты, как в revdiff), diff справа с подсветкой
+синтаксиса tree-sitter (обе версии файла собираются из diff и разбираются
+целиком, так что многострочные комментарии и строки подсвечены верно) (по
+умолчанию весь файл, переключается на компактный), аннотации на строку, на
+ханк (слово «hunk» в тексте) и на файл, клавиши revdiff (`j/k`, `n/p`,
+`[`/`]`, `a`/`Enter`, `A`, `d`, `Space`, `R`, `Ctrl+Enter`). Источники:
+uncommitted (с untracked), staged, последний коммит, ветка против
+main/master, любой ref. Вывод — формат revdiff байт в байт; «Send to agent»
+отправляет его промптом в чат проекта с инструкцией (вопросы с `??` —
+ответить, остальное — исправить) и очищает ревью для следующего круга.
+
+Код в двух крейтах, не зависящих от Aiddiction, чтобы локальный standalone-
+инструмент собрался из них без изменений: `diffreview` (модель, формат, git,
+без UI — его использует и сервер) и `diffreview-ui` (вью на gpui-kit с
+трейтом `ReviewBackend`; `LocalBackend` — git на этой машине). Aiddiction
+добавляет только `ServerBackend` (REST) и страницу. Diff по сети идёт
+обычным текстом `git diff`, разбирается на клиенте тем же парсером.
+
+Не сделано: word diff, blame, поиск, история ревью, перенос длинных строк.
+Подсветки нет для SQL: его грамматика в gpui-kit требует старый `cc`,
+несовместимый с Android-крейтами.
+
 ### Отличия от плана (сознательные упрощения прототипа)
 
 | План | Прототип | Почему / что дальше |
@@ -825,9 +851,9 @@ Android Keystore через JNI).
   attach, permissions, fs вне проекта), каталога, модели треда, скрипта и
   сквозной тест `crates/aiddiction-server/tests/end_to_end.rs` (сервер +
   fake-агент + `aiddiction-client`).
-- `build-aux/ui-tests.sh --headless` в контейнере `localhost/matterfast-ui` —
+- `build-aux/ui-tests.sh --headless` в контейнере `localhost/aiddiction-ui` —
   сценарии `crates/aiddiction/tests/ui/*.script` (`first-chat`, `phone`,
-  `custom-agent`, `existing-folder`, `settings`) с `AIDDICTION_DEMO=1`.
+  `custom-agent`, `existing-folder`, `settings`, `review`) с `AIDDICTION_DEMO=1`.
 
 ### Android
 

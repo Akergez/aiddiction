@@ -18,7 +18,7 @@ shot:existing-folder-picked
 # Create, with the name left empty: the folder's own.
 click:654,540
 until:page=project
-expect:projects=1
+expect:projects=2
 wait:300
 shot:existing-folder-project
 quit

@@ -1,0 +1,40 @@
+# The review loop: a conversation with the agent, the project's diff (the
+# demo's sample repository) annotated, the annotations sent to the agent as
+# a prompt, and the review empty again for the next round.
+# size: 1100x760
+until:page=home
+until:projects=1
+wait:500
+# Sample repo, then the fake agent.
+click:100,154
+until:page=project
+wait:300
+click:1038,343
+until:page=chat
+wait:500
+# "Review changes" in the conversation's toolbar.
+click:1010,47
+until:page=review
+wait:1500
+expect:annotations=0
+# src/lib.rs in the tree; the cursor starts on its first change.
+click:400,108
+wait:600
+key:a
+until:dialog=open
+type:refactor this hunk to return a Result
+click:654,304
+until:dialog=closed
+expect:annotations=1
+wait:300
+shot:review-annotated
+# Send to agent.
+click:1050,49
+until:page=chat
+until:busy=no
+wait:500
+shot:review-sent
+click:1010,47
+until:page=review
+expect:annotations=0
+quit

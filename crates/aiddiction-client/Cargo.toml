@@ -9,6 +9,7 @@ authors.workspace = true
 
 [dependencies]
 aiddiction-api.workspace = true
+diffreview.workspace = true
 futures.workspace = true
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "http2"] }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }

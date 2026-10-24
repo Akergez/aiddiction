@@ -8,7 +8,9 @@ Projects and ACP agents on your own servers, from the desktop or a phone.
   conversation to clients over WebSocket.
 - **aiddiction** is the client: pick a server, see its projects, make one
   (empty, cloned from git, or a folder already on the server), start an
-  agent in it and work with it. Light, dark, Material You colours or any
+  agent in it and work with it, and review what it changed: annotate the
+  diff line by line, as in [revdiff](https://github.com/umputun/revdiff),
+  and send the annotations back to the agent. Light, dark, Material You colours or any
   theme from Zed's registry. Linux desktop and Android, drawn
   with [gpui-kit](https://gpui-kit.com).
 

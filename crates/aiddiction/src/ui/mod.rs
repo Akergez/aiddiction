@@ -4,6 +4,7 @@
 mod chat;
 mod forms;
 mod project;
+mod review;
 mod servers;
 mod settings_page;
 pub(crate) mod shell;

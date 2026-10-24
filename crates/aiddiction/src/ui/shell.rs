@@ -5,6 +5,8 @@
 //! page; on a phone one page shows at a time and the title bar has a back
 //! button.
 
+use std::collections::HashMap;
+
 use aiddiction_api::{Instance, Project, ProjectId};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{ActiveTheme, IconName, h_flex, v_flex};
@@ -25,6 +27,8 @@ pub enum Page {
     /// a desktop.
     Home,
     Project(ProjectId),
+    /// The diff review of a project's working tree.
+    Review(ProjectId),
     Chat(EntityId),
 }
 
@@ -34,6 +38,8 @@ pub struct Shell {
     pub(crate) chats: Vec<Entity<ChatView>>,
     /// Made when the page is first opened.
     settings: Option<Entity<super::settings_page::SettingsPage>>,
+    /// Each project's review, with its event subscription.
+    pub(crate) reviews: HashMap<ProjectId, (Entity<diffreview_ui::ReviewView>, Subscription)>,
     _server_subscription: Option<Subscription>,
     _appearance: Vec<Subscription>,
 }
@@ -59,6 +65,7 @@ impl Shell {
             page,
             chats: Vec::new(),
             settings: None,
+            reviews: HashMap::new(),
             _server_subscription: None,
             _appearance: appearance,
         };
@@ -69,6 +76,7 @@ impl Shell {
     /// Makes `entry` the server in use; the open chats belonged to the old one.
     pub(super) fn use_server(&mut self, entry: Option<ServerEntry>, cx: &mut Context<Self>) {
         self.chats.clear();
+        self.reviews.clear();
         self.server = entry.map(|entry| cx.new(|cx| ServerConnection::new(entry, cx)));
         self._server_subscription = self.server.as_ref().map(|server| cx.observe(server, |_, _, cx| cx.notify()));
         if matches!(self.page, Page::Project(_) | Page::Chat(_)) {
@@ -87,6 +95,7 @@ impl Shell {
 
     fn back(&mut self, cx: &mut Context<Self>) {
         let page = match self.page {
+            Page::Review(project) => Page::Project(project),
             Page::Chat(id) => self
                 .chats
                 .iter()
@@ -134,8 +143,15 @@ impl Shell {
         let closed = cx.subscribe_in(&chat, window, |this, chat, _: &super::chat::Close, _, cx| {
             this.close_chat(chat.entity_id(), cx);
         });
-        // The subscription lives as long as the chat does.
-        chat.update(cx, |chat, _| chat.keep(closed));
+        let project_id = project.id;
+        let review = cx.subscribe_in(&chat, window, move |this, _, _: &super::chat::OpenReview, window, cx| {
+            this.open_review(project_id, window, cx);
+        });
+        // The subscriptions live as long as the chat does.
+        chat.update(cx, |chat, _| {
+            chat.keep(closed);
+            chat.keep(review);
+        });
         self.page = Page::Chat(chat.entity_id());
         chat.read(cx).composer_focus(cx).focus(window, cx);
         self.chats.push(chat);
@@ -189,6 +205,12 @@ impl Shell {
                 .and_then(|server| server.read(cx).project(id).map(|project| project.name.clone()))
                 .unwrap_or_default()
                 .into(),
+            Page::Review(id) => self
+                .server
+                .as_ref()
+                .and_then(|server| server.read(cx).project(id).map(|project| format!("Review · {}", project.name)))
+                .unwrap_or_default()
+                .into(),
             Page::Chat(id) => self
                 .chat(id)
                 .map(|chat| {
@@ -210,6 +232,7 @@ impl Shell {
             Page::Home if super::is_phone(window) => self.render_sidebar(window, cx),
             Page::Home => self.render_welcome(cx),
             Page::Project(id) => self.render_project(id, window, cx),
+            Page::Review(id) => self.render_review(id),
             Page::Chat(id) => match self.chat(id) {
                 Some(chat) => chat.clone().into_any_element(),
                 None => self.render_welcome(cx),

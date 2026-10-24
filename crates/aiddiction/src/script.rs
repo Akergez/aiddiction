@@ -8,7 +8,7 @@
 //! - `shot:<name>` — runs `$AIDDICTION_SHOT_CMD <name>`
 //! - `expect:<what>=<value>` — ends the process with status 1 unless it
 //!   holds: `page=servers|home|project|chat`, `projects=<n>`, `chats=<n>`,
-//!   `agents=<n>`,
+//!   `agents=<n>`, `annotations=<n>` (of the review on screen),
 //!   `entries=<n>` (of the conversation on screen), `busy=yes|no`,
 //!   `permissions=<n>`, `dialog=open|closed`, `theme=light|dark`
 //! - `until:<what>=<value>` — waits (up to 15 s) until it holds, else fails
@@ -90,11 +90,17 @@ fn observe(what: &str, shell: &Entity<Shell>, window: &mut Window, cx: &mut App)
             Page::Settings => "settings",
             Page::Home => "home",
             Page::Project(_) => "project",
+            Page::Review(_) => "review",
             Page::Chat(_) => "chat",
         }
         .to_owned(),
         "projects" => shell.server.as_ref().map_or(0, |server| server.read(cx).projects.len()).to_string(),
         "chats" => shell.chats.len().to_string(),
+        "annotations" => match shell.page {
+            Page::Review(project) => shell.reviews.get(&project).map_or(0, |(view, _)| view.read(cx).annotations().count()),
+            _ => 0,
+        }
+        .to_string(),
         "agents" => shell.server.as_ref().map_or(0, |server| server.read(cx).agents.len()).to_string(),
         "entries" => chat?.thread.entries.len().to_string(),
         "busy" => if chat?.busy { "yes" } else { "no" }.to_owned(),

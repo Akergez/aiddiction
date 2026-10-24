@@ -77,7 +77,8 @@ impl ServerClient {
             .http
             .request(method, format!("{}/api/v1{path}", self.base))
             .bearer_auth(&*self.token)
-            .timeout(Duration::from_secs(30));
+            // A whole-file diff of a large change takes a while to make.
+            .timeout(Duration::from_secs(120));
         if let Some(body) = body {
             request = request.json(&body);
         }
@@ -141,6 +142,18 @@ impl ServerClient {
 
     pub async fn create_project(&self, input: &NewProject) -> Result<Project> {
         self.call(Method::POST, "/projects", Some(serde_json::to_value(input).unwrap())).await
+    }
+
+    /// The unified diff of a project, as `request` asks for it.
+    pub async fn review_diff(&self, project: ProjectId, request: &diffreview::DiffRequest) -> Result<String> {
+        let body = serde_json::to_value(request).unwrap();
+        let answer: aiddiction_api::ReviewDiff = self.call(Method::POST, &format!("/projects/{project}/review/diff"), Some(body)).await?;
+        Ok(answer.diff)
+    }
+
+    /// A project's branches and recent commits.
+    pub async fn review_refs(&self, project: ProjectId) -> Result<diffreview::Refs> {
+        self.call(Method::GET, &format!("/projects/{project}/review/refs"), None).await
     }
 
     /// The folders in `path` on the server (its home when `None`).

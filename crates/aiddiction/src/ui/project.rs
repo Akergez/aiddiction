@@ -41,6 +41,13 @@ impl Shell {
                     .child(div().text_sm().text_color(theme.muted_foreground).truncate().child(format!("{} · {}", project.dir_name, origin))),
             )
             .child(
+                Button::new("review")
+                    .small()
+                    .icon(IconName::FileText)
+                    .label("Review changes")
+                    .on_click(cx.listener(move |this, _, window, cx| this.open_review(id, window, cx))),
+            )
+            .child(
                 Button::new("delete-project")
                     .ghost()
                     .small()

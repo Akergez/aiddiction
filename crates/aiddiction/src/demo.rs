@@ -1,5 +1,7 @@
-//! `AIDDICTION_DEMO=1`: a server of its own with the fake agent, so the
-//! application can be tried (and screenshotted) without a real server.
+//! `AIDDICTION_DEMO=1`: a server of its own with the fake agent, and a sample
+//! git repository with uncommitted changes as its first project, so the
+//! application — the review included — can be tried (and screenshotted)
+//! without a real server.
 //!
 //! The server and the fake agent are looked for beside this executable
 //! (`cargo build --workspace` puts them there). Its data lives under this
@@ -64,6 +66,9 @@ pub fn start_if_requested(cx: &mut App) {
     }
     // Give the server a moment, so the first connection finds it.
     std::thread::sleep(std::time::Duration::from_millis(300));
+    if let Err(error) = add_sample(&data) {
+        tracing::warn!("no sample repository: {error}");
+    }
     Settings::update(cx, |settings| {
         if !settings.servers.iter().any(|server| server.id == "demo") {
             settings.servers.insert(
@@ -79,3 +84,84 @@ pub fn start_if_requested(cx: &mut App) {
         settings.active = Some("demo".into());
     });
 }
+
+/// A repository with a commit and changes on top of it — one file changed,
+/// one deleted, one new — made once and added to the demo server as a
+/// project.
+fn add_sample(data: &std::path::Path) -> Result<(), String> {
+    let repo = data.join("sample-repo");
+    if !repo.join(".git").exists() {
+        std::fs::create_dir_all(repo.join("src")).map_err(|error| error.to_string())?;
+        let write = |path: &str, text: &str| std::fs::write(repo.join(path), text).map_err(|error| error.to_string());
+        write("src/lib.rs", SAMPLE_BEFORE)?;
+        write("README.md", "# Sample\n\nA repository to review.\n")?;
+        write("old.txt", "this file goes away\n")?;
+        git(&repo, &["init", "-q", "-b", "main"])?;
+        git(&repo, &["add", "."])?;
+        git(&repo, &["commit", "-q", "-m", "First version"])?;
+        write("src/lib.rs", SAMPLE_AFTER)?;
+        std::fs::remove_file(repo.join("old.txt")).map_err(|error| error.to_string())?;
+        write("NOTES.md", "Things to look at:\n\n- the division by zero\n")?;
+    }
+    let client = aiddiction_client::ServerClient::new(&format!("127.0.0.1:{PORT}"), TOKEN).map_err(|error| error.to_string())?;
+    let source = aiddiction_api::ProjectSource::Existing { path: repo.display().to_string() };
+    crate::runtime::runtime().block_on(async move {
+        let known = client.projects().await.map_err(|error| error.to_string())?;
+        if known.iter().any(|project| project.path.as_deref() == Some(repo.display().to_string().as_str())) {
+            return Ok(());
+        }
+        let project = aiddiction_api::NewProject { name: "Sample repo".into(), source };
+        client.create_project(&project).await.map(|_| ()).map_err(|error| error.to_string())
+    })
+}
+
+fn git(dir: &std::path::Path, args: &[&str]) -> Result<(), String> {
+    let status = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_AUTHOR_NAME", "Demo")
+        .env("GIT_AUTHOR_EMAIL", "demo@example.com")
+        .env("GIT_COMMITTER_NAME", "Demo")
+        .env("GIT_COMMITTER_EMAIL", "demo@example.com")
+        .status()
+        .map_err(|error| error.to_string())?;
+    if status.success() { Ok(()) } else { Err(format!("git {args:?} failed")) }
+}
+
+const SAMPLE_BEFORE: &str = "\
+/// Averages of a few numbers.
+pub fn mean(values: &[f64]) -> f64 {
+    let sum: f64 = values.iter().sum();
+    sum / values.len() as f64
+}
+
+pub fn largest(values: &[f64]) -> f64 {
+    let mut largest = values[0];
+    for value in values {
+        if *value > largest {
+            largest = *value;
+        }
+    }
+    largest
+}
+";
+
+const SAMPLE_AFTER: &str = "\
+/// Averages of a few numbers.
+pub fn mean(values: &[f64]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    let sum: f64 = values.iter().sum();
+    Some(sum / values.len() as f64)
+}
+
+pub fn largest(values: &[f64]) -> f64 {
+    values.iter().copied().fold(f64::MIN, f64::max)
+}
+
+pub fn median(values: &mut [f64]) -> f64 {
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    values[values.len() / 2]
+}
+";

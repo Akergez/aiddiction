@@ -16,6 +16,7 @@ mod appearance;
 #[cfg(all(unix, not(target_os = "android")))]
 mod demo;
 mod paths;
+mod review;
 mod runtime;
 mod script;
 mod server;
@@ -42,6 +43,7 @@ pub fn run() {
 /// What every platform does once the toolkit is running.
 fn start(cx: &mut gpui_kit::App) {
     gpui_kit::init(cx);
+    diffreview_ui::init(cx);
     aiddiction_client::install_crypto_provider();
     runtime::install(cx);
     settings::Settings::install(cx);

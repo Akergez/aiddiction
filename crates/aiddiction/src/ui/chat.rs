@@ -24,7 +24,11 @@ use crate::thread::{Entry, ToolCall, ToolContent, ToolStatus};
 /// Asks the shell to close this conversation.
 pub struct Close;
 
+/// Asks the shell for the review of this conversation's project.
+pub struct OpenReview;
+
 impl EventEmitter<Close> for ChatView {}
+impl EventEmitter<OpenReview> for ChatView {}
 
 pub struct ChatView {
     pub session: Entity<AgentSession>,
@@ -321,7 +325,17 @@ impl ChatView {
                     })),
             );
         }
-        bar.child(div().flex_1()).child(
+        bar.child(div().flex_1())
+            .child(
+                Button::new("review-changes")
+                    .xsmall()
+                    .ghost()
+                    .icon(IconName::FileText)
+                    .label("Review changes")
+                    .tooltip("Annotate the diff and send it to the agent")
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(OpenReview))),
+            )
+            .child(
             Button::new("close-chat")
                 .xsmall()
                 .ghost()

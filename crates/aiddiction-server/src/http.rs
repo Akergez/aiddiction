@@ -44,6 +44,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/agents/{id}", axum::routing::put(update_agent).delete(remove_agent))
         .route("/projects", get(list_projects).post(create_project))
         .route("/fs/dirs", get(list_dirs))
+        .route("/projects/{id}/review/diff", axum::routing::post(review_diff))
+        .route("/projects/{id}/review/refs", get(review_refs))
         .route("/projects/{id}", axum::routing::patch(rename_project).delete(delete_project))
         .route("/projects/{id}/instances", get(list_instances).post(start_instance))
         .route("/instances/{id}", get(get_instance).delete(stop_instance))
@@ -162,6 +164,35 @@ async fn list_projects(State(state): Shared) -> impl IntoResponse {
 async fn create_project(State(state): Shared, Json(input): Json<NewProject>) -> Result<impl IntoResponse> {
     let project = state.projects.create(input)?;
     Ok((StatusCode::CREATED, Json(project)))
+}
+
+/// git in the project's folder, through the review model's own `LocalRepo`
+/// (what a standalone review tool runs locally). Blocking, so off the
+/// runtime's threads.
+async fn in_repository<T: Send + 'static>(
+    state: &AppState,
+    id: ProjectId,
+    work: impl FnOnce(diffreview::git::LocalRepo) -> std::result::Result<T, String> + Send + 'static,
+) -> Result<T> {
+    let project = state.projects.get(id).ok_or(ProjectError::NotFound)?;
+    let dir = state.projects.dir(&project);
+    tokio::task::spawn_blocking(move || diffreview::git::LocalRepo::open(&dir).and_then(work))
+        .await
+        .map_err(|error| Failure(StatusCode::INTERNAL_SERVER_ERROR, "io", error.to_string()))?
+        .map_err(|error| Failure(StatusCode::BAD_REQUEST, "git", error))
+}
+
+async fn review_diff(
+    State(state): Shared,
+    Path(id): Path<ProjectId>,
+    Json(request): Json<diffreview::DiffRequest>,
+) -> Result<impl IntoResponse> {
+    let diff = in_repository(&state, id, move |repo| repo.diff(&request)).await?;
+    Ok(Json(aiddiction_api::ReviewDiff { diff }))
+}
+
+async fn review_refs(State(state): Shared, Path(id): Path<ProjectId>) -> Result<impl IntoResponse> {
+    Ok(Json(in_repository(&state, id, |repo| repo.refs()).await?))
 }
 
 #[derive(Deserialize)]

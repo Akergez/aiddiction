@@ -146,7 +146,7 @@ impl Agent {
         }
 
         update(&session, text_chunk("agent_thought_chunk", "Reading the request…"));
-        if lower.contains("plan") || lower.contains("file") {
+        if lower.contains("plan") || lower.contains("make a file") {
             update(&session, json!({
                 "sessionUpdate": "plan",
                 "entries": [
@@ -166,7 +166,7 @@ impl Agent {
             std::thread::sleep(self.delay);
         }
 
-        if lower.contains("file") {
+        if lower.contains("make a file") {
             let path = format!("{}/hello.txt", self.cwd.trim_end_matches('/'));
             let call = "call-1";
             update(&session, json!({

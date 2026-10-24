@@ -13,6 +13,7 @@
 use std::rc::Rc;
 
 use gpui_adaptive_colors::{AdaptiveColors, Color, Options, Seed, Source};
+use gpui_kit::component::highlighter::HighlightTheme;
 use gpui_kit::component::{Theme, ThemeConfig, ThemeMode};
 use gpui_kit::{App, Global, SharedString, Window};
 use gpui_zed_themes::{Registry, Store};
@@ -77,7 +78,24 @@ pub fn init(cx: &mut App) {
         }
     })
     .detach();
+    // The syntax colours (code in messages, the review) have to be of the
+    // window's mode; see `fit_highlight`.
+    cx.observe_global::<Theme>(fit_highlight).detach();
     reload_themes(cx);
+}
+
+/// A theme that brings no syntax colours of its own — the colour scheme does
+/// not — leaves the toolkit with the previous theme's, which can be the other
+/// mode's: dark ink on a dark background. Those are replaced with the
+/// toolkit's own palette for the mode. A Zed theme's colours, of its own
+/// mode, are kept.
+fn fit_highlight(cx: &mut App) {
+    let theme = Theme::global(cx);
+    if theme.highlight_theme.appearance == theme.mode {
+        return;
+    }
+    let fitting = if theme.mode.is_dark() { HighlightTheme::default_dark() } else { HighlightTheme::default_light() };
+    Theme::global_mut(cx).highlight_theme = fitting;
 }
 
 /// `AIDDICTION_COLOR=#rrggbb` pins the colour, so a screenshot does not

@@ -137,6 +137,15 @@ pub enum ProjectSource {
     },
 }
 
+/// `POST /projects/{id}/review/diff` answers with the unified diff the
+/// request (a `diffreview::DiffRequest`) asks for, as git wrote it: the
+/// client parses it with the same code a standalone review tool uses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewDiff {
+    pub diff: String,
+}
+
 /// `GET /fs/dirs?path=…`: the folders in one folder on the server, for
 /// picking an existing project folder.
 #[derive(Debug, Clone, Serialize, Deserialize)]

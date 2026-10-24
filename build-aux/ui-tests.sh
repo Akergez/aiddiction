@@ -15,7 +15,7 @@
 #
 #   podman run --rm --userns=keep-id --security-opt label=disable \
 #     -v "$PWD":/src -v "$HOME/.cargo/registry":"$HOME/.cargo/registry":ro -w /src \
-#     localhost/matterfast-ui build-aux/ui-tests.sh --headless
+#     localhost/aiddiction-ui build-aux/ui-tests.sh --headless
 #
 # The registry mount matters for a debug build: the toolkit reads its icons
 # from there at run time.
@@ -98,7 +98,7 @@ for file in "${files[@]}"; do
     echo "ok    $name"
   else
     echo "FAIL  $name (status $status)"
-    tail -n 30 "$home/app.log" | sed 's/^/      /'
+    grep -v -i -E "vulkan|objects:|setup_loader|drm dev|script.*step" "$home/app.log" | tail -n 30 | sed "s/^/      /"
     failed+=("$name")
   fi
 done

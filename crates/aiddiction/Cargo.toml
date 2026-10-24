@@ -20,6 +20,8 @@ embed-resource = "3"
 aiddiction-api.workspace = true
 aiddiction-client.workspace = true
 aiddiction-paths.workspace = true
+diffreview.workspace = true
+diffreview-ui.workspace = true
 async-channel = "2.5"
 gpui-kit = "0.7.0"
 # The theme's colours: a Material You scheme made from the system's colour,
