@@ -413,7 +413,7 @@ jobs:
 
               curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/install-server.sh | sh
 
-          Add `-s -- --linger` after `sh` to keep it running when you log out. It prints the address and the token for the client. On macOS, unpack the tarball and run bin/aiddiction-server; the example configuration is in share/doc/aiddiction-server.
+          Add `-s -- --listen 0.0.0.0:7878 --linger` after `sh` to reach it from a phone and keep it running when you log out. It prints the address and the token for the client. On macOS, unpack the tarball and run bin/aiddiction-server; the example configuration is in share/doc/aiddiction-server.
 
           ## The client
 

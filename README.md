@@ -19,11 +19,17 @@ The design is in `docs/PLAN.md`.
 ## Running a server
 
 On Linux, as a systemd user service, in one command (run it again to
-update; add `-s -- --linger` after `sh` to keep it running when you log out):
+update):
 
 ```sh
 curl -fsSL https://github.com/Akergez/aiddiction/releases/latest/download/install-server.sh | sh
+# reachable from a phone, and running after you log out:
+curl -fsSL https://github.com/Akergez/aiddiction/releases/latest/download/install-server.sh | sh -s -- --listen 0.0.0.0:7878 --linger
 ```
+
+`--listen` writes the address into `~/.config/aiddiction-server/config.toml`
+(made from the commented example on the first install); the same flags work
+with `aiddiction-server install`.
 
 From a checkout, the same with the server built here:
 

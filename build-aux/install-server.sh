@@ -3,6 +3,7 @@
 #
 #   curl -fsSL https://github.com/Akergez/aiddiction/releases/latest/download/install-server.sh | sh
 #   curl -fsSL …/install-server.sh | sh -s -- --linger    # keep running after logout
+#   curl -fsSL …/install-server.sh | sh -s -- --listen 0.0.0.0:7878   # reachable from a phone
 #
 # Downloads the release's server package for this machine, checks its
 # checksum, and hands over to `aiddiction-server install`, which puts the

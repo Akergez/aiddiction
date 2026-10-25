@@ -79,6 +79,32 @@ pub fn insets() -> (Pixels, Pixels) {
     (px(0.), px(0.))
 }
 
+/// How tall the on-screen keyboard is over `window`, nothing while it is
+/// down. The platform reports one inset for whatever covers the bottom; one
+/// too tall to be the navigation bar is the keyboard (money-manager-ng's
+/// rule).
+pub fn keyboard_inset(window: &Window) -> Pixels {
+    let bottom = insets().1;
+    if bottom > window.viewport_size().height * 0.2 { bottom } else { px(0.) }
+}
+
+/// Hands a link to whatever the system opens links with. Everything goes
+/// through here: the Android platform's own `open_url` does nothing at all
+/// (matterfast's finding).
+pub fn open_url(url: &str, cx: &mut App) {
+    #[cfg(not(target_os = "android"))]
+    cx.open_url(url);
+    #[cfg(target_os = "android")]
+    {
+        let _ = cx;
+        match gpui_mobile::packages::url_launcher::launch_url(url) {
+            Ok(true) => {}
+            Ok(false) => tracing::error!("nothing on this phone opens {url}"),
+            Err(error) => tracing::error!(%error, "could not open {url}"),
+        }
+    }
+}
+
 /// The bar across the top of the window around `content`: the toolkit's
 /// title bar on a desktop, a plain strip under the status bar on a phone.
 pub fn title_frame(content: impl IntoElement, cx: &App) -> AnyElement {

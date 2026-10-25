@@ -144,7 +144,9 @@ impl ChatView {
                     );
                 }
                 if !text.is_empty() {
-                    column = column.child(TextView::markdown(ElementId::Name(format!("message-{index}").into()), text).selectable(true));
+                    column = column.child(TextView::markdown(ElementId::Name(format!("message-{index}").into()), text)
+                            .selectable(true)
+                            .on_link_click(|url, _, _, cx| super::open_url(url, cx)));
                 }
                 column.into_any_element()
             }

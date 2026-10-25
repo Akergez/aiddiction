@@ -2,7 +2,7 @@
 //! command.
 //!
 //! ```sh
-//! aiddiction-server install [--linger] [--config FILE]
+//! aiddiction-server install [--linger] [--listen ADDRESS] [--config FILE]
 //! aiddiction-server uninstall
 //! ```
 //!
@@ -14,6 +14,10 @@
 //! nvm's, which systemd knows nothing of — has to be on it. Running `install`
 //! again (after an update, or from another shell) rewrites the unit and
 //! restarts the service.
+//!
+//! The configuration file is made from the commented example when there is
+//! none. `--listen 0.0.0.0:7878` writes that address into it, which is what a
+//! server reached from a phone needs.
 //!
 //! `--linger` keeps the service running without a login session
 //! (`loginctl enable-linger`): what a server reached from a phone wants.
@@ -34,7 +38,11 @@ const UNIT: &str = "aiddiction-server.service";
 pub struct Options {
     pub linger: bool,
     pub config: Option<PathBuf>,
+    pub listen: Option<std::net::SocketAddr>,
 }
+
+/// What a new configuration file says: every key, commented out.
+const EXAMPLE_CONFIG: &str = include_str!("../../../data/aiddiction-server.example.toml");
 
 fn unit_path() -> PathBuf {
     aiddiction_paths::config_dir("systemd").join("user").join(UNIT)
@@ -64,6 +72,18 @@ pub fn install(options: Options) -> anyhow::Result<()> {
     }
 
     let config_path = options.config.as_deref().map(std::path::absolute).transpose()?;
+    let file = config_path.clone().unwrap_or_else(|| aiddiction_paths::config_dir("aiddiction-server").join("config.toml"));
+    if !file.exists() || options.listen.is_some() {
+        let current = std::fs::read_to_string(&file).unwrap_or_else(|_| EXAMPLE_CONFIG.to_owned());
+        let text = match options.listen {
+            Some(listen) => with_listen(&current, listen),
+            None => current,
+        };
+        std::fs::create_dir_all(file.parent().expect("a file has a directory"))
+            .with_context(|| format!("creating the directory of {}", file.display()))?;
+        std::fs::write(&file, text).with_context(|| format!("writing {}", file.display()))?;
+        println!("wrote {}", file.display());
+    }
     let config = Config::load(config_path.as_deref())?;
     // Made now rather than on the service's first start, so it can be shown.
     let token = match &config.token {
@@ -104,10 +124,8 @@ pub fn install(options: Options) -> anyhow::Result<()> {
     println!("status:  systemctl --user status aiddiction-server");
     println!("log:     journalctl --user -u aiddiction-server -f");
     if config.listen.ip().is_loopback() {
-        println!(
-            "it listens on this machine only; for a phone, set `listen` in {}",
-            aiddiction_paths::config_dir("aiddiction-server").join("config.toml").display()
-        );
+        println!("it listens on this machine only; to reach it from a phone:");
+        println!("  aiddiction-server install --listen 0.0.0.0:{}", config.listen.port());
     }
     if !options.linger {
         println!("it stops when you log out; `aiddiction-server install --linger` keeps it running");
@@ -159,6 +177,26 @@ fn run(program: &str, args: &[&str]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `text` with its `listen` line saying `listen`: the line that sets it, or
+/// the commented one, is replaced; failing both, one is put first.
+fn with_listen(text: &str, listen: std::net::SocketAddr) -> String {
+    let line = format!("listen = \"{listen}\"");
+    let is_listen = |row: &str, commented: bool| {
+        let row = row.trim_start();
+        let row = if commented { row.strip_prefix('#').map(str::trim_start).unwrap_or("") } else { row };
+        row.strip_prefix("listen").is_some_and(|rest| rest.trim_start().starts_with('='))
+    };
+    let mut rows: Vec<String> = text.lines().map(str::to_owned).collect();
+    let at = rows.iter().position(|row| is_listen(row, false)).or_else(|| rows.iter().position(|row| is_listen(row, true)));
+    match at {
+        Some(at) => rows[at] = line,
+        None => rows.insert(0, line),
+    }
+    let mut text = rows.join("\n");
+    text.push('\n');
+    text
+}
+
 /// The unit file. Paths are quoted the way systemd reads them, so a home
 /// directory with a space in it still works.
 fn render_unit(binary: &Path, config: Option<&Path>, path: &str) -> String {
@@ -208,6 +246,21 @@ mod tests {
         assert!(unit.contains(r#"ExecStart="/home/a b/.local/bin/aiddiction-server" --config "/etc/aiddiction.toml""#));
         assert!(unit.contains(r#"Environment="PATH=/home/a b/.nvm/versions/node/v25/bin:/usr/bin""#));
         assert!(unit.contains("WantedBy=default.target"));
+    }
+
+    #[test]
+    fn the_listen_line_is_set_where_it_was() {
+        let address: std::net::SocketAddr = "0.0.0.0:7878".parse().unwrap();
+        let from_example = with_listen(EXAMPLE_CONFIG, address);
+        assert_eq!(from_example.lines().filter(|line| line.starts_with("listen")).count(), 1);
+        assert!(from_example.contains("listen = \"0.0.0.0:7878\""));
+        assert!(!from_example.contains("# listen ="));
+        let config: toml::Value = toml::from_str(&from_example).unwrap();
+        assert_eq!(config["listen"].as_str(), Some("0.0.0.0:7878"));
+
+        let set = with_listen("token = \"x\"\nlisten = \"127.0.0.1:1\"\n", address);
+        assert_eq!(set, "token = \"x\"\nlisten = \"0.0.0.0:7878\"\n");
+        assert_eq!(with_listen("", address), "listen = \"0.0.0.0:7878\"\n");
     }
 
     #[test]

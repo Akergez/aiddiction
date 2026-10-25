@@ -55,6 +55,11 @@ impl Shell {
             cx.observe_window_activation(window, |_, window, cx| {
                 if window.is_window_active() {
                     gpui_adaptive_colors::refresh(cx);
+                    // Nor is a change between light and dark always told.
+                    #[cfg(target_os = "android")]
+                    if crate::appearance::behind_the_system(cx) {
+                        crate::appearance::apply_mode(None, cx);
+                    }
                 }
             }),
         ];

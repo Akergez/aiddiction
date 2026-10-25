@@ -43,13 +43,15 @@ fn main() -> anyhow::Result<()> {
     let mut config_path = None;
     let mut command = None;
     let mut linger = false;
+    let mut listen = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--config" => config_path = Some(args.next().context("--config needs a path")?),
             "token" | "install" | "uninstall" if command.is_none() => command = Some(arg),
             "--linger" => linger = true,
+            "--listen" => listen = Some(args.next().context("--listen needs an address, like 0.0.0.0:7878")?.parse().context("--listen")?),
             "--help" | "-h" => {
-                println!("usage: aiddiction-server [--config FILE] [token | install [--linger] | uninstall]");
+                println!("usage: aiddiction-server [--config FILE] [token | install [--linger] [--listen ADDRESS] | uninstall]");
                 return Ok(());
             }
             other => anyhow::bail!("unknown argument: {other}"),
@@ -58,10 +60,10 @@ fn main() -> anyhow::Result<()> {
     match command.as_deref() {
         Some("install") => {
             let config = config_path.map(std::path::PathBuf::from);
-            return install::install(install::Options { linger, config });
+            return install::install(install::Options { linger, config, listen });
         }
         Some("uninstall") => return install::uninstall(),
-        _ if linger => anyhow::bail!("--linger goes with install"),
+        _ if linger || listen.is_some() => anyhow::bail!("--linger and --listen go with install"),
         _ => {}
     }
     let print_token = command.as_deref() == Some("token");

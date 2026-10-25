@@ -16,9 +16,15 @@ use gpui_kit::component::{ActiveTheme, Icon, IconName, WindowExt, h_flex, v_flex
 use gpui_kit::component::{Selectable as _, Sizable as _};
 use gpui_kit::Focusable as _;
 use gpui_kit::prelude::*;
-use gpui_kit::{App, AppContext, Context, ElementId, Entity, FocusHandle, Render, SharedString, Window, div};
+use gpui_kit::{App, AppContext, Context, ElementId, Entity, FocusHandle, Pixels, Render, SharedString, Window, div};
 
 use crate::settings::ServerEntry;
+
+/// Room around a dialog's form while the keyboard is up, in rems: above it,
+/// for its title and buttons, and the least its fields get.
+const DIALOG_GAP: f32 = 0.5;
+const DIALOG_CHROME: f32 = 9.5;
+const DIALOG_BODY_AT_LEAST: f32 = 6.0;
 
 pub fn open_form<F: Render>(
     title: impl Into<SharedString>,
@@ -31,11 +37,25 @@ pub fn open_form<F: Render>(
 ) {
     let (title, commit): (SharedString, SharedString) = (title.into(), commit.into());
     let submit = Rc::new(submit);
-    window.open_dialog(cx, move |dialog, _, _| {
+    window.open_dialog(cx, move |dialog, window, _| {
         let (form, submit) = (form.clone(), submit.clone());
+        // With the on-screen keyboard up, the dialog moves to the top of what
+        // is left of the window and its fields scroll inside that, so what is
+        // being typed into is never under the keyboard (money-manager-ng's
+        // `open_form`).
+        let keyboard = super::keyboard_inset(window);
+        let (dialog, body) = if keyboard > Pixels::ZERO {
+            let rem = window.rem_size();
+            let top = super::insets().0 + rem * DIALOG_GAP;
+            let room = window.viewport_size().height - keyboard - top - rem * DIALOG_CHROME;
+            let body = div().id("form-body").max_h(room.max(rem * DIALOG_BODY_AT_LEAST)).overflow_y_scroll().child(form.clone());
+            (dialog.margin_top(top), body.into_any_element())
+        } else {
+            (dialog, form.clone().into_any_element())
+        };
         dialog
             .title(title.clone())
-            .child(form.clone())
+            .child(body)
             .footer(
                 DialogFooter::new()
                     .child(DialogClose::new().child(Button::new("cancel").label("Cancel")))
