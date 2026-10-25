@@ -43,6 +43,9 @@ pub fn run() {
 /// What every platform does once the toolkit is running.
 fn start(cx: &mut gpui_kit::App) {
     gpui_kit::init(cx);
+    // On Android `launch::run` has done this already.
+    #[cfg(not(target_os = "android"))]
+    gpui_android_glue::init(cx);
     diffreview_ui::init(cx);
     aiddiction_client::install_crypto_provider();
     runtime::install(cx);
@@ -55,48 +58,13 @@ fn start(cx: &mut gpui_kit::App) {
 }
 
 /// The Android entry point, called by `android-activity` on a thread of its
-/// own once the activity has loaded this library. As in money-manager-ng.
+/// own once the activity has loaded this library. `launch::run` points the
+/// XDG variables at the application's private directory, which is the whole
+/// of where settings are kept, and hands the activity to the certificate
+/// verifier the client's sockets use.
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
-fn android_main(app: android_activity::AndroidApp) {
-    use gpui_mobile::android::jni;
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    // The toolkit belongs to the thread it first ran on and cannot be started
-    // twice: a second activity in a kept process ends it, and the system
-    // starts over in a fresh one.
-    static STARTED: AtomicBool = AtomicBool::new(false);
-    if STARTED.swap(true, Ordering::SeqCst) {
-        std::process::exit(0);
-    }
-
-    android_logger::init_once(
-        android_logger::Config::default()
-            .with_max_level(log::LevelFilter::Debug)
-            .with_tag("aiddiction")
-            .with_filter(android_logger::FilterBuilder::new().parse("warn,aiddiction=info").build()),
-    );
-    jni::install_panic_hook();
-
-    // The application's private directory is the whole of where settings
-    // are kept; `paths` reads these on first use.
-    if let Some(files) = app.internal_data_path() {
-        // SAFETY: no other thread of ours exists yet to read the environment.
-        unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", files.join("config"));
-            std::env::set_var("XDG_DATA_HOME", files.join("data"));
-        }
-    }
-
-    jni::init_platform(&app);
-    let Some(platform) = jni::shared_platform() else {
-        tracing::error!("no Android platform to run on");
-        return;
-    };
-
-    gpui_kit::gpui::Application::with_platform(platform.into_rc())
-        .with_assets(gpui_kit::assets::Assets)
-        .run(start);
-
-    std::process::exit(0);
+fn android_main(app: gpui_android_glue::launch::AndroidApp) {
+    use gpui_android_glue::launch::{Config, run};
+    run(app, Config::new("aiddiction").filter("warn,aiddiction=info"), gpui_kit::assets::Assets, start);
 }

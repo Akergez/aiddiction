@@ -8,6 +8,14 @@ plugins {
     id("com.android.application")
 }
 
+// The Java half of the certificate check has to be the version of
+// `rustls-platform-verifier-android` in Cargo.lock, which is what the Rust half
+// was built against: a SemVer-incompatible one crashes at run time.
+val rustlsPlatformVerifier: String =
+    Regex("""name = "rustls-platform-verifier-android"\nversion = "([^"]+)"""")
+        .find(rootDir.parentFile.resolve("Cargo.lock").readText())!!
+        .groupValues[1]
+
 // The version is the release's: CI hands over its tag, without the `v`. A
 // build at the desk takes what the crates say.
 val release: String = providers.environmentVariable("AIDDICTION_VERSION").orNull
@@ -101,9 +109,10 @@ android {
 }
 
 dependencies {
-    // What the Java classes taken from gpui-mobile use.
-    implementation("androidx.core:core:1.12.0")
-    implementation("androidx.core:core-splashscreen:1.0.1")
-    implementation("androidx.biometric:biometric:1.1.0")
-    implementation("androidx.media:media:1.7.1")
+    // The Java half of gpui-android-glue: the classes gpui-mobile and the
+    // glue call by name, and the androidx libraries they use. The same
+    // version as the crate in crates/aiddiction/Cargo.toml.
+    implementation("com.akergez.gpui:android-glue:0.1.0")
+    // The Java half of the certificate check; see rustlsPlatformVerifier.
+    implementation("org.rustls:rustls-platform-verifier:$rustlsPlatformVerifier")
 }

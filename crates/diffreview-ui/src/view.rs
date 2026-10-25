@@ -436,7 +436,7 @@ impl ReviewView {
             }
         let full = self.request.context.is_none();
         let untracked = self.request.untracked;
-        bar.child(div().w_32().child(Input::new(&self.ref_input).xsmall()))
+        bar.child(div().w_32().child(gpui_android_glue::keyboard::on_tap(Input::new(&self.ref_input).xsmall(), &self.ref_input, cx)))
             .child(Button::new("against").xsmall().ghost().label("Diff").on_click(cx.listener(|this, _, _, cx| {
                 let base = this.ref_input.read(cx).value().trim().to_owned();
                 if !base.is_empty() {

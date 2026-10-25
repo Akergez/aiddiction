@@ -2,9 +2,19 @@
 
 The application is the same Rust crate as on the desktop, built as a shared
 object and loaded by a `NativeActivity`. The platform layer is
-[gpui-mobile](https://github.com/longbridge/gpui-mobile); the Java classes in
-`app/src/main/java/dev/gpui/mobile` and the Gradle project come from its
-example (by way of money-manager-ng), under the same licence terms.
+[gpui-mobile](https://github.com/longbridge/gpui-mobile). What else Android
+needs — `android_main`, the Java classes gpui-mobile calls by name, the
+keyboard, back, the status bar, the certificate verifier's activity — is
+[gpui-android-glue](https://github.com/Akergez/gpui-android-glue): the crate
+in `crates/aiddiction/Cargo.toml` (and `crates/diffreview-ui/Cargo.toml`), its
+Java half as `com.akergez.gpui:android-glue` in `app/build.gradle.kts`, at
+the same version. The Java half is read from GitHub Packages, which asks for
+a token even for a public package: CI passes its own; at a desk, put a
+personal token with `read:packages` in `~/.gradle/gradle.properties` as
+`gpr.user` and `gpr.key`, or build against a checkout of gpui-android-glue
+beside this repository with `./gradlew -PglueLocal …` (and the path variant
+of the crates). The Gradle project comes from gpui-mobile's example (by way
+of money-manager-ng), under the same licence terms.
 
 The settings — the servers and their tokens — are kept in the application's
 private directory (`android_main` in `crates/aiddiction/src/lib.rs` points the

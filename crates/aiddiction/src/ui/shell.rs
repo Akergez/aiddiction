@@ -42,6 +42,9 @@ pub struct Shell {
     pub(crate) reviews: HashMap<ProjectId, (Entity<diffreview_ui::ReviewView>, Subscription)>,
     _server_subscription: Option<Subscription>,
     _appearance: Vec<Subscription>,
+    /// The system's back, while the phone's back button is shown; see
+    /// `render`.
+    back: Option<gpui_android_glue::back::Guard>,
 }
 
 impl Shell {
@@ -73,6 +76,7 @@ impl Shell {
             reviews: HashMap::new(),
             _server_subscription: None,
             _appearance: appearance,
+            back: None,
         };
         this.use_server(active, cx);
         this
@@ -265,6 +269,14 @@ impl Render for Shell {
         let phone = super::is_phone(window);
         let title = self.title(cx);
         let can_go_back = phone && self.page != Page::Home;
+        // The system's back does what the button does, while there is one;
+        // without it back leaves the application.
+        if can_go_back != self.back.is_some() {
+            self.back = can_go_back.then(|| {
+                let shell = cx.weak_entity();
+                gpui_android_glue::back::push(move |_, cx| shell.update(cx, |shell, cx| shell.back(cx)).is_ok())
+            });
+        }
         let theme = cx.theme().clone();
 
         let bar = h_flex()

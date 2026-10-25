@@ -11,9 +11,14 @@ pub(crate) mod shell;
 mod sidebar;
 
 use gpui_kit::component::notification::Notification;
-use gpui_kit::component::{ActiveTheme, TitleBar, WindowExt};
+use gpui_android_glue::keyboard::Purpose;
+use gpui_kit::component::input::InputEvent;
+use gpui_kit::component::{TitleBar, WindowExt};
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, AnyWindowHandle, App, Bounds, Global, Pixels, SharedString, Window, WindowBounds, WindowOptions, px, size};
+use gpui_kit::{
+    AnyElement, AnyWindowHandle, App, Bounds, Entity, EventEmitter, Global, Pixels, SharedString, Window, WindowBounds,
+    WindowOptions, px, size,
+};
 
 struct MainWindow(AnyWindowHandle);
 
@@ -62,68 +67,36 @@ pub fn is_phone(window: &Window) -> bool {
 }
 
 /// How much of the top and the bottom the system draws over: the status
-/// bar, and the navigation bar or the on-screen keyboard.
-#[cfg(target_os = "android")]
+/// bar, and the navigation bar or the on-screen keyboard. Nothing on a
+/// desktop.
 pub fn insets() -> (Pixels, Pixels) {
-    gpui_mobile::android::jni::platform()
-        .and_then(|platform| platform.primary_window())
-        .map(|window| {
-            let insets = window.safe_area_insets_logical();
-            (px(insets.top), px(insets.bottom))
-        })
-        .unwrap_or_default()
-}
-
-#[cfg(not(target_os = "android"))]
-pub fn insets() -> (Pixels, Pixels) {
-    (px(0.), px(0.))
+    gpui_android_glue::insets::system_bars()
 }
 
 /// How tall the on-screen keyboard is over `window`, nothing while it is
-/// down. The platform reports one inset for whatever covers the bottom; one
-/// too tall to be the navigation bar is the keyboard (money-manager-ng's
-/// rule).
-pub fn keyboard_inset(window: &Window) -> Pixels {
-    let bottom = insets().1;
-    if bottom > window.viewport_size().height * 0.2 { bottom } else { px(0.) }
+/// down.
+pub use gpui_android_glue::keyboard::keyboard_inset;
+
+/// Tells a phone's keyboard what `input` (an `InputState` or a
+/// `TextareaState`) is for whenever it has the focus: a keyboard for prose,
+/// with capitals and corrections, for a message; one for addresses for a URL;
+/// one that learns nothing for a token. Nothing off Android. The subscription
+/// lasts as long as the input.
+pub fn keyboard_for<S: EventEmitter<InputEvent>>(input: &Entity<S>, purpose: Purpose, cx: &mut App) {
+    cx.subscribe(input, move |input, event: &InputEvent, _| {
+        gpui_android_glue::keyboard::follow(input.entity_id(), event, purpose)
+    })
+    .detach();
 }
 
 /// Hands a link to whatever the system opens links with. Everything goes
 /// through here: the Android platform's own `open_url` does nothing at all
 /// (matterfast's finding).
-pub fn open_url(url: &str, cx: &mut App) {
-    #[cfg(not(target_os = "android"))]
-    cx.open_url(url);
-    #[cfg(target_os = "android")]
-    {
-        let _ = cx;
-        match gpui_mobile::packages::url_launcher::launch_url(url) {
-            Ok(true) => {}
-            Ok(false) => tracing::error!("nothing on this phone opens {url}"),
-            Err(error) => tracing::error!(%error, "could not open {url}"),
-        }
-    }
-}
+pub use gpui_android_glue::open_url;
 
 /// The bar across the top of the window around `content`: the toolkit's
 /// title bar on a desktop, a plain strip under the status bar on a phone.
 pub fn title_frame(content: impl IntoElement, cx: &App) -> AnyElement {
-    let theme = cx.theme();
-    #[cfg(not(target_os = "android"))]
-    {
-        TitleBar::new().bg(theme.title_bar).border_color(theme.title_bar_border).child(content).into_any_element()
-    }
-    #[cfg(target_os = "android")]
-    {
-        gpui_kit::component::h_flex()
-            .flex_none()
-            .mt(insets().0)
-            .h_12()
-            .px_3()
-            .border_b_1()
-            .bg(theme.title_bar)
-            .border_color(theme.title_bar_border)
-            .child(content)
-            .into_any_element()
-    }
+    let frame = gpui_android_glue::chrome::Frame { below_status_bar: true, ..Default::default() };
+    gpui_android_glue::chrome::title_frame(content, frame, cx)
 }

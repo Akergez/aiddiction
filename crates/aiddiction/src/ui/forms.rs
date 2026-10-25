@@ -18,6 +18,8 @@ use gpui_kit::Focusable as _;
 use gpui_kit::prelude::*;
 use gpui_kit::{App, AppContext, Context, ElementId, Entity, FocusHandle, Pixels, Render, SharedString, Window, div};
 
+use gpui_android_glue::keyboard::Purpose;
+
 use crate::settings::ServerEntry;
 
 /// Room around a dialog's form while the keyboard is up, in rems: above it,
@@ -73,6 +75,19 @@ fn input(placeholder: &'static str, value: &str, window: &mut Window, cx: &mut A
     cx.new(|cx| InputState::new(window, cx).placeholder(placeholder).default_value(value))
 }
 
+/// [`input`], telling a phone's keyboard what it is for.
+fn input_for(
+    purpose: Purpose,
+    placeholder: &'static str,
+    value: &str,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<InputState> {
+    let state = input(placeholder, value, window, cx);
+    super::keyboard_for(&state, purpose, cx);
+    state
+}
+
 fn text(state: &Entity<InputState>, cx: &App) -> String {
     state.read(cx).value().trim().to_owned()
 }
@@ -93,9 +108,21 @@ impl ServerForm {
     pub fn new(entry: Option<&ServerEntry>, window: &mut Window, cx: &mut App) -> Self {
         Self {
             id: entry.map(|entry| entry.id.clone()),
-            name: input("My workstation", entry.map_or("", |e| e.name.as_str()), window, cx),
-            url: input("192.168.1.10:7878 or https://…", entry.map_or("", |e| e.url.as_str()), window, cx),
-            token: input("From `aiddiction-server token`", entry.map_or("", |e| e.token.as_str()), window, cx),
+            name: input_for(Purpose::Message, "My workstation", entry.map_or("", |e| e.name.as_str()), window, cx),
+            url: input_for(
+                Purpose::Address,
+                "192.168.1.10:7878 or https://…",
+                entry.map_or("", |e| e.url.as_str()),
+                window,
+                cx,
+            ),
+            token: input_for(
+                Purpose::Password,
+                "From `aiddiction-server token`",
+                entry.map_or("", |e| e.token.as_str()),
+                window,
+                cx,
+            ),
             error: None,
         }
     }
@@ -128,9 +155,9 @@ impl ServerForm {
 impl Render for ServerForm {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_form()
-            .child(field().label("Name").child(Input::new(&self.name)))
-            .child(field().label("Address").child(Input::new(&self.url)))
-            .child(field().label("Token").child(Input::new(&self.token).mask_toggle()))
+            .child(field().label("Name").child(gpui_android_glue::keyboard::on_tap(Input::new(&self.name), &self.name, cx)))
+            .child(field().label("Address").child(gpui_android_glue::keyboard::on_tap(Input::new(&self.url), &self.url, cx)))
+            .child(field().label("Token").child(gpui_android_glue::keyboard::on_tap(Input::new(&self.token).mask_toggle(), &self.token, cx)))
             .child(field().label_indent(false).child(error_line(&self.error, cx)))
     }
 }
@@ -162,9 +189,9 @@ impl ProjectForm {
             origin: Origin::Empty,
             client,
             name: input("my-project", "", window, cx),
-            url: input("https://github.com/owner/repo.git", "", window, cx),
+            url: input_for(Purpose::Address, "https://github.com/owner/repo.git", "", window, cx),
             branch: input("Default branch", "", window, cx),
-            token: input("Only for a private repository over HTTPS", "", window, cx),
+            token: input_for(Purpose::Password, "Only for a private repository over HTTPS", "", window, cx),
             path: input("/home/me/code/project", "", window, cx),
             listing: None,
             error: None,
@@ -286,18 +313,18 @@ impl Render for ProjectForm {
         let folders = (self.origin == Origin::Existing).then(|| self.render_folders(cx));
         v_form()
             .child(field().label_indent(false).child(kind))
-            .child(field().label("Name").child(Input::new(&self.name)))
+            .child(field().label("Name").child(gpui_android_glue::keyboard::on_tap(Input::new(&self.name), &self.name, cx)))
             .when(self.origin == Origin::Git, |form| {
-                form.child(field().label("Repository").child(Input::new(&self.url)))
-                    .child(field().label("Branch").child(Input::new(&self.branch)))
-                    .child(field().label("Token").child(Input::new(&self.token).mask_toggle()))
+                form.child(field().label("Repository").child(gpui_android_glue::keyboard::on_tap(Input::new(&self.url), &self.url, cx)))
+                    .child(field().label("Branch").child(gpui_android_glue::keyboard::on_tap(Input::new(&self.branch), &self.branch, cx)))
+                    .child(field().label("Token").child(gpui_android_glue::keyboard::on_tap(Input::new(&self.token).mask_toggle(), &self.token, cx)))
             })
             .when_some(folders, |form, folders| {
                 form.child(
                     field()
                         .label("Folder on the server")
                         .description("Taken as it is; deleting the project later leaves it in place.")
-                        .child(Input::new(&self.path)),
+                        .child(gpui_android_glue::keyboard::on_tap(Input::new(&self.path), &self.path, cx)),
                 )
                 .child(field().label_indent(false).child(folders))
             })
@@ -332,7 +359,7 @@ impl AgentForm {
             .unwrap_or_default();
         Self {
             id: agent.map(|agent| agent.id.clone()),
-            name: input("My agent", agent.map_or("", |a| a.name.as_str()), window, cx),
+            name: input_for(Purpose::Message, "My agent", agent.map_or("", |a| a.name.as_str()), window, cx),
             command: input("npx -y @scope/some-acp --flag", &command, window, cx),
             env: cx.new(|cx| TextareaState::new(window, cx).auto_grow(2, 6).placeholder("KEY=value, one a line").default_value(env)),
             error: None,
@@ -365,14 +392,14 @@ impl AgentForm {
 impl Render for AgentForm {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_form()
-            .child(field().label("Name").child(Input::new(&self.name)))
+            .child(field().label("Name").child(gpui_android_glue::keyboard::on_tap(Input::new(&self.name), &self.name, cx)))
             .child(
                 field()
                     .label("Command")
                     .description("Run by bash in the project's folder on the server; it must speak ACP on stdio.")
-                    .child(Input::new(&self.command)),
+                    .child(gpui_android_glue::keyboard::on_tap(Input::new(&self.command), &self.command, cx)),
             )
-            .child(field().label("Environment").child(Textarea::new(&self.env)))
+            .child(field().label("Environment").child(gpui_android_glue::keyboard::on_tap(Textarea::new(&self.env), &self.env, cx)))
             .child(field().label_indent(false).child(error_line(&self.error, cx)))
     }
 }

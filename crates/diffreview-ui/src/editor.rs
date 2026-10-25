@@ -1,6 +1,6 @@
 //! The dialog an annotation is written in.
 
-use gpui_kit::component::input::{Textarea, TextareaState};
+use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
 use gpui_kit::component::{ActiveTheme, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{App, AppContext, Context, Entity, FocusHandle, Focusable, Render, SharedString, Window, div};
@@ -20,6 +20,11 @@ impl AnnotationEditor {
                 .placeholder("What should change here? A question can end in ??")
                 .default_value(existing)
         });
+        // Prose: sentences, capitals, corrections.
+        cx.subscribe(&text, |text, event: &InputEvent, _| {
+            gpui_android_glue::keyboard::follow(text.entity_id(), event, gpui_android_glue::keyboard::Purpose::Message)
+        })
+        .detach();
         Self { text, context }
     }
 
@@ -45,7 +50,7 @@ impl Render for AnnotationEditor {
                     .truncate()
                     .child(self.context.clone()),
             )
-            .child(Textarea::new(&self.text))
+            .child(gpui_android_glue::keyboard::on_tap(Textarea::new(&self.text), &self.text, cx))
             .child(
                 div()
                     .text_xs()

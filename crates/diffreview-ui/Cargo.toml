@@ -19,3 +19,7 @@ gpui-kit = { version = "0.7.0", features = [
     "tree-sitter-python", "tree-sitter-ruby", "tree-sitter-rust", "tree-sitter-scala", "tree-sitter-swift",
     "tree-sitter-toml", "tree-sitter-tsx", "tree-sitter-typescript", "tree-sitter-yaml", "tree-sitter-zig",
 ] }
+# Only for the on-screen keyboard: raising it on a tap, and telling it what an
+# annotation is. Nothing of it does anything off Android; the same tag as the
+# application's.
+gpui-android-glue = { git = "https://github.com/Akergez/gpui-android-glue", tag = "v0.1.0" }

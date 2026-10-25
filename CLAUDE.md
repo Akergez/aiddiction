@@ -82,7 +82,10 @@ demo mode.
 ### Android
 
 `android/README.md`. The library is a `cdylib` loaded by a `NativeActivity`
-through gpui-mobile (same rev as money-manager-ng). On this aarch64 host the
+through gpui-mobile (same rev as money-manager-ng); the rest of the Android
+side — `android_main`, the Java classes, the keyboard, back, insets — is
+gpui-android-glue (crate by tag, Java half from GitHub Packages, at one
+version; `-PglueLocal` uses a checkout beside this one). On this aarch64 host the
 NDK has no clang of its own: `build-aux/android-clang.sh` is the C compiler
 and linker (host clang + the NDK's sysroot + rust-lld).
 
@@ -97,7 +100,7 @@ and linker (host clang + the NDK's sysroot + rust-lld).
 | `aiddiction` | The application: a library (Android loads it) and a thin `main.rs`. |
 | `aiddiction-fake-agent` | A scripted ACP agent (stdio) for tests and the demo. |
 | `diffreview` | The diff review model after revdiff, with no UI: unified-diff parsing, annotations and revdiff's exact output format (and its parser), `DiffRequest` → git arguments, `git::LocalRepo`, the prompt that hands a review to an agent. The server uses it. |
-| `diffreview-ui` | The review view on gpui-kit over `diffreview`: the files as gpui-kit's `Tree` (built by `diffreview::tree`), diff rows coloured by gpui-kit's tree-sitter highlighter (`highlight.rs`: both versions of the file rebuilt from the diff and parsed whole), annotations, revdiff's keys. Gets diffs through `ReviewBackend`; `LocalBackend` is git on this machine (what a standalone tool needs). Knows nothing of Aiddiction. |
+| `diffreview-ui` | The review view on gpui-kit over `diffreview`: the files as gpui-kit's `Tree` (built by `diffreview::tree`), diff rows coloured by gpui-kit's tree-sitter highlighter (`highlight.rs`: both versions of the file rebuilt from the diff and parsed whole), annotations, revdiff's keys. Gets diffs through `ReviewBackend`; `LocalBackend` is git on this machine (what a standalone tool needs). Knows nothing of Aiddiction; gpui-android-glue only for the on-screen keyboard (raised on a tap, told an annotation is prose). |
 
 ### The proxy is the agent's ACP client
 

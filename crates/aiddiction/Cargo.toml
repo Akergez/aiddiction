@@ -24,6 +24,15 @@ diffreview.workspace = true
 diffreview-ui.workspace = true
 async-channel = "2.5"
 gpui-kit = "0.7.0"
+# The Android side shared with money-manager-ng and matterfast: android_main,
+# the keyboard, back, the status bar, the insets, links. Every function of it
+# also exists off Android. Its Java half is `com.akergez.gpui:android-glue`
+# in android/app/build.gradle.kts, at the same version. `platform-verifier`
+# hands the activity to rustls-platform-verifier, which the client's event and
+# ACP sockets check certificates with. To work on it beside the application,
+# swap this for the path variant and build the package with -PglueLocal.
+gpui-android-glue = { git = "https://github.com/Akergez/gpui-android-glue", tag = "v0.1.0", features = ["platform-verifier"] }
+# gpui-android-glue = { path = "../../../gpui-android-glue", features = ["platform-verifier"] }
 # The theme's colours: a Material You scheme made from the system's colour,
 # and themes made for the Zed editor to wear instead (money-manager-ng's and
 # matterfast's engine). Cargo.lock pins the commit.
@@ -39,13 +48,6 @@ uuid.workspace = true
 [target.'cfg(all(unix, not(target_os = "android")))'.dependencies]
 libc = "0.2"
 
-# The platform GPUI does not ship, from the fork money-manager-ng and
-# matterfast use at this very revision; it tracks the same `gpui-pre`.
 [target.'cfg(target_os = "android")'.dependencies]
-gpui-mobile = { package = "gpui-pre-mobile", git = "https://github.com/longbridge/gpui-mobile", rev = "9075e3aa3eea812127f2c60ed66f0cd5798ff245" }
-android-activity = { version = "0.6", features = ["native-activity"] }
-android_logger = "0.15"
-log = "0.4"
-jni = "0.22.4"
 # With no subscriber, events go to `log`, and from there to logcat.
 tracing = { workspace = true, features = ["log"] }

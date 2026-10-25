@@ -49,6 +49,7 @@ impl ChatView {
                 .submit_on_enter(true)
                 .placeholder("Ask the agent…")
         });
+        super::keyboard_for(&composer, gpui_android_glue::keyboard::Purpose::Message, cx);
         let list = ListState::new(0, ListAlignment::Bottom, px(400.));
         list.set_follow_mode(FollowMode::Tail);
 
@@ -466,7 +467,7 @@ impl Render for ChatView {
                     .pb(px(8.) + bottom)
                     .border_t_1()
                     .border_color(theme.border)
-                    .child(div().flex_1().min_w_0().child(Textarea::new(&self.composer)))
+                    .child(div().flex_1().min_w_0().child(gpui_android_glue::keyboard::on_tap(Textarea::new(&self.composer), &self.composer, cx)))
                     .child(action),
             )
     }

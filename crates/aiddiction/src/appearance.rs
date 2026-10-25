@@ -142,27 +142,13 @@ pub fn apply_mode(window: Option<&mut Window>, cx: &mut App) {
     let mode = match mode(cx) {
         Mode::Light => ThemeMode::Light,
         Mode::Dark => ThemeMode::Dark,
-        #[cfg(target_os = "android")]
-        Mode::System => {
-            let _ = &window;
-            if gpui_mobile::android::jni::query_night_mode_via_jni() { ThemeMode::Dark } else { ThemeMode::Light }
-        }
-        #[cfg(not(target_os = "android"))]
-        Mode::System => window.map(|window| window.appearance()).unwrap_or_else(|| cx.window_appearance()).into(),
+        Mode::System => gpui_android_glue::appearance::system_mode(window.as_deref(), cx),
     };
     // The clock and the icons beside it are drawn over our own title bar,
     // and have to be told which of its colours to stand out against: light
     // icons on a dark bar, dark on a light one. (As money-manager-ng and
     // matterfast do.)
-    #[cfg(target_os = "android")]
-    gpui_mobile::set_system_chrome(&gpui_mobile::SystemChromeStyle {
-        status_bar_style: if mode.is_dark() {
-            gpui_mobile::StatusBarContentStyle::Light
-        } else {
-            gpui_mobile::StatusBarContentStyle::Dark
-        },
-        ..Default::default()
-    });
+    gpui_android_glue::appearance::set_status_bar_for(mode);
     if Theme::global(cx).mode != mode {
         Theme::change(mode, None, cx);
     }
@@ -173,7 +159,7 @@ pub fn apply_mode(window: Option<&mut Window>, cx: &mut App) {
 /// when the window comes back to the front (after matterfast).
 #[cfg(target_os = "android")]
 pub fn behind_the_system(cx: &App) -> bool {
-    mode(cx) == Mode::System && gpui_mobile::android::jni::query_night_mode_via_jni() != Theme::global(cx).mode.is_dark()
+    mode(cx) == Mode::System && gpui_android_glue::appearance::behind_the_system(cx)
 }
 
 /// Reads the installed themes again and wears what the settings name.

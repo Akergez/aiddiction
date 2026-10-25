@@ -145,24 +145,20 @@ dependencies = [
 
 [[package]]
 name = "aiddiction"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "aiddiction-api",
  "aiddiction-client",
  "aiddiction-paths",
- "android-activity",
- "android_logger",
  "async-channel",
  "diffreview",
  "diffreview-ui",
  "embed-resource",
  "gpui-adaptive-colors",
+ "gpui-android-glue",
  "gpui-kit",
- "gpui-pre-mobile",
  "gpui-zed-themes",
- "jni",
  "libc",
- "log",
  "serde",
  "serde_json",
  "tokio",
@@ -173,7 +169,7 @@ dependencies = [
 
 [[package]]
 name = "aiddiction-api"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -182,7 +178,7 @@ dependencies = [
 
 [[package]]
 name = "aiddiction-client"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "aiddiction-api",
  "diffreview",
@@ -200,21 +196,21 @@ dependencies = [
 
 [[package]]
 name = "aiddiction-fake-agent"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "aiddiction-paths"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "dirs 6.0.0",
 ]
 
 [[package]]
 name = "aiddiction-server"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "aiddiction-api",
  "aiddiction-client",
@@ -1609,7 +1605,7 @@ dependencies = [
 
 [[package]]
 name = "diffreview"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "serde",
  "tempfile",
@@ -1617,9 +1613,10 @@ dependencies = [
 
 [[package]]
 name = "diffreview-ui"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "diffreview",
+ "gpui-android-glue",
  "gpui-kit",
 ]
 
@@ -2522,6 +2519,22 @@ dependencies = [
  "futures",
  "gpui-kit",
  "serde_json",
+]
+
+[[package]]
+name = "gpui-android-glue"
+version = "0.1.0"
+source = "git+https://github.com/Akergez/gpui-android-glue?tag=v0.1.0#60a603ce8b529bb555f0f76c1ff434e41da1a468"
+dependencies = [
+ "android-activity",
+ "android_logger",
+ "async-channel",
+ "gpui-kit",
+ "gpui-pre-mobile",
+ "jni",
+ "log",
+ "rustls-platform-verifier",
+ "tracing",
 ]
 
 [[package]]
