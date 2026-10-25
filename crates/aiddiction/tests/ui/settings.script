@@ -1,8 +1,9 @@
-# The settings page: dark mode chosen, and the theme follows.
+# The settings: how the window looks is their first page; dark mode chosen,
+# and the theme follows.
 # size: 1100x760
-until:page=home
+until:page=inbox
 wait:1000
-click:63,735
+click:28,730
 until:page=settings
 wait:300
 shot:settings-light

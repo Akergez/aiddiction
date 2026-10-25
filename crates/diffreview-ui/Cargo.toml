@@ -22,4 +22,4 @@ gpui-kit = { version = "0.7.0", features = [
 # Only for the on-screen keyboard: raising it on a tap, and telling it what an
 # annotation is. Nothing of it does anything off Android; the same tag as the
 # application's.
-gpui-android-glue = { git = "https://github.com/Akergez/gpui-android-glue", tag = "v0.1.0" }
+gpui-android-glue = { git = "https://github.com/Akergez/gpui-android-glue", tag = "v0.1.1" }

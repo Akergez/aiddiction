@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use aiddiction_api::{
-    API_VERSION, AgentInput, ApiError, ErrorBody, Health, InstanceId, InstanceState, NewProject, ProjectId,
-    ProjectState, ServerEvent, ServerInfo, StartInstance,
+    API_VERSION, AgentInput, ApiError, ErrorBody, Health, InstanceId, InstanceState, NewProject, PermissionAnswer,
+    ProjectId, ProjectState, ServerEvent, ServerInfo, StartInstance,
 };
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, Request, State};
@@ -48,7 +48,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/projects/{id}/review/refs", get(review_refs))
         .route("/projects/{id}", axum::routing::patch(rename_project).delete(delete_project))
         .route("/projects/{id}/instances", get(list_instances).post(start_instance))
+        .route("/instances", get(list_all_instances))
         .route("/instances/{id}", get(get_instance).delete(stop_instance))
+        .route("/instances/{id}/permission", axum::routing::post(answer_permission))
         .route("/instances/{id}/acp", get(acp_socket))
         .route("/events", get(event_socket))
         .layer(middleware::from_fn_with_state(state.clone(), authorize));
@@ -244,6 +246,12 @@ async fn list_instances(State(state): Shared, Path(id): Path<ProjectId>) -> Resu
     Ok(Json(instances))
 }
 
+/// Every project's instances at once, for a list of all conversations.
+async fn list_all_instances(State(state): Shared) -> impl IntoResponse {
+    let instances: Vec<_> = state.supervisor.all().iter().map(|instance| instance.info()).collect();
+    Json(instances)
+}
+
 async fn start_instance(
     State(state): Shared,
     Path(id): Path<ProjectId>,
@@ -268,6 +276,21 @@ fn instance_not_found() -> Failure {
 async fn get_instance(State(state): Shared, Path(id): Path<InstanceId>) -> Result<impl IntoResponse> {
     let instance = state.supervisor.get(id).ok_or_else(instance_not_found)?;
     Ok(Json(instance.info()))
+}
+
+/// Answers an agent's question without a conversation open. 409 when it
+/// was settled already (another client was quicker).
+async fn answer_permission(
+    State(state): Shared,
+    Path(id): Path<InstanceId>,
+    Json(answer): Json<PermissionAnswer>,
+) -> Result<impl IntoResponse> {
+    let instance = state.supervisor.get(id).ok_or_else(instance_not_found)?;
+    if instance.proxy.answer_permission(&answer.request_id, &answer.option_id) {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(Failure(StatusCode::CONFLICT, "already_answered", "the agent is no longer asking".into()))
+    }
 }
 
 /// Stops a running instance; one that already ended is forgotten.

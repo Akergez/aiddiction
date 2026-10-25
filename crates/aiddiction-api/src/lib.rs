@@ -186,6 +186,54 @@ pub struct SessionSummary {
     pub session_id: String,
     pub title: String,
     pub created_at_ms: u64,
+    /// When the session's journal last grew.
+    #[serde(default)]
+    pub updated_at_ms: u64,
+    /// The journal's last sequence number: a client that showed less has
+    /// something unread.
+    #[serde(default)]
+    pub last_seq: u64,
+    /// A `session/prompt` is running.
+    #[serde(default)]
+    pub busy: bool,
+    /// The agent's questions nobody has answered yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permissions: Vec<PendingPermission>,
+    /// What the agent is doing (the running tool call) or, after a turn, the
+    /// start of the last thing it said.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub preview: String,
+    /// Why the last turn failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// A `session/request_permission` the agent is waiting on.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingPermission {
+    /// The agent's JSON-RPC id, a number or a string.
+    pub request_id: serde_json::Value,
+    pub title: String,
+    pub options: Vec<PermissionChoice>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionChoice {
+    pub id: String,
+    pub name: String,
+    /// ACP's `allow_once`, `allow_always`, `reject_once`, `reject_always`.
+    pub kind: String,
+}
+
+/// Body of `POST /instances/{id}/permission`: an answer given without a
+/// conversation open, as if from one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionAnswer {
+    pub request_id: serde_json::Value,
+    pub option_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

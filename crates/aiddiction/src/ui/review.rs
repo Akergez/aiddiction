@@ -45,18 +45,21 @@ impl Shell {
         }
     }
 
-    /// Hands the annotations to the project's conversation that was opened
-    /// last and is ready for a prompt.
+    /// Hands the annotations to the conversation the review was opened from,
+    /// else the project's conversation that was opened last and is ready for
+    /// a prompt.
     fn send_review(&mut self, project: ProjectId, view: Entity<ReviewView>, output: String, window: &mut Window, cx: &mut Context<Self>) {
         if output.is_empty() {
             super::toast_error("Annotate a line first: there is nothing to send.", cx);
             return;
         }
-        let chat = self.chats.iter().rev().find(|chat| {
+        let ready = |chat: &&Entity<super::chat::ChatView>| {
             let chat = chat.read(cx);
             let session = chat.session.read(cx);
             chat.project_id == project && session.is_ready() && !session.busy
-        });
+        };
+        let from = self.review_from.get(&project).and_then(|id| self.chat(*id)).filter(ready);
+        let chat = from.or_else(|| self.chats.iter().rev().find(ready));
         let Some(chat) = chat.cloned() else {
             super::toast_error(
                 "Open a conversation with an agent in this project first (and let it finish its turn); the annotations stay here.",
@@ -67,8 +70,7 @@ impl Shell {
         let prompt = diffreview::prompt::for_agent(&output);
         chat.read(cx).session.clone().update(cx, |session, cx| session.prompt(prompt, cx));
         view.update(cx, |view, cx| view.set_annotations(diffreview::Store::default(), cx));
-        self.page = Page::Chat(chat.entity_id());
+        self.go(Page::Chat(chat.entity_id()), cx);
         chat.read(cx).composer_focus(cx).focus(window, cx);
-        cx.notify();
     }
 }

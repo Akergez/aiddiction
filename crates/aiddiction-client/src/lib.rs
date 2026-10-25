@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aiddiction_api::{
-    Agent, AgentInput, DirListing, ErrorBody, Health, Instance, InstanceId, NewProject, Project, ProjectId, ServerEvent,
+    Agent, AgentInput, DirListing, ErrorBody, Health, Instance, InstanceId, NewProject, PermissionAnswer, Project, ProjectId, ServerEvent,
     ServerInfo, StartInstance,
 };
 use futures::{SinkExt as _, StreamExt as _};
@@ -171,6 +171,17 @@ impl ServerClient {
 
     pub async fn instances(&self, project: ProjectId) -> Result<Vec<Instance>> {
         self.call(Method::GET, &format!("/projects/{project}/instances"), None).await
+    }
+
+    /// Every project's instances at once.
+    pub async fn all_instances(&self) -> Result<Vec<Instance>> {
+        self.call(Method::GET, "/instances", None).await
+    }
+
+    /// Answers an agent's question without a conversation open.
+    pub async fn answer_permission(&self, instance: InstanceId, answer: &PermissionAnswer) -> Result<()> {
+        let body = serde_json::to_value(answer).unwrap();
+        self.call(Method::POST, &format!("/instances/{instance}/permission"), Some(body)).await
     }
 
     pub async fn start_instance(&self, project: ProjectId, agent_id: &str) -> Result<Instance> {

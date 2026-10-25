@@ -15,6 +15,7 @@ mod appearance;
 // The demo server is a Unix program.
 #[cfg(all(unix, not(target_os = "android")))]
 mod demo;
+mod inbox;
 mod paths;
 mod review;
 mod runtime;

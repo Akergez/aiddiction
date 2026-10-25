@@ -39,7 +39,7 @@ A server for experiments: `AIDDICTION_LISTEN`, `AIDDICTION_DATA_DIR`,
 
 ### Looking at the interface from a script
 
-`AIDDICTION_SCRIPT="until:page=home;click:261,121;type:Demo;key:enter;shot:x;quit"`
+`AIDDICTION_SCRIPT="until:page=inbox;click:748,452;type:hello;key:enter;shot:x;quit"`
 drives the window (`crates/aiddiction/src/script.rs`); `AIDDICTION_SIZE=WxH` sets
 its size (below 44 rem wide is the phone layout). Scenarios with `expect:` /
 `until:` checks live in `crates/aiddiction/tests/ui/*.script`; run them
@@ -94,7 +94,7 @@ and linker (host clang + the NDK's sysroot + rust-lld).
 | Crate | Role |
 |---|---|
 | `aiddiction-paths` | Where both programs keep files: an XDG variable if set, else the platform's standard directory. |
-| `aiddiction-api` | REST/event DTOs and the names of the proxy's ACP extensions (`_aiddiction/attach`, `_aiddiction/prompt_finished`, `_aiddiction/request_resolved`, `_meta.aiddictionSeq`). No Tokio, no UI. |
+| `aiddiction-api` | REST/event DTOs and the names of the proxy's ACP extensions (`_aiddiction/attach`, `_aiddiction/prompt_finished`, `_aiddiction/request_resolved`, `_meta.aiddictionSeq`). No Tokio, no UI. `SessionSummary` carries what a list of conversations shows: busy, the agent's open questions, a preview, the last sequence number. |
 | `aiddiction-server` | The server: `config`, `store` (JSON files), `agents` (catalogue), `projects` (dirs, git clone), `instances` (agent processes), `proxy` (ACP), `http` (routes). |
 | `aiddiction-client` | REST + event socket + ACP socket on Tokio. No UI, and it must stay that way. |
 | `aiddiction` | The application: a library (Android loads it) and a thin `main.rs`. |
@@ -120,7 +120,12 @@ deliberate (most come from multiagent-ui's `acp-ws-bridge.mjs`):
   shows user messages only from there, never adds them itself.
 
 `routing` decisions are pure functions of the proxy state and are unit-tested
-in `proxy.rs`; keep new rules there and testable.
+in `proxy.rs`; keep new rules there and testable. The proxy also keeps what a
+list of conversations needs (`State::follow`, `summaries`): `GET /instances`
+gives every project's instances with them, and `POST
+/instances/{id}/permission` answers an agent's question with no conversation
+open, settling it for every client like a client's answer would. Whatever a
+list shows that changes fires `InstancesChanged`.
 
 ### Review
 
@@ -165,6 +170,20 @@ registry.
 - `session::AgentSession` (entity) is one conversation: its own JSON-RPC over
   the ACP socket, reconnection with `afterSeq`, and the `thread::Thread`
   (pure, tested) the chat draws.
-- `ui::shell::Shell` holds the page and the open chats; pages are `impl Shell`
-  blocks in `ui/*.rs`. Read the gpui-kit skill's Coding Guides before changing
-  structure.
+- `ui::shell::Shell` holds the page, a history for back, and the open chats;
+  pages are `impl Shell` blocks in `ui/*.rs`. Three sections: the inbox (every
+  conversation on the server, home), projects, settings (appearance, agents,
+  servers). A desktop has a rail (`ui/nav.rs`), the section's list in a
+  column and the page beside it (the review takes the column's room too); a
+  phone shows one page with the sections as tabs and back going where it
+  came from. `crate::inbox` (pure, tested) groups the conversations — needs
+  you, working, done unread, recent, stopped — from the server's summaries
+  and `Settings::seen` (the last sequence number shown, per conversation);
+  `ui/inbox.rs` draws the rows, which answer the agent's questions in place.
+  A new conversation is one dialog (`ui/new_session.rs`: searchable project
+  and agent lists, the first message, sent once the session is ready). Read
+  the gpui-kit skill's Coding Guides before changing structure.
+- The chat sums a run of tool calls up in one line (`thread::summarize`,
+  `Thread::run_start`); its list redraws from a run's first entry. The plan
+  and the agent's mode sit on the composer; the bar has the title, Review
+  and close.

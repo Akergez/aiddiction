@@ -1,27 +1,41 @@
-# The phone layout: one page at a time, the projects as the home page, and a
-# back button in the title bar.
+# The phone: the inbox is the home page and the sections are tabs; a new
+# conversation from the round button; back returns to the inbox, where the
+# agent's question waits and is answered; the projects tab.
 # size: 400x800
-until:page=home
+until:page=inbox
+until:projects=1
 wait:1000
-shot:phone-home
-click:374,121
+shot:phone-inbox-empty
+click:356,694
 until:dialog=open
-type:Phone
+click:200,233
+wait:400
+type:fake
 key:enter
-until:page=project
 wait:300
-shot:phone-project
-# Start the fake agent; its row is the third.
-click:338,343
+click:200,322
+type:please make a file
+key:enter
 until:page=chat
-type:hello from the phone
-key:enter
-until:busy=no
-wait:300
+until:permissions=1
+wait:500
 shot:phone-chat
-# Back to the project: the running agent and its conversation are listed.
-click:24,17
+# Back.
+click:20,17
+until:page=inbox
+until:waiting=1
+wait:500
+shot:phone-inbox
+# Allow, in the row.
+click:96,190
+until:waiting=0
+wait:300
+# The projects tab, and the project.
+click:200,770
+until:page=projects
+wait:300
+click:200,100
 until:page=project
 wait:500
-shot:phone-running
+shot:phone-project
 quit

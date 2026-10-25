@@ -1,62 +1,74 @@
-//! A project's page: where it came from, the agents that can work in it, and
-//! the agents running in it with their conversations.
+//! A project's page: where it came from, the agents running in it, and its
+//! conversations. New conversations and the review start here too.
 
-use aiddiction_api::{Agent, AgentSource, InstanceState, ProjectId, ProjectState};
+use aiddiction_api::{InstanceState, ProjectId, ProjectState};
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{ActiveTheme, Icon, IconName, WindowExt, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, IconName, WindowExt, h_flex, v_flex};
 use gpui_kit::component::{Sizable as _, StyledExt as _};
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, AppContext, Context, ElementId, SharedString, Window, div};
 
-use super::forms::{AgentForm, ProjectForm, open_form};
+use super::forms::{ProjectForm, open_form};
 use super::shell::{Page, Shell};
 
 impl Shell {
-    pub(super) fn render_project(&mut self, id: ProjectId, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_project(&mut self, id: ProjectId, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let Some(server) = self.server.clone() else {
             return div().into_any_element();
         };
-        let (project, agents, instances) = {
+        let (project, instances) = {
             let server = server.read(cx);
             let Some(project) = server.project(id).cloned() else {
                 return div().p_4().text_color(theme.muted_foreground).child("This project is gone.").into_any_element();
             };
-            (project, server.agents.clone(), server.instances.get(&id).cloned().unwrap_or_default())
+            (project, server.instances.get(&id).cloned().unwrap_or_default())
         };
+        let ready = project.state == ProjectState::Ready;
 
-        let origin: SharedString = match (&project.path, &project.git_url) {
-            (Some(path), _) => path.clone().into(),
-            (None, Some(url)) => url.clone().into(),
-            (None, None) => "Empty folder".into(),
-        };
-        let header = h_flex()
-            .gap_3()
+        let delete = Button::new("delete-project")
+            .ghost()
+            .icon(IconName::Delete)
+            .tooltip("Delete project")
+            .on_click(cx.listener(move |this, _, window, cx| this.delete_project(id, window, cx)));
+        let actions = h_flex().gap_2().flex_wrap().when(ready, |buttons| {
+            buttons
+                .child(
+                    Button::new("review")
+                        .outline()
+                        .icon(IconName::FileText)
+                        .label("Review changes")
+                        .on_click(cx.listener(move |this, _, window, cx| this.open_review(id, window, cx))),
+                )
+                .child(
+                    Button::new("project-new-chat")
+                        .primary()
+                        .icon(IconName::Plus)
+                        .label("New conversation")
+                        .on_click(cx.listener(|this, _, window, cx| this.new_conversation(window, cx))),
+                )
+        });
+        let title = h_flex()
+            .flex_1()
+            .min_w_0()
+            .gap_4()
+            .child(super::inbox::avatar(&project, true, cx))
             .child(
                 v_flex()
                     .flex_1()
                     .min_w_0()
-                    .child(div().text_lg().font_semibold().truncate().child(project.name.clone()))
-                    .child(div().text_sm().text_color(theme.muted_foreground).truncate().child(format!("{} · {}", project.dir_name, origin))),
-            )
-            .child(
-                Button::new("review")
-                    .small()
-                    .icon(IconName::FileText)
-                    .label("Review changes")
-                    .on_click(cx.listener(move |this, _, window, cx| this.open_review(id, window, cx))),
-            )
-            .child(
-                Button::new("delete-project")
-                    .ghost()
-                    .small()
-                    .icon(IconName::Delete)
-                    .tooltip("Delete project")
-                    .on_click(cx.listener(move |this, _, window, cx| this.delete_project(id, window, cx))),
+                    .child(div().text_xl().font_semibold().truncate().child(project.name.clone()))
+                    .child(div().text_sm().text_color(theme.muted_foreground).truncate().child(super::inbox::origin(&project))),
             );
+        // A phone has the buttons under the title; a desktop, beside it.
+        let header = if super::is_phone(window) {
+            v_flex().gap_4().child(title.child(delete)).child(actions).into_any_element()
+        } else {
+            h_flex().gap_4().child(title).child(actions.child(delete)).into_any_element()
+        };
 
-        let mut page = v_flex().id("project").size_full().overflow_y_scroll().p_4().gap_4().child(header);
+        let mut page = v_flex().gap_8().w_full().max_w(gpui_kit::rems(56.)).child(header);
 
         match project.state {
             ProjectState::Cloning => {
@@ -64,198 +76,110 @@ impl Shell {
                     h_flex()
                         .gap_2()
                         .p_3()
-                        .rounded(theme.radius)
+                        .rounded(theme.radius * 1.5)
                         .bg(theme.muted)
                         .child(Spinner::new().small())
                         .child(div().text_sm().truncate().child(project.status_message.clone().unwrap_or_else(|| "Cloning…".into()))),
                 );
-                return page.into_any_element();
             }
             ProjectState::Failed => {
                 page = page.child(
                     div()
                         .p_3()
-                        .rounded(theme.radius)
+                        .rounded(theme.radius * 1.5)
                         .bg(theme.danger.opacity(0.12))
                         .text_sm()
                         .text_color(theme.danger)
                         .child(project.status_message.clone().unwrap_or_else(|| "The project could not be made.".into())),
                 );
-                return page.into_any_element();
             }
-            ProjectState::Ready => {}
-        }
-
-        // Running agents and their conversations.
-        if !instances.is_empty() {
-            let mut running = v_flex().gap_2().child(section("Running agents", cx));
-            for instance in instances {
-                let state: SharedString = match instance.state {
-                    InstanceState::Starting => "Starting…".into(),
-                    InstanceState::Ready => "Running".into(),
-                    InstanceState::Exited => instance.message.clone().unwrap_or_else(|| "Exited".into()).into(),
-                    InstanceState::Failed => instance.message.clone().unwrap_or_else(|| "Failed".into()).into(),
-                };
-                let alive = matches!(instance.state, InstanceState::Starting | InstanceState::Ready);
-                let mut card = v_flex()
-                    .gap_2()
-                    .p_3()
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded(theme.radius)
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(Icon::new(IconName::Bot).small().text_color(if alive { theme.success } else { theme.muted_foreground }))
-                            .child(
+            ProjectState::Ready => {
+                if !instances.is_empty() {
+                    let mut chips = h_flex().gap_2().flex_wrap();
+                    let mut failures = v_flex().gap_2();
+                    for instance in &instances {
+                        let alive = matches!(instance.state, InstanceState::Starting | InstanceState::Ready);
+                        let state: SharedString = match instance.state {
+                            InstanceState::Starting => "starting".into(),
+                            InstanceState::Ready => match instance.sessions.len() {
+                                1 => "1 conversation".into(),
+                                n => format!("{n} conversations").into(),
+                            },
+                            InstanceState::Exited => "stopped".into(),
+                            InstanceState::Failed => "failed".into(),
+                        };
+                        let stopped = instance.clone();
+                        let stop_server = server.clone();
+                        chips = chips.child(
+                            h_flex()
+                                .id(ElementId::Name(format!("instance-{}", instance.id).into()))
+                                .gap_2()
+                                .pl_3()
+                                .pr_1()
+                                .py_1()
+                                .rounded(theme.radius * 1.5)
+                                .border_1()
+                                .border_color(theme.border)
+                                .child(super::inbox::dot(super::inbox::instance_color(instance.state, cx)))
+                                .child(div().text_sm().font_semibold().child(instance.agent_name.clone()))
+                                .child(div().text_xs().text_color(theme.muted_foreground).child(state))
+                                .child(
+                                    Button::new(ElementId::Name(format!("stop-{}", instance.id).into()))
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(if alive { IconName::Pause } else { IconName::Close })
+                                        .tooltip(if alive { "Stop the agent" } else { "Dismiss" })
+                                        .on_click(move |_, _, cx| stop_server.update(cx, |server, cx| server.stop_instance(&stopped, cx))),
+                                ),
+                        );
+                        if !alive && !instance.stderr_tail.is_empty() {
+                            let tail = instance.stderr_tail.iter().rev().take(6).rev().cloned().collect::<Vec<_>>().join("\n");
+                            failures = failures.child(
                                 v_flex()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(div().font_semibold().child(instance.agent_name.clone()))
-                                    .child(div().text_xs().text_color(theme.muted_foreground).truncate().child(state)),
-                            )
-                            .when(alive, |row| {
-                                let new_project = project.clone();
-                                let new_instance = instance.clone();
-                                row.child(Button::new(ElementId::Name(format!("new-chat-{}", instance.id).into())).small().icon(IconName::Plus).label("New chat").on_click(
-                                    cx.listener(move |this, _, window, cx| this.open_chat(&new_project, &new_instance, None, window, cx)),
-                                ))
-                            })
-                            .child({
-                                let stopped = instance.clone();
-                                let server = server.clone();
-                                Button::new(ElementId::Name(format!("stop-{}", instance.id).into()))
-                                    .small()
-                                    .ghost()
-                                    .icon(if alive { IconName::Pause } else { IconName::Close })
-                                    .tooltip(if alive { "Stop" } else { "Dismiss" })
-                                    .on_click(cx.listener(move |_, _, _, cx| server.update(cx, |server, cx| server.stop_instance(&stopped, cx))))
-                            }),
-                    );
-                if !alive && !instance.stderr_tail.is_empty() {
-                    let tail = instance.stderr_tail.iter().rev().take(6).rev().cloned().collect::<Vec<_>>().join("\n");
-                    card = card.child(
-                        div()
-                            .p_2()
-                            .rounded(theme.radius)
-                            .bg(theme.muted)
-                            .font_family(theme.mono_font_family.clone())
-                            .text_xs()
-                            .child(tail),
-                    );
-                }
-                for session in &instance.sessions {
-                    let open_project = project.clone();
-                    let open_instance = instance.clone();
-                    let session_id = session.session_id.clone();
-                    let title = if session.title.is_empty() { "Untitled conversation".to_owned() } else { session.title.clone() };
-                    card = card.child(
-                        h_flex()
-                            .id(ElementId::Name(format!("session-{}", session.session_id).into()))
-                            .gap_2()
-                            .px_2()
-                            .py_1()
-                            .rounded(theme.radius)
-                            .cursor_pointer()
-                            .hover(|style| style.bg(theme.accent))
-                            .when(!alive, |row| row.opacity(0.5))
-                            .child(Icon::new(IconName::FileText).xsmall().text_color(theme.muted_foreground))
-                            .child(div().text_sm().truncate().child(title))
-                            .when(alive, |row| {
-                                row.on_click(cx.listener(move |this, _, window, cx| {
-                                    this.open_chat(&open_project, &open_instance, Some(session_id.clone()), window, cx)
-                                }))
-                            }),
-                    );
-                }
-                running = running.child(card);
-            }
-            page = page.child(running);
-        }
-
-        // Every agent the server offers.
-        let mut catalog = v_flex().gap_2().child(
-            h_flex().child(section("Start an agent", cx)).child(
-                Button::new("add-agent")
-                    .ghost()
-                    .small()
-                    .icon(IconName::Plus)
-                    .label("Custom agent")
-                    .on_click(cx.listener(|this, _, window, cx| this.edit_agent(None, window, cx))),
-            ),
-        );
-        for agent in agents {
-            catalog = catalog.child(self.agent_row(id, agent, cx));
-        }
-        page.child(catalog).into_any_element()
-    }
-
-    fn agent_row(&self, project: ProjectId, agent: Agent, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let mut command = agent.command.command.clone();
-        for arg in &agent.command.args {
-            command.push(' ');
-            command.push_str(arg);
-        }
-        let custom = agent.source == AgentSource::Custom;
-        let start_id = agent.id.clone();
-        let edit = agent.clone();
-        let remove_id = agent.id.clone();
-        h_flex()
-            .id(ElementId::Name(format!("agent-{}", agent.id).into()))
-            .gap_3()
-            .p_3()
-            .border_1()
-            .border_color(theme.border)
-            .rounded(theme.radius)
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .child(
-                        h_flex().gap_2().child(div().font_semibold().child(agent.name.clone())).child(
-                            div().text_xs().text_color(theme.muted_foreground).child(match agent.source {
-                                AgentSource::Builtin => "built in",
-                                AgentSource::Config => "server config",
-                                AgentSource::Custom => "custom",
-                            }),
-                        ),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_family(theme.mono_font_family.clone())
-                            .text_color(theme.muted_foreground)
-                            .truncate()
-                            .child(command),
-                    ),
-            )
-            .when(custom, |row| {
-                let server = self.server.clone();
-                row.child(
-                    Button::new("edit")
-                        .ghost()
-                        .xsmall()
-                        .icon(IconName::Settings2)
-                        .tooltip("Edit")
-                        .on_click(cx.listener(move |this, _, window, cx| this.edit_agent(Some(edit.clone()), window, cx))),
-                )
-                .child(Button::new("remove").ghost().xsmall().icon(IconName::Delete).tooltip("Remove").on_click(
-                    move |_, _, cx| {
-                        if let Some(server) = &server {
-                            server.update(cx, |server, cx| server.remove_agent(remove_id.clone(), cx));
+                                    .gap_1()
+                                    .child(div().text_xs().text_color(theme.muted_foreground).child(format!(
+                                        "{}: {}",
+                                        instance.agent_name,
+                                        instance.message.clone().unwrap_or_else(|| "stopped".into())
+                                    )))
+                                    .child(
+                                        div()
+                                            .p_2()
+                                            .rounded(theme.radius)
+                                            .bg(theme.muted)
+                                            .font_family(theme.mono_font_family.clone())
+                                            .text_xs()
+                                            .child(tail),
+                                    ),
+                            );
                         }
-                    },
-                ))
-            })
-            .child(
-                Button::new("start")
-                    .primary()
-                    .small()
-                    .icon(IconName::Play)
-                    .label("Start")
-                    .on_click(cx.listener(move |this, _, window, cx| this.start_chat(project, start_id.clone(), window, cx))),
-            )
+                    }
+                    page = page.child(v_flex().gap_3().child(section("Agents", cx)).child(chips).child(failures));
+                }
+
+                let listed: Vec<_> = self.listed(cx).into_iter().filter(|item| item.project.id == id).collect();
+                let mut conversations = v_flex().gap_0p5().child(div().mb_2().child(section("Conversations", cx)));
+                if listed.is_empty() {
+                    conversations = conversations.child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child("No conversations here yet. Start one: the agent works in this project's folder."),
+                    );
+                }
+                for item in &listed {
+                    conversations = conversations.child(self.session_row(item, false, cx));
+                }
+                page = page.child(conversations);
+            }
+        }
+
+        div()
+            .id("project")
+            .size_full()
+            .overflow_y_scroll()
+            .child(h_flex().w_full().justify_center().px_6().py_6().child(page))
+            .into_any_element()
     }
 
     pub(super) fn new_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -277,35 +201,12 @@ impl Shell {
             server.update(cx, |server, cx| {
                 server.create_project(input, cx, move |result, cx| match result {
                     Ok(project) => {
-                        let _ = shell.update(cx, |shell, cx| shell.go(Page::Project(project.id), cx));
+                        let _ = shell.update(cx, |shell, cx| {
+                            shell.go_root(Page::Projects, cx);
+                            shell.go(Page::Project(project.id), cx);
+                        });
                     }
                     Err(error) => super::toast_error(format!("Could not create the project: {error}"), cx),
-                })
-            });
-            true
-        }, window, cx);
-    }
-
-    fn edit_agent(&mut self, agent: Option<Agent>, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(server) = self.server.clone() else { return };
-        let editing = agent.is_some();
-        let form = cx.new(|cx| AgentForm::new(agent.as_ref(), window, cx));
-        let first = form.read(cx).first(cx);
-        open_form(if editing { "Edit agent" } else { "Custom agent" }, "Save", form, Some(first), move |form, _, cx| {
-            let input = match form.input(cx) {
-                Ok(input) => input,
-                Err(error) => {
-                    form.error = Some(error.into());
-                    cx.notify();
-                    return false;
-                }
-            };
-            let id = form.id.clone();
-            server.update(cx, |server, cx| {
-                server.save_agent(id, input, cx, |result, cx| {
-                    if let Err(error) = result {
-                        super::toast_error(format!("Could not save the agent: {error}"), cx);
-                    }
                 })
             });
             true
@@ -335,13 +236,13 @@ impl Shell {
                 .ok_variant(ButtonVariant::Danger)
                 .on_ok(move |_, _, cx| {
                     server.update(cx, |server, cx| server.delete_project(id, true, cx));
-                    let _ = shell.update(cx, |shell, cx| shell.go(Page::Home, cx));
+                    let _ = shell.update(cx, |shell, cx| shell.go_root(Page::Projects, cx));
                     true
                 })
         });
     }
 }
 
-fn section(title: &'static str, cx: &Context<Shell>) -> impl IntoElement {
-    div().flex_1().text_sm().font_semibold().text_color(cx.theme().muted_foreground).child(title)
+pub fn section(title: &'static str, cx: &Context<Shell>) -> impl IntoElement {
+    div().text_xs().font_semibold().text_color(cx.theme().muted_foreground).child(title)
 }

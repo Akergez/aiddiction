@@ -7,7 +7,9 @@
 //! - `wait:<ms>`, `click:<x>,<y>`, `key:<keystroke>`, `type:<text>`
 //! - `shot:<name>` — runs `$AIDDICTION_SHOT_CMD <name>`
 //! - `expect:<what>=<value>` — ends the process with status 1 unless it
-//!   holds: `page=servers|home|project|chat`, `projects=<n>`, `chats=<n>`,
+//!   holds: `page=inbox|projects|project|chat|review|settings|appearance|agents|servers`,
+//!   `projects=<n>`, `chats=<n>`, `sessions=<n>` (in the inbox), `waiting=<n>`
+//!   (conversations that need the person),
 //!   `agents=<n>`, `annotations=<n>` (of the review on screen),
 //!   `entries=<n>` (of the conversation on screen), `busy=yes|no`,
 //!   `permissions=<n>`, `dialog=open|closed`, `theme=light|dark`
@@ -86,14 +88,19 @@ fn observe(what: &str, shell: &Entity<Shell>, window: &mut Window, cx: &mut App)
     };
     Some(match what {
         "page" => match shell.page {
-            Page::Servers => "servers",
-            Page::Settings => "settings",
-            Page::Home => "home",
+            Page::Inbox => "inbox",
+            Page::Projects => "projects",
             Page::Project(_) => "project",
             Page::Review(_) => "review",
             Page::Chat(_) => "chat",
+            Page::Settings => "settings",
+            Page::Appearance => "appearance",
+            Page::Agents => "agents",
+            Page::Servers => "servers",
         }
         .to_owned(),
+        "sessions" => shell.listed(cx).len().to_string(),
+        "waiting" => shell.listed(cx).iter().filter(|listed| listed.group == crate::inbox::Group::NeedsYou).count().to_string(),
         "projects" => shell.server.as_ref().map_or(0, |server| server.read(cx).projects.len()).to_string(),
         "chats" => shell.chats.len().to_string(),
         "annotations" => match shell.page {

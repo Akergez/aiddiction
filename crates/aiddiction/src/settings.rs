@@ -5,6 +5,8 @@
 //! is private to the user (mode 0600) because it holds the servers'
 //! tokens; a desktop keyring is the next step (docs/PLAN.md, 6.7).
 
+use std::collections::BTreeMap;
+
 use gpui_kit::{App, Global};
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +24,15 @@ pub struct SettingsData {
     pub servers: Vec<ServerEntry>,
     pub active: Option<String>,
     pub appearance: Appearance,
+    /// The last journal sequence number shown of each conversation, by
+    /// `<server>/<session>`: what came after it is unread.
+    pub seen: BTreeMap<String, u64>,
+    /// The agent the last new conversation went to, offered first next time.
+    pub last_agent: Option<String>,
 }
+
+/// How many conversations [`SettingsData::seen`] remembers.
+const SEEN_LIMIT: usize = 500;
 
 /// How the window looks ([`crate::appearance`]). Unknown values mean the
 /// default, so a file from a later version never stops this one drawing.
@@ -44,6 +54,26 @@ impl SettingsData {
     pub fn active_server(&self) -> Option<&ServerEntry> {
         let id = self.active.as_deref()?;
         self.servers.iter().find(|server| server.id == id)
+    }
+
+    pub fn seen(&self, server: &str, session: &str) -> u64 {
+        self.seen.get(&format!("{server}/{session}")).copied().unwrap_or(0)
+    }
+
+    /// Records that a conversation was shown up to `seq`. False when that
+    /// was known already, so nothing needs saving.
+    pub fn mark_seen(&mut self, server: &str, session: &str, seq: u64) -> bool {
+        let key = format!("{server}/{session}");
+        if self.seen.get(&key).is_some_and(|known| *known >= seq) {
+            return false;
+        }
+        self.seen.insert(key, seq);
+        // Forgets the smallest numbers first: roughly the oldest.
+        while self.seen.len() > SEEN_LIMIT {
+            let Some(oldest) = self.seen.iter().min_by_key(|(_, seq)| **seq).map(|(key, _)| key.clone()) else { break };
+            self.seen.remove(&oldest);
+        }
+        true
     }
 }
 

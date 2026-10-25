@@ -279,6 +279,77 @@ impl Thread {
     }
 }
 
+/// What a run of tool calls in a row adds up to, for its one line in the
+/// conversation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolRun {
+    pub status: ToolStatus,
+    /// "Write hello.txt" while one runs; "3 steps · edited a.rs, b.rs" after.
+    pub text: String,
+}
+
+impl Thread {
+    /// Where the run of tool calls `index` belongs to starts; `index` itself
+    /// when it is not a tool call.
+    pub fn run_start(&self, index: usize) -> usize {
+        let mut start = index;
+        while start > 0
+            && matches!(self.entries.get(start), Some(Entry::Tool(_)))
+            && matches!(self.entries.get(start - 1), Some(Entry::Tool(_)))
+        {
+            start -= 1;
+        }
+        start
+    }
+
+    /// The tool calls of the run starting at `start`.
+    pub fn run(&self, start: usize) -> Vec<&ToolCall> {
+        self.entries[start.min(self.entries.len())..]
+            .iter()
+            .map_while(|entry| match entry {
+                Entry::Tool(call) => Some(call),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// Sums a run of tool calls up: one still going is named, a finished run is
+/// counted and its edited files listed.
+pub fn summarize(run: &[&ToolCall]) -> ToolRun {
+    let status = if run.iter().any(|call| call.status == ToolStatus::Failed) {
+        ToolStatus::Failed
+    } else if let Some(call) = run.iter().rev().find(|call| matches!(call.status, ToolStatus::InProgress | ToolStatus::Pending)) {
+        let text = if call.title.is_empty() { call.kind.clone() } else { call.title.clone() };
+        return ToolRun { status: call.status, text };
+    } else {
+        ToolStatus::Completed
+    };
+    let mut parts = vec![if run.len() == 1 { "1 step".to_owned() } else { format!("{} steps", run.len()) }];
+    let mut edited: Vec<&str> = Vec::new();
+    for call in run.iter().filter(|call| matches!(call.kind.as_str(), "edit" | "delete" | "move")) {
+        for path in &call.locations {
+            let name = path.rsplit('/').next().unwrap_or(path);
+            if !edited.contains(&name) {
+                edited.push(name);
+            }
+        }
+    }
+    if !edited.is_empty() {
+        let shown = edited.iter().take(3).copied().collect::<Vec<_>>().join(", ");
+        let more = edited.len().saturating_sub(3);
+        parts.push(if more > 0 { format!("edited {shown} and {more} more") } else { format!("edited {shown}") });
+    }
+    let commands = run.iter().filter(|call| call.kind == "execute").count();
+    if commands > 0 {
+        parts.push(if commands == 1 { "ran a command".to_owned() } else { format!("ran {commands} commands") });
+    }
+    if status == ToolStatus::Failed {
+        parts.push("one failed".to_owned());
+    }
+    ToolRun { status, text: parts.join(" · ") }
+}
+
 fn str_of(value: &Value, key: &str) -> String {
     value[key].as_str().unwrap_or_default().to_owned()
 }
@@ -367,6 +438,25 @@ mod tests {
         let Entry::Tool(call) = &thread.entries[0] else { panic!() };
         assert_eq!(call.status, ToolStatus::Completed);
         assert_eq!(call.content, vec![ToolContent::Diff { path: "/a".into(), old: None, new: "x".into() }]);
+    }
+
+    #[test]
+    fn tool_calls_in_a_row_are_one_run_summed_up() {
+        let mut thread = Thread::default();
+        thread.apply(&chunk("agent_message_chunk", "on it"));
+        thread.apply(&json!({ "sessionUpdate": "tool_call", "toolCallId": "a", "title": "Read a.rs", "kind": "read", "status": "completed" }));
+        thread.apply(&json!({ "sessionUpdate": "tool_call", "toolCallId": "b", "title": "Edit", "kind": "edit", "status": "completed", "locations": [{ "path": "/p/src/a.rs" }] }));
+        thread.apply(&json!({ "sessionUpdate": "tool_call", "toolCallId": "c", "title": "cargo test", "kind": "execute", "status": "in_progress" }));
+        assert_eq!(thread.run_start(3), 1);
+        assert_eq!(thread.run_start(0), 0);
+        let run = thread.run(1);
+        assert_eq!(run.len(), 3);
+        assert_eq!(summarize(&run), ToolRun { status: ToolStatus::InProgress, text: "cargo test".into() });
+        thread.apply(&json!({ "sessionUpdate": "tool_call_update", "toolCallId": "c", "status": "completed" }));
+        assert_eq!(
+            summarize(&thread.run(1)),
+            ToolRun { status: ToolStatus::Completed, text: "3 steps · edited a.rs · ran a command".into() }
+        );
     }
 
     #[test]

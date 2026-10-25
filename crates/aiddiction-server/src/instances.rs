@@ -97,6 +97,13 @@ impl Supervisor {
         found
     }
 
+    /// Every instance, of every project.
+    pub fn all(&self) -> Vec<Arc<Instance>> {
+        let mut found: Vec<_> = self.instances.lock().unwrap().values().cloned().collect();
+        found.sort_by_key(|a| a.id);
+        found
+    }
+
     /// Forgets an instance that is no longer running.
     pub fn remove(&self, id: InstanceId) {
         self.instances.lock().unwrap().remove(&id);

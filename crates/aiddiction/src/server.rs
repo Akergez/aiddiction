@@ -7,7 +7,9 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use aiddiction_api::{Agent, AgentInput, Instance, NewProject, Project, ProjectId, ServerEvent, ServerInfo};
+use aiddiction_api::{
+    Agent, AgentInput, Instance, InstanceId, NewProject, PermissionAnswer, Project, ProjectId, ServerEvent, ServerInfo,
+};
 use aiddiction_client::{Error, ServerClient};
 use gpui_kit::{App, Context};
 
@@ -80,6 +82,7 @@ impl ServerConnection {
                         this.status = Status::Online;
                         this.refresh_projects(cx);
                         this.refresh_agents(cx);
+                        this.refresh_all_instances(cx);
                         this.listen(generation, cx);
                     }
                     Err(error) => this.went_offline(error, generation, cx),
@@ -145,7 +148,11 @@ impl ServerConnection {
 
     fn handle(&mut self, event: ServerEvent, cx: &mut Context<Self>) {
         match event {
-            ServerEvent::ProjectsChanged => self.refresh_projects(cx),
+            // Also what a lagging event socket is told: everything is read again.
+            ServerEvent::ProjectsChanged => {
+                self.refresh_projects(cx);
+                self.refresh_all_instances(cx);
+            }
             ServerEvent::AgentsChanged => self.refresh_agents(cx),
             ServerEvent::InstancesChanged { project_id } => self.refresh_instances(project_id, cx),
         }
@@ -188,6 +195,40 @@ impl ServerConnection {
         self.call(cx, |client| async move { client.agents().await }, |this, result, _| match result {
             Ok(agents) => this.agents = agents,
             Err(error) => tracing::warn!("could not read the agents: {error}"),
+        });
+    }
+
+    /// Every project's instances, as on (re)connecting: events only say
+    /// what changes after that.
+    pub fn refresh_all_instances(&mut self, cx: &mut Context<Self>) {
+        self.call(cx, |client| async move { client.all_instances().await }, |this, result, _| match result {
+            Ok(instances) => {
+                this.instances.clear();
+                for instance in instances {
+                    this.instances.entry(instance.project_id).or_default().push(instance);
+                }
+            }
+            Err(error) => tracing::warn!("could not read the instances: {error}"),
+        });
+    }
+
+    /// Answers an agent's question from a list, without its conversation.
+    pub fn answer_permission(&mut self, instance: InstanceId, answer: PermissionAnswer, cx: &mut Context<Self>) {
+        // Shown answered at once; the server's event brings the truth.
+        for instances in self.instances.values_mut() {
+            for known in instances.iter_mut().filter(|known| known.id == instance) {
+                for session in &mut known.sessions {
+                    session.permissions.retain(|permission| permission.request_id != answer.request_id);
+                }
+            }
+        }
+        cx.notify();
+        self.call(cx, move |client| async move { client.answer_permission(instance, &answer).await }, |_, result, cx| {
+            if let Err(error) = result
+                && !matches!(error, Error::Api { status: 409, .. })
+            {
+                crate::ui::toast_error(format!("Could not answer the agent: {error}"), cx);
+            }
         });
     }
 

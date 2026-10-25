@@ -1,33 +1,35 @@
-//! A conversation with an agent: the thread, the plan, the agent's questions,
-//! and the composer.
+//! A conversation with an agent: the thread, the agent's questions, and the
+//! composer with the plan and the agent's mode on it. Tool calls in a row are
+//! one line that unfolds, so a long turn reads as what was said, not as a
+//! wall of steps.
 
 use std::collections::HashSet;
 
 use aiddiction_api::ProjectId;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::TextView;
 use gpui_kit::component::{ActiveTheme, Icon, IconName, h_flex, v_flex};
-use gpui_kit::component::{Disableable as _, Selectable as _, Sizable as _};
+use gpui_kit::component::{Disableable as _, Sizable as _, StyledExt as _};
 use gpui_kit::Focusable as _;
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, AppContext, Context, ElementId, Entity, EventEmitter, FollowMode, ListAlignment, ListState,
-    Render, SharedString, Subscription, Window, div, list, px,
+    Render, SharedString, Subscription, Window, div, list, px, rems,
 };
 
 use crate::session::{AgentSession, Phase};
 use crate::thread::{Entry, ToolCall, ToolContent, ToolStatus};
 
-/// Asks the shell to close this conversation.
-pub struct Close;
+/// How wide the conversation reads at most.
+const READING_WIDTH: f32 = 48.;
 
 /// Asks the shell for the review of this conversation's project.
 pub struct OpenReview;
 
-impl EventEmitter<Close> for ChatView {}
 impl EventEmitter<OpenReview> for ChatView {}
 
 pub struct ChatView {
@@ -35,8 +37,10 @@ pub struct ChatView {
     pub project_id: ProjectId,
     composer: Entity<TextareaState>,
     list: ListState,
-    /// Entries whose thoughts or tool output are unfolded.
+    /// Entries whose thoughts or tool output are unfolded (a run of tool
+    /// calls by its first).
     open: HashSet<usize>,
+    plan_open: bool,
     subscriptions: Vec<Subscription>,
 }
 
@@ -58,7 +62,8 @@ impl ChatView {
                 let (count, dirty) = session.update(cx, |session, _| (session.thread.entries.len(), session.thread.take_dirty()));
                 let shown = this.list.item_count();
                 if let Some(from) = dirty.or((count != shown).then_some(shown.min(count))) {
-                    let from = from.min(shown);
+                    // A tool call is drawn by the first of its run.
+                    let from = session.read(cx).thread.run_start(from).min(shown);
                     this.list.splice(from..shown, count - from);
                 }
                 cx.notify();
@@ -69,7 +74,7 @@ impl ChatView {
                 }
             }),
         ];
-        Self { session, project_id, composer, list, open: HashSet::new(), subscriptions }
+        Self { session, project_id, composer, list, open: HashSet::new(), plan_open: false, subscriptions }
     }
 
     /// Where typing goes: the composer.
@@ -100,7 +105,8 @@ impl ChatView {
         if !self.open.remove(&index) {
             self.open.insert(index);
         }
-        self.list.remeasure_items(index..index + 1);
+        let row = self.session.read(cx).thread.run_start(index);
+        self.list.remeasure_items(row..row + 1);
         cx.notify();
     }
 
@@ -117,9 +123,9 @@ impl ChatView {
                 .child(
                     div()
                         .max_w(gpui_kit::relative(0.85))
-                        .px_3()
-                        .py_2()
-                        .rounded(theme.radius * 2.)
+                        .px_4()
+                        .py_2p5()
+                        .rounded(px(18.))
                         .bg(theme.secondary)
                         .text_color(theme.secondary_foreground)
                         .child(text),
@@ -151,7 +157,15 @@ impl ChatView {
                 }
                 column.into_any_element()
             }
-            Entry::Tool(call) => self.render_tool(index, call, open, cx),
+            Entry::Tool(_) => {
+                let thread = &self.session.read(cx).thread;
+                if thread.run_start(index) != index {
+                    // Drawn by the first of its run.
+                    return div().into_any_element();
+                }
+                let run: Vec<(usize, ToolCall)> = thread.run(index).into_iter().cloned().enumerate().map(|(at, call)| (index + at, call)).collect();
+                self.render_run(index, run, open, cx)
+            }
             Entry::Notice { text, error } => div()
                 .w_full()
                 .text_sm()
@@ -160,17 +174,48 @@ impl ChatView {
                 .child(text)
                 .into_any_element(),
         };
-        div().w_full().px_4().py_1p5().child(body).into_any_element()
+        h_flex()
+            .w_full()
+            .justify_center()
+            .child(div().w_full().max_w(rems(READING_WIDTH)).px_4().py_1p5().child(body))
+            .into_any_element()
+    }
+
+    /// A run of tool calls: one line that sums them up and unfolds into
+    /// them. A single call is drawn as itself.
+    fn render_run(&self, start: usize, run: Vec<(usize, ToolCall)>, open: bool, cx: &mut Context<Self>) -> AnyElement {
+        if run.len() == 1 {
+            let (index, call) = run.into_iter().next().unwrap();
+            return self.render_tool(index, call, open, cx);
+        }
+        let theme = cx.theme().clone();
+        let summary = crate::thread::summarize(&run.iter().map(|(_, call)| call).collect::<Vec<_>>());
+        let mut card = v_flex().border_1().border_color(theme.border).rounded(theme.radius * 1.5).child(
+            h_flex()
+                .id(ElementId::Name(format!("run-{start}").into()))
+                .gap_2()
+                .px_3()
+                .py_2()
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, _, cx| this.toggle(start, cx)))
+                .child(status_icon(summary.status, cx))
+                .child(div().flex_1().min_w_0().truncate().text_sm().child(summary.text))
+                .child(Icon::new(if open { IconName::ChevronUp } else { IconName::ChevronDown }).xsmall().text_color(theme.muted_foreground)),
+        );
+        if open {
+            let mut steps = v_flex().gap_1p5().px_2().pb_2();
+            for (index, call) in run {
+                let unfolded = self.open.contains(&index);
+                steps = steps.child(self.render_tool(index, call, unfolded, cx));
+            }
+            card = card.child(steps);
+        }
+        card.into_any_element()
     }
 
     fn render_tool(&self, index: usize, call: ToolCall, open: bool, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
-        let status: AnyElement = match call.status {
-            ToolStatus::Pending => Icon::new(IconName::Ellipsis).small().text_color(theme.muted_foreground).into_any_element(),
-            ToolStatus::InProgress => Spinner::new().small().into_any_element(),
-            ToolStatus::Completed => Icon::new(IconName::CircleCheck).small().text_color(theme.success).into_any_element(),
-            ToolStatus::Failed => Icon::new(IconName::CircleX).small().text_color(theme.danger).into_any_element(),
-        };
+        let status = status_icon(call.status, cx);
         let icon = match call.kind.as_str() {
             "edit" | "delete" | "move" => IconName::FileText,
             "execute" => IconName::SquareTerminal,
@@ -184,7 +229,7 @@ impl ChatView {
         let mut card = v_flex()
             .border_1()
             .border_color(theme.border)
-            .rounded(theme.radius)
+            .rounded(theme.radius * 1.5)
             .child(
                 h_flex()
                     .id(ElementId::Name(format!("tool-{index}").into()))
@@ -217,14 +262,48 @@ impl ChatView {
         card.into_any_element()
     }
 
-    fn render_plan(&self, cx: &App) -> Option<AnyElement> {
-        let theme = cx.theme();
-        let plan = &self.session.read(cx).thread.plan;
+    /// The plan on the composer: one line with how far along it is, the
+    /// whole list when unfolded.
+    fn render_plan(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let theme = cx.theme().clone();
+        let plan = self.session.read(cx).thread.plan.clone();
         if plan.is_empty() {
             return None;
         }
-        let mut column = v_flex().gap_1().px_4().py_2().border_t_1().border_color(theme.border);
-        for entry in plan {
+        let done = plan.iter().filter(|entry| entry.status == "completed").count();
+        let current = plan.iter().find(|entry| entry.status == "in_progress").or_else(|| plan.iter().find(|entry| entry.status != "completed"));
+        let progress = done as f32 / plan.len() as f32;
+        let line = h_flex()
+            .id("plan")
+            .gap_2()
+            .px_3()
+            .py_2()
+            .cursor_pointer()
+            .text_sm()
+            .border_b_1()
+            .border_color(theme.border)
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.plan_open = !this.plan_open;
+                cx.notify();
+            }))
+            .child(Icon::new(IconName::CircleCheck).xsmall().text_color(if done == plan.len() { theme.success } else { theme.primary }))
+            .child(div().flex_none().font_semibold().child(format!("Plan {done}/{}", plan.len())))
+            .child(div().flex_1().min_w_0().truncate().text_color(theme.muted_foreground).child(current.map(|entry| entry.content.clone()).unwrap_or_default()))
+            .child(
+                div()
+                    .w_16()
+                    .h_1()
+                    .flex_none()
+                    .rounded_full()
+                    .bg(theme.muted)
+                    .child(div().h_full().rounded_full().bg(theme.primary).w(gpui_kit::relative(progress))),
+            )
+            .child(Icon::new(if self.plan_open { IconName::ChevronDown } else { IconName::ChevronUp }).xsmall().text_color(theme.muted_foreground));
+        if !self.plan_open {
+            return Some(line.into_any_element());
+        }
+        let mut column = v_flex().gap_1().px_3().py_2().border_b_1().border_color(theme.border);
+        for entry in &plan {
             let (icon, color) = match entry.status.as_str() {
                 "completed" => (IconName::CircleCheck, theme.success),
                 "in_progress" => (IconName::LoaderCircle, theme.primary),
@@ -238,7 +317,7 @@ impl ChatView {
                     .child(div().truncate().child(entry.content.clone())),
             );
         }
-        Some(column.into_any_element())
+        Some(v_flex().child(line).child(column).into_any_element())
     }
 
     fn render_permissions(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -247,33 +326,32 @@ impl ChatView {
         if permissions.is_empty() {
             return None;
         }
-        let mut column = v_flex().gap_2().px_4().py_2();
+        let mut column = v_flex().gap_2();
         for permission in permissions {
-            let mut buttons = h_flex().gap_2().flex_wrap();
+            let mut buttons = h_flex().gap_2().flex_wrap().justify_end();
             for option in permission.options {
                 let request = permission.request_id.clone();
                 let option_id = option.id.clone();
                 let button = Button::new(ElementId::Name(format!("perm-{}-{}", permission.request_id, option.id).into()))
-                    .small()
                     .label(option.name.clone())
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let (request, option_id) = (request.clone(), option_id.clone());
                         this.session.update(cx, |session, cx| session.answer_permission(request, option_id, cx));
                     }));
-                buttons = buttons.child(if option.kind.starts_with("allow") { button.primary() } else { button });
+                buttons = buttons.child(if option.kind.starts_with("allow") { button.primary() } else { button.outline() });
             }
             column = column.child(
                 v_flex()
-                    .gap_2()
+                    .gap_3()
                     .p_3()
-                    .rounded(theme.radius)
+                    .rounded(theme.radius * 2.)
                     .border_1()
                     .border_color(theme.warning)
                     .bg(theme.warning.opacity(0.08))
                     .child(
                         h_flex()
                             .gap_2()
-                            .text_sm()
+                            .font_semibold()
                             .child(Icon::new(IconName::TriangleAlert).small().text_color(theme.warning))
                             .child(div().flex_1().min_w_0().child(permission.title.clone())),
                     )
@@ -309,44 +387,42 @@ impl ChatView {
         )
     }
 
-    fn render_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme().clone();
-        let session = self.session.read(cx);
-        let mut bar = h_flex().gap_1().px_3().py_1().border_b_1().border_color(theme.border).flex_wrap();
-        for mode in &session.thread.modes {
-            let selected = session.thread.current_mode.as_deref() == Some(mode.id.as_str());
-            let id = mode.id.clone();
-            bar = bar.child(
-                Button::new(ElementId::Name(format!("mode-{}", mode.id).into()))
-                    .xsmall()
-                    .ghost()
-                    .selected(selected)
-                    .label(mode.name.clone())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let id = id.clone();
-                        this.session.update(cx, |session, cx| session.set_mode(id, cx));
-                    })),
-            );
+    /// The agent's mode, picked from a menu on the composer.
+    fn render_mode(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let thread = &self.session.read(cx).thread;
+        if thread.modes.is_empty() {
+            return None;
         }
-        bar.child(div().flex_1())
-            .child(
-                Button::new("review-changes")
-                    .xsmall()
-                    .ghost()
-                    .icon(IconName::FileText)
-                    .label("Review changes")
-                    .tooltip("Annotate the diff and send it to the agent")
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(OpenReview))),
-            )
-            .child(
-            Button::new("close-chat")
-                .xsmall()
+        let current = thread.current_mode.clone();
+        let name = thread
+            .modes
+            .iter()
+            .find(|mode| Some(&mode.id) == current.as_ref())
+            .map(|mode| mode.name.clone())
+            .unwrap_or_else(|| "Mode".into());
+        let modes = thread.modes.clone();
+        let session = self.session.clone();
+        Some(
+            Button::new("mode")
                 .ghost()
-                .icon(IconName::Close)
-                .tooltip("Close conversation")
-                .on_click(cx.listener(|_, _, _, cx| cx.emit(Close))),
+                .xsmall()
+                .icon(IconName::Bot)
+                .label(name)
+                .dropdown_caret(true)
+                .dropdown_menu(move |mut menu, _, _| {
+                    for mode in &modes {
+                        let id = mode.id.clone();
+                        let session = session.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(mode.name.clone())
+                                .checked(current.as_ref() == Some(&mode.id))
+                                .on_click(move |_, _, cx| session.update(cx, |session, cx| session.set_mode(id.clone(), cx))),
+                        );
+                    }
+                    menu
+                })
+                .into_any_element(),
         )
-        .into_any_element()
     }
 
     fn render_commands(&self, cx: &App) -> Option<AnyElement> {
@@ -369,7 +445,7 @@ impl ChatView {
         if commands.is_empty() {
             return None;
         }
-        let mut column = v_flex().px_4().py_1().gap_0p5().border_t_1().border_color(theme.border);
+        let mut column = v_flex().px_3().py_2().gap_0p5().border_b_1().border_color(theme.border);
         for command in commands {
             column = column.child(
                 h_flex()
@@ -403,38 +479,78 @@ fn diff_view(path: &str, old: Option<&str>, new: &str, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
+fn status_icon(status: ToolStatus, cx: &App) -> AnyElement {
+    let theme = cx.theme();
+    match status {
+        ToolStatus::Pending => Icon::new(IconName::Ellipsis).small().text_color(theme.muted_foreground).into_any_element(),
+        ToolStatus::InProgress => Spinner::new().small().into_any_element(),
+        ToolStatus::Completed => Icon::new(IconName::CircleCheck).small().text_color(theme.success).into_any_element(),
+        ToolStatus::Failed => Icon::new(IconName::CircleX).small().text_color(theme.danger).into_any_element(),
+    }
+}
+
 impl Render for ChatView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let phone = super::is_phone(window);
         let this = cx.entity().downgrade();
         let rows = list(self.list.clone(), move |index, _, cx| {
             this.update(cx, |view, cx| view.render_entry(index, cx)).unwrap_or_else(|_| div().into_any_element())
         })
         .size_full()
-        .py_2();
+        .py_3();
 
-        let (busy, ready, empty) = {
+        let (busy, ready, empty, agent, project) = {
             let session = self.session.read(cx);
-            (session.busy, session.is_ready(), session.thread.entries.is_empty())
+            (session.busy, session.is_ready(), session.thread.entries.is_empty(), session.agent_name.clone(), session.project_name.clone())
         };
         let action = if busy {
             Button::new("stop")
+                .small()
                 .icon(IconName::Pause)
-                .tooltip("Stop")
+                .tooltip("Stop the agent's turn")
                 .on_click(cx.listener(|this, _, _, cx| this.session.update(cx, |session, cx| session.cancel(cx))))
         } else {
             Button::new("send")
                 .primary()
+                .small()
                 .icon(IconName::ArrowUp)
-                .tooltip("Send")
+                .tooltip("Send (Enter)")
                 .disabled(!ready)
                 .on_click(cx.listener(|this, _, window, cx| this.send(window, cx)))
         };
         let bottom = super::insets().1;
 
+        let composer = v_flex()
+            .w_full()
+            .rounded(px(18.))
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.background)
+            .overflow_hidden()
+            .children(self.render_plan(cx))
+            .children(self.render_commands(cx))
+            .child(
+                div()
+                    .px_1()
+                    .pt_1()
+                    .child(gpui_android_glue::keyboard::on_tap(Textarea::new(&self.composer).appearance(false), &self.composer, cx)),
+            )
+            .child(
+                h_flex()
+                    .gap_1()
+                    .px_2()
+                    .pb_2()
+                    .children(self.render_mode(cx))
+                    .when(!phone, |bar| {
+                        bar.child(div().text_xs().text_color(theme.muted_foreground).child("/ for commands · Shift+Enter for a new line"))
+                    })
+                    .child(div().flex_1())
+                    .child(action),
+            );
+
         v_flex()
             .size_full()
-            .child(self.render_toolbar(cx))
             .children(self.render_status(cx))
             .child(
                 div()
@@ -449,26 +565,37 @@ impl Render for ChatView {
                                 .inset_0()
                                 .items_center()
                                 .justify_center()
-                                .text_color(theme.muted_foreground)
-                                .child("Ask the agent to do something in this project."),
+                                .gap_3()
+                                .px_6()
+                                .text_center()
+                                .child(
+                                    div()
+                                        .size(gpui_kit::rems(3.5))
+                                        .rounded_full()
+                                        .bg(theme.muted)
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(Icon::new(IconName::Bot).large().text_color(theme.muted_foreground)),
+                                )
+                                .child(div().font_semibold().child(format!("{agent} in {project}")))
+                                .child(div().text_sm().text_color(theme.muted_foreground).child("Ask it to do something in this project.")),
                         )
                     })
                     .child(div().size_full().child(rows).vertical_scrollbar(&self.list)),
             )
-            .children(self.render_plan(cx))
-            .children(self.render_permissions(cx))
-            .children(self.render_commands(cx))
             .child(
-                h_flex()
-                    .items_end()
-                    .gap_2()
-                    .px_3()
-                    .pt_2()
-                    .pb(px(8.) + bottom)
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .child(div().flex_1().min_w_0().child(gpui_android_glue::keyboard::on_tap(Textarea::new(&self.composer), &self.composer, cx)))
-                    .child(action),
+                h_flex().w_full().justify_center().child(
+                    v_flex()
+                        .w_full()
+                        .max_w(rems(READING_WIDTH))
+                        .gap_2()
+                        .px_3()
+                        .pt_1()
+                        .pb(px(10.) + bottom)
+                        .children(self.render_permissions(cx))
+                        .child(composer),
+                ),
             )
     }
 }

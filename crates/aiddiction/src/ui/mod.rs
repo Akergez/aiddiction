@@ -1,14 +1,17 @@
 //! The window: [`shell::Shell`] is the one view it holds; the other modules
 //! are its pages and dialogs.
 
+mod agents;
 mod chat;
 mod forms;
+mod inbox;
+mod nav;
+mod new_session;
 mod project;
 mod review;
 mod servers;
 mod settings_page;
 pub(crate) mod shell;
-mod sidebar;
 
 use gpui_kit::component::notification::Notification;
 use gpui_android_glue::keyboard::Purpose;

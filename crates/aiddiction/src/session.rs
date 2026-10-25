@@ -38,6 +38,8 @@ pub struct AgentSession {
     pub busy: bool,
     pub thread: Thread,
     load_session: bool,
+    /// Sent as soon as a new conversation is ready.
+    queued: Option<String>,
     out: Option<UnboundedSender<String>>,
     next_id: u64,
     pending: HashMap<u64, Callback>,
@@ -65,6 +67,7 @@ impl AgentSession {
             busy: false,
             thread: Thread::default(),
             load_session: false,
+            queued: None,
             out: None,
             next_id: 0,
             pending: HashMap::new(),
@@ -78,6 +81,16 @@ impl AgentSession {
 
     pub fn is_ready(&self) -> bool {
         self.phase == Phase::Ready
+    }
+
+    /// The last journal sequence number applied: how far it has been read.
+    pub fn last_seq(&self) -> u64 {
+        self.last_seq
+    }
+
+    /// Sends `prompt` once the conversation is ready (a new one is not yet).
+    pub fn queue_prompt(&mut self, prompt: Option<String>) {
+        self.queued = prompt.filter(|prompt| !prompt.trim().is_empty());
     }
 
     fn connect(&mut self, cx: &mut Context<Self>) {
@@ -186,6 +199,9 @@ impl AgentSession {
     fn ready(&mut self, cx: &mut Context<Self>) {
         self.phase = Phase::Ready;
         self.retries = 0;
+        if let Some(prompt) = self.queued.take() {
+            self.prompt(prompt, cx);
+        }
         cx.notify();
     }
 

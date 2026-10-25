@@ -37,7 +37,7 @@ impl Shell {
                     .gap_3()
                     .p_3()
                     .border_1()
-                    .rounded(theme.radius)
+                    .rounded(theme.radius * 1.5)
                     .border_color(if active { theme.primary } else { theme.border })
                     .child(
                         v_flex()
@@ -51,7 +51,7 @@ impl Shell {
                             let entry = use_entry.clone();
                             Settings::update(cx, |settings| settings.active = Some(entry.id.clone()));
                             this.use_server(Some(entry), cx);
-                            this.go(Page::Home, cx);
+                            this.go_root(Page::Inbox, cx);
                         })))
                     })
                     .when(active, |row| row.child(div().text_sm().text_color(theme.primary).child("In use")))
@@ -72,11 +72,11 @@ impl Shell {
             .id("servers")
             .size_full()
             .overflow_y_scroll()
-            .p_4()
+            .p_6()
             .gap_4()
             .child(
                 h_flex()
-                    .child(div().flex_1().text_lg().font_semibold().child("Servers"))
+                    .child(div().flex_1().text_xl().font_semibold().child("Servers"))
                     .child(
                         Button::new("add-server")
                             .primary()
@@ -136,7 +136,7 @@ impl Shell {
                                 let in_use = Settings::get(cx).active.as_deref() == Some(entry.id.as_str());
                                 if in_use {
                                     shell.use_server(Some(entry), cx);
-                                    shell.go(Page::Home, cx);
+                                    shell.go_root(Page::Inbox, cx);
                                 }
                                 cx.notify();
                             });

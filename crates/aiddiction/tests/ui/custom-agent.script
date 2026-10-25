@@ -1,16 +1,15 @@
-# A custom agent added from a project page: the server keeps it, and it
-# joins the catalogue every client sees.
+# A custom agent added in the settings: the server keeps it, and it joins
+# the agents every client sees.
 # size: 1100x760
-until:page=home
+until:page=inbox
 wait:1000
-click:261,121
-until:dialog=open
-type:Agents
-key:enter
-until:page=project
+click:28,730
+until:page=settings
+click:220,174
+until:page=agents
 until:agents=3
 wait:300
-click:1022,130
+click:1003,97
 until:dialog=open
 type:My fake
 key:tab

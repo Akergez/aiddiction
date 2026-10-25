@@ -1,32 +1,36 @@
-# A new empty project, the fake agent started in it, a prompt that asks to
-# write a file, the permission granted, and the finished turn.
+# A conversation started in one step from the inbox — project, agent (found
+# by typing in its list), first message —, the agent's question answered
+# from the inbox's row without the conversation's own card, and the turn
+# finished.
 # size: 1100x760
-until:page=home
-wait:1000
-expect:projects=1
-click:261,121
+until:page=inbox
+until:projects=1
+wait:800
+expect:sessions=0
+click:748,452
 until:dialog=open
-type:Demo
+# The agent: its list is searchable.
+click:550,229
+wait:400
+type:fake
 key:enter
-until:page=project
-expect:projects=2
 wait:300
-# Start: the fake agent, third in the catalogue.
-click:1038,343
-until:page=chat
-expect:chats=1
+# The message; Enter starts.
+click:550,318
 type:please make a file
 key:enter
+until:page=chat
 until:permissions=1
 expect:busy=yes
+expect:sessions=1
+until:waiting=1
+wait:300
 shot:first-chat-permission
-# Allow.
-click:342,672
+# Allow, in the inbox's row.
+click:156,228
 until:busy=no
 expect:permissions=0
-wait:300
-# Unfold the tool call.
-click:700,538
-wait:300
+expect:waiting=0
+wait:500
 shot:first-chat-done
 quit
