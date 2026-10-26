@@ -10,7 +10,7 @@
 //!   holds: `page=inbox|projects|project|chat|review|settings|appearance|agents|servers`,
 //!   `projects=<n>`, `chats=<n>`, `sessions=<n>` (in the inbox), `waiting=<n>`
 //!   (conversations that need the person),
-//!   `agents=<n>`, `annotations=<n>` (of the review on screen),
+//!   `agents=<n>`, `tasks=<n>` (cards on every board), `annotations=<n>` (of the review on screen),
 //!   `entries=<n>` (of the conversation on screen), `busy=yes|no`,
 //!   `permissions=<n>`, `sign-in=none|choose|terminal|key|agent` (the card
 //!   for signing the agent in, and the way being tried), `dialog=open|closed`,
@@ -111,6 +111,7 @@ fn observe(what: &str, shell: &Entity<Shell>, window: &mut Window, cx: &mut App)
         }
         .to_string(),
         "agents" => shell.server.as_ref().map_or(0, |server| server.read(cx).agents.len()).to_string(),
+        "tasks" => shell.server.as_ref().map_or(0, |server| server.read(cx).tasks.values().map(Vec::len).sum::<usize>()).to_string(),
         "entries" => chat?.thread.entries.len().to_string(),
         "busy" => if chat?.busy { "yes" } else { "no" }.to_owned(),
         "permissions" => chat?.thread.permissions.len().to_string(),

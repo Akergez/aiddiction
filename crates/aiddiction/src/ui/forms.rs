@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use aiddiction_api::{Agent, AgentCommand, AgentInput, DirListing, NewProject, ProjectSource};
+use aiddiction_api::{Agent, AgentCommand, AgentInput, DirListing, NewProject, ProjectSource, Task, TaskId, TaskInput, TaskStatus};
 use aiddiction_client::ServerClient;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
@@ -400,6 +400,52 @@ impl Render for AgentForm {
                     .child(gpui_android_glue::keyboard::on_tap(Input::new(&self.command), &self.command, cx)),
             )
             .child(field().label("Environment").child(gpui_android_glue::keyboard::on_tap(Textarea::new(&self.env), &self.env, cx)))
+            .child(field().label_indent(false).child(error_line(&self.error, cx)))
+    }
+}
+
+/// A card on a project's board: its title and its text in Markdown.
+pub struct TaskForm {
+    pub id: Option<TaskId>,
+    status: Option<TaskStatus>,
+    title: Entity<InputState>,
+    markdown: Entity<TextareaState>,
+    pub error: Option<SharedString>,
+}
+
+impl TaskForm {
+    /// `status` is the column a new card goes to; an edited one stays where it is.
+    pub fn new(task: Option<&Task>, status: TaskStatus, window: &mut Window, cx: &mut App) -> Self {
+        let markdown = task.map(|task| task.markdown.clone()).unwrap_or_default();
+        let markdown = cx.new(|cx| TextareaState::new(window, cx).auto_grow(3, 10).placeholder("Details, in Markdown").default_value(markdown));
+        super::keyboard_for(&markdown, Purpose::Message, cx);
+        Self {
+            id: task.map(|task| task.id),
+            status: Some(task.map_or(status, |task| task.status)),
+            title: input_for(Purpose::Message, "What needs doing", task.map_or("", |task| task.title.as_str()), window, cx),
+            markdown,
+            error: None,
+        }
+    }
+
+    pub fn first(&self, cx: &App) -> FocusHandle {
+        self.title.read(cx).focus_handle(cx)
+    }
+
+    pub fn input(&self, cx: &App) -> Result<TaskInput, String> {
+        let title = text(&self.title, cx);
+        if title.is_empty() {
+            return Err("The task needs a title.".into());
+        }
+        Ok(TaskInput { title, markdown: self.markdown.read(cx).value().trim_end().to_owned(), status: self.status })
+    }
+}
+
+impl Render for TaskForm {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        v_form()
+            .child(field().label("Title").child(gpui_android_glue::keyboard::on_tap(Input::new(&self.title), &self.title, cx)))
+            .child(field().label("Details").child(gpui_android_glue::keyboard::on_tap(Textarea::new(&self.markdown), &self.markdown, cx)))
             .child(field().label_indent(false).child(error_line(&self.error, cx)))
     }
 }

@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use aiddiction_api::{
     Agent, AgentInput, Instance, InstanceId, NewProject, PermissionAnswer, Project, ProjectId, ServerEvent, ServerInfo, Task,
+    TaskId, TaskInput, TaskStatus,
 };
 use aiddiction_client::{Error, ServerClient};
 use gpui_kit::{App, Context};
@@ -85,7 +86,6 @@ impl ServerConnection {
                         this.refresh_projects(cx);
                         this.refresh_agents(cx);
                         this.refresh_all_instances(cx);
-                        this.refresh_all_tasks(cx);
                         this.listen(generation, cx);
                     }
                     Err(error) => this.went_offline(error, generation, cx),
@@ -186,10 +186,11 @@ impl ServerConnection {
     }
 
     pub fn refresh_projects(&mut self, cx: &mut Context<Self>) {
-        self.call(cx, |client| async move { client.projects().await }, |this, result, _| match result {
+        self.call(cx, |client| async move { client.projects().await }, |this, result, cx| match result {
             Ok(mut projects) => {
                 projects.sort_by_key(|project| std::cmp::Reverse(project.created_at_ms));
                 this.projects = projects;
+                this.refresh_all_tasks(cx);
             }
             Err(error) => tracing::warn!("could not read the projects: {error}"),
         });
@@ -247,14 +248,78 @@ impl ServerConnection {
         });
     }
 
+    /// Every known project's tasks: called once the projects are read, since
+    /// before that there is no project to ask about.
     pub fn refresh_all_tasks(&mut self, cx: &mut Context<Self>) {
         let projects = self.projects.iter().map(|p| p.id).collect::<Vec<_>>();
-        for project in projects { self.refresh_tasks(project, cx); }
+        self.tasks.retain(|project, _| projects.contains(project));
+        for project in projects {
+            self.refresh_tasks(project, cx);
+        }
     }
 
     pub fn refresh_tasks(&mut self, project: ProjectId, cx: &mut Context<Self>) {
-        self.call(cx, move |client| async move { client.tasks(project).await }, move |this, result, _| {
-            if let Ok(tasks) = result { this.tasks.insert(project, tasks); }
+        self.call(cx, move |client| async move { client.tasks(project).await }, move |this, result, _| match result {
+            Ok(mut tasks) => {
+                tasks.sort_by_key(|task| task.created_at_ms);
+                this.tasks.insert(project, tasks);
+            }
+            Err(error) => tracing::warn!("could not read the tasks: {error}"),
+        });
+    }
+
+    /// Creates a card (`id` is `None`) or replaces one's title, text and status.
+    pub fn save_task(
+        &mut self,
+        project: ProjectId,
+        id: Option<TaskId>,
+        input: TaskInput,
+        cx: &mut Context<Self>,
+        done: impl FnOnce(Result<Task, Error>, &mut App) + 'static,
+    ) {
+        self.call(
+            cx,
+            move |client| async move {
+                match id {
+                    Some(id) => client.update_task(project, id, &input).await,
+                    None => client.create_task(project, &input).await,
+                }
+            },
+            move |this, result, cx| {
+                // Shown at once; the server's `TasksChanged` brings the rest.
+                if let Ok(task) = &result {
+                    let tasks = this.tasks.entry(project).or_default();
+                    match tasks.iter_mut().find(|known| known.id == task.id) {
+                        Some(known) => *known = task.clone(),
+                        None => tasks.push(task.clone()),
+                    }
+                }
+                // After this update, so `done` may update this entity again.
+                cx.defer(move |cx| done(result, cx));
+            },
+        );
+    }
+
+    /// Moves a card to another column.
+    pub fn move_task(&mut self, task: &Task, status: TaskStatus, cx: &mut Context<Self>) {
+        let input = TaskInput { title: task.title.clone(), markdown: task.markdown.clone(), status: Some(status) };
+        self.save_task(task.project_id, Some(task.id), input, cx, |result, cx| {
+            if let Err(error) = result {
+                crate::ui::toast_error(format!("Could not move the task: {error}"), cx);
+            }
+        });
+    }
+
+    pub fn delete_task(&mut self, project: ProjectId, id: TaskId, cx: &mut Context<Self>) {
+        self.call(cx, move |client| async move { client.delete_task(project, id).await }, move |this, result, cx| {
+            match result {
+                Ok(()) => {
+                    if let Some(tasks) = this.tasks.get_mut(&project) {
+                        tasks.retain(|task| task.id != id);
+                    }
+                }
+                Err(error) => crate::ui::toast_error(format!("Could not delete the task: {error}"), cx),
+            }
         });
     }
 

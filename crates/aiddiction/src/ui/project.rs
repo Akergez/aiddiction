@@ -1,17 +1,18 @@
 //! A project's page: where it came from, the agents running in it, and its
 //! conversations. New conversations and the review start here too.
 
-use aiddiction_api::{InstanceState, ProjectId, ProjectState, TaskStatus};
+use aiddiction_api::{InstanceState, ProjectId, ProjectState, Task, TaskStatus};
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{ActiveTheme, IconName, WindowExt, h_flex, v_flex};
 use gpui_kit::component::{Sizable as _, StyledExt as _};
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, AppContext, Context, ElementId, SharedString, Window, div};
+use gpui_kit::{AnyElement, AppContext, Context, ElementId, Entity, SharedString, Window, div};
 
-use super::forms::{ProjectForm, open_form};
+use super::forms::{ProjectForm, TaskForm, open_form};
 use super::shell::{Page, Shell};
+use crate::server::ServerConnection;
 
 impl Shell {
     pub(super) fn render_project(&mut self, id: ProjectId, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -159,15 +160,7 @@ impl Shell {
                 }
 
                 let listed: Vec<_> = self.listed(cx).into_iter().filter(|item| item.project.id == id).collect();
-                let mut board = h_flex().gap_3().w_full().overflow_x_scrollbar();
-                for (status, label) in [(TaskStatus::Todo, "Todo"), (TaskStatus::InProgress, "In progress"), (TaskStatus::Done, "Done")] {
-                    let mut column = v_flex().gap_2().p_3().min_w(gpui_kit::rems(16.)).flex_1().rounded(theme.radius).bg(theme.muted).child(div().font_semibold().child(label));
-                    for task in tasks.iter().filter(|task| task.status == status) {
-                        column = column.child(v_flex().gap_1().p_3().rounded(theme.radius).bg(theme.background).child(div().font_semibold().child(task.title.clone())).child(div().text_sm().text_color(theme.muted_foreground).child(task.markdown.clone())));
-                    }
-                    board = board.child(column);
-                }
-                page = page.child(v_flex().gap_2().child(section("Tasks", cx)).child(board));
+                page = page.child(v_flex().gap_2().child(section("Tasks", cx)).child(self.render_board(&server, id, &tasks, cx)));
                 let mut conversations = v_flex().gap_0p5().child(div().mb_2().child(section("Conversations", cx)));
                 if listed.is_empty() {
                     conversations = conversations.child(
@@ -190,6 +183,108 @@ impl Shell {
             .overflow_y_scroll()
             .child(h_flex().w_full().justify_center().px_6().py_6().child(page))
             .into_any_element()
+    }
+
+    /// The project's cards in three columns. Each column adds a card of its
+    /// own; a card opens for editing, moves left or right, or goes away.
+    fn render_board(&mut self, server: &Entity<ServerConnection>, project: ProjectId, tasks: &[Task], cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let theme = cx.theme().clone();
+        let mut board = h_flex().id("board").gap_3().w_full().items_start().overflow_x_scrollbar();
+        for (index, (status, label)) in COLUMNS.into_iter().enumerate() {
+            let header = h_flex()
+                .justify_between()
+                .child(div().font_semibold().child(label))
+                .child(
+                    Button::new(ElementId::Name(format!("new-task-{index}").into()))
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::Plus)
+                        .tooltip("New task")
+                        .on_click(cx.listener(move |this, _, window, cx| this.edit_task(project, None, status, window, cx))),
+                );
+            let mut column =
+                v_flex().gap_2().p_3().min_w(gpui_kit::rems(12.)).flex_1().rounded(theme.radius).bg(theme.muted).child(header);
+            for task in tasks.iter().filter(|task| task.status == status) {
+                let move_to = |step: isize| COLUMNS.get(index.wrapping_add_signed(step)).map(|(status, _)| *status);
+                let mut buttons = h_flex().gap_0p5().justify_end();
+                for (step, icon, tip) in [(-1, IconName::ChevronLeft, "Move left"), (1, IconName::ChevronRight, "Move right")] {
+                    if let Some(to) = move_to(step) {
+                        let (task, server) = (task.clone(), server.clone());
+                        buttons = buttons.child(
+                            Button::new(ElementId::Name(format!("task-{}-{step}", task.id).into()))
+                                .ghost()
+                                .xsmall()
+                                .icon(icon)
+                                .tooltip(tip)
+                                .on_click(move |_, _, cx| {
+                                    cx.stop_propagation();
+                                    server.update(cx, |server, cx| server.move_task(&task, to, cx));
+                                }),
+                        );
+                    }
+                }
+                let (deleted, server) = (task.id, server.clone());
+                buttons = buttons.child(
+                    Button::new(ElementId::Name(format!("task-{}-delete", task.id).into()))
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::Delete)
+                        .tooltip("Delete task")
+                        .on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            server.update(cx, |server, cx| server.delete_task(project, deleted, cx));
+                        }),
+                );
+                let edited = task.clone();
+                column = column.child(
+                    v_flex()
+                        .id(ElementId::Name(format!("task-{}", task.id).into()))
+                        .gap_1()
+                        .p_3()
+                        .rounded(theme.radius)
+                        .bg(theme.background)
+                        .cursor_pointer()
+                        .hover(|style| style.bg(theme.accent))
+                        .child(div().font_semibold().child(task.title.clone()))
+                        .when(!task.markdown.is_empty(), |card| {
+                            card.child(div().text_sm().text_color(theme.muted_foreground).line_clamp(4).child(task.markdown.clone()))
+                        })
+                        .child(buttons)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.edit_task(project, Some(edited.clone()), edited.status, window, cx)
+                        })),
+                );
+            }
+            board = board.child(column);
+        }
+        board
+    }
+
+    /// The dialog for a new card in `status`'s column, or for `task`.
+    fn edit_task(&mut self, project: ProjectId, task: Option<Task>, status: TaskStatus, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(server) = self.server.clone() else { return };
+        let form = cx.new(|cx| TaskForm::new(task.as_ref(), status, window, cx));
+        let first = form.read(cx).first(cx);
+        let (title, commit) = if task.is_some() { ("Edit task", "Save") } else { ("New task", "Create") };
+        open_form(title, commit, form, Some(first), move |form, _, cx| {
+            let input = match form.input(cx) {
+                Ok(input) => input,
+                Err(error) => {
+                    form.error = Some(error.into());
+                    cx.notify();
+                    return false;
+                }
+            };
+            let id = form.id;
+            server.update(cx, |server, cx| {
+                server.save_task(project, id, input, cx, |result, cx| {
+                    if let Err(error) = result {
+                        super::toast_error(format!("Could not save the task: {error}"), cx);
+                    }
+                })
+            });
+            true
+        }, window, cx);
     }
 
     pub(super) fn new_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -252,6 +347,8 @@ impl Shell {
         });
     }
 }
+
+const COLUMNS: [(TaskStatus, &str); 3] = [(TaskStatus::Todo, "Todo"), (TaskStatus::InProgress, "In progress"), (TaskStatus::Done, "Done")];
 
 pub fn section(title: &'static str, cx: &Context<Shell>) -> impl IntoElement {
     div().text_xs().font_semibold().text_color(cx.theme().muted_foreground).child(title)
