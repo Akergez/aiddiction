@@ -9,7 +9,8 @@
 #
 # A scenario is an AIDDICTION_SCRIPT (crates/aiddiction/src/script.rs), one step
 # a line, with `# size: 1100x760` in its header and perhaps `# env: A=1 B=2`
-# (the demo server, and so the fake agent, inherits it). Screenshots (`shot:<name>`)
+# (the demo server, and so the fake agent, inherits it; `AIDDICTION_DEMO=2`
+# makes it two servers). Screenshots (`shot:<name>`)
 # land in $UI_SHOTS (default target/ui-shots).
 #
 # In a container, the way CI would run it:
@@ -92,9 +93,10 @@ for file in "${files[@]}"; do
   $headless && swaymsg -q output HEADLESS-1 resolution "${size:-1100x760}"
 
   status=0
-  env "${extra_env[@]}" XDG_CONFIG_HOME="$home/config" XDG_CACHE_HOME="$home/cache" XDG_DATA_HOME="$home/data" \
+  # The scenario's own variables last, so they win (`AIDDICTION_DEMO=2`).
+  env XDG_CONFIG_HOME="$home/config" XDG_CACHE_HOME="$home/cache" XDG_DATA_HOME="$home/data" \
     AIDDICTION_DEMO=1 AIDDICTION_COLOR=${AIDDICTION_COLOR:-#0b57d0} AIDDICTION_SIZE="${size:-1100x760}" AIDDICTION_SCRIPT="$script" \
-    AIDDICTION_SHOT_CMD="$shot_cmd" FAKE_AGENT_DELAY_MS=${FAKE_AGENT_DELAY_MS:-20} \
+    AIDDICTION_SHOT_CMD="$shot_cmd" FAKE_AGENT_DELAY_MS=${FAKE_AGENT_DELAY_MS:-20} "${extra_env[@]}" \
     timeout "$timeout_s" "$app" >"$home/app.log" 2>&1 || status=$?
 
   if (( status == 0 )); then

@@ -1,0 +1,54 @@
+# Two servers, one inbox: a conversation started on each server's project
+# from the same dialog, and both in the same list.
+# size: 1100x760
+# env: AIDDICTION_DEMO=2
+until:page=inbox
+until:projects=1
+wait:1000
+shot:two-servers-empty
+# The inbox's new conversation: the second server's project, its fake agent.
+click:367,61
+until:dialog=open
+click:550,162
+wait:400
+shot:two-servers-projects
+type:Second
+key:enter
+wait:300
+click:550,229
+wait:400
+type:fake
+key:enter
+wait:300
+click:550,318
+type:hello from the second server
+key:enter
+until:page=chat
+until:busy=no
+# Then one on the first server's project.
+click:367,61
+until:dialog=open
+click:550,162
+wait:400
+type:Sample
+key:enter
+wait:300
+click:550,229
+wait:400
+type:fake
+key:enter
+wait:300
+click:550,318
+type:hello from the first server
+key:enter
+until:page=chat
+until:busy=no
+until:sessions=2
+wait:500
+shot:two-servers-inbox
+# Back to the second server's conversation: both stay open.
+click:220,245
+until:page=chat
+expect:chats=2
+expect:entries=2
+quit

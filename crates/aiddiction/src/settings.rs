@@ -22,6 +22,7 @@ pub struct ServerEntry {
 #[serde(default)]
 pub struct SettingsData {
     pub servers: Vec<ServerEntry>,
+    /// The server in use: whose projects and agents are listed.
     pub active: Option<String>,
     pub appearance: Appearance,
     /// The last journal sequence number shown of each conversation, by
@@ -51,11 +52,6 @@ pub struct Appearance {
 }
 
 impl SettingsData {
-    pub fn active_server(&self) -> Option<&ServerEntry> {
-        let id = self.active.as_deref()?;
-        self.servers.iter().find(|server| server.id == id)
-    }
-
     pub fn seen(&self, server: &str, session: &str) -> u64 {
         self.seen.get(&format!("{server}/{session}")).copied().unwrap_or(0)
     }

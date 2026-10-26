@@ -1,7 +1,12 @@
-//! The one view the window holds: which server is in use, which page is up,
-//! and the conversations that are open.
+//! The one view the window holds: the servers it is connected to, which page
+//! is up, and the conversations that are open.
 //!
-//! Three sections — the inbox (every conversation on the server), the
+//! Every server in the settings is connected at once, so the inbox has every
+//! conversation of all of them; the one "in use" is only whose projects and
+//! agents the other sections list. A project's page, its review and its
+//! conversations belong to the project's own server, whichever that is.
+//!
+//! Three sections — the inbox (every conversation on every server), the
 //! projects, the settings. On a desktop a rail picks the section, a column
 //! lists what is in it and the page is beside them; on a phone one page
 //! shows at a time, the sections are tabs along the bottom and back goes
@@ -20,11 +25,11 @@ use gpui_kit::{AnyElement, Context, Entity, EntityId, Render, SharedString, Subs
 use super::chat::ChatView;
 use crate::server::ServerConnection;
 use crate::session::AgentSession;
-use crate::settings::{ServerEntry, Settings};
+use crate::settings::Settings;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
-    /// Every conversation on the server: the home page.
+    /// Every conversation on every server: the home page.
     Inbox,
     Projects,
     Project(ProjectId),
@@ -72,6 +77,9 @@ impl Section {
 }
 
 pub struct Shell {
+    /// A connection to each server in the settings, in their order.
+    pub(crate) servers: Vec<Entity<ServerConnection>>,
+    /// The one in use: whose projects and agents are listed.
     pub(crate) server: Option<Entity<ServerConnection>>,
     pub(crate) page: Page,
     /// The pages before this one, for back.
@@ -84,7 +92,7 @@ pub struct Shell {
     /// The conversation a project's review was opened from: "Send to agent"
     /// goes there.
     pub(crate) review_from: HashMap<ProjectId, EntityId>,
-    _server_subscription: Option<Subscription>,
+    _server_subscriptions: Vec<Subscription>,
     _appearance: Vec<Subscription>,
     /// The system's back, while there is somewhere to go back to; see
     /// `render`.
@@ -110,9 +118,9 @@ impl Shell {
                 }
             }),
         ];
-        let active = Settings::get(cx).active_server().cloned();
-        let page = if active.is_some() { Page::Inbox } else { Page::Servers };
+        let page = if Settings::get(cx).servers.is_empty() { Page::Servers } else { Page::Inbox };
         let mut this = Self {
+            servers: Vec::new(),
             server: None,
             page,
             history: Vec::new(),
@@ -120,25 +128,69 @@ impl Shell {
             settings: None,
             reviews: HashMap::new(),
             review_from: HashMap::new(),
-            _server_subscription: None,
+            _server_subscriptions: Vec::new(),
             _appearance: appearance,
             back: None,
         };
-        this.use_server(active, cx);
+        this.sync_servers(cx);
         this
     }
 
-    /// Makes `entry` the server in use; the open chats belonged to the old one.
-    pub(super) fn use_server(&mut self, entry: Option<ServerEntry>, cx: &mut Context<Self>) {
-        self.chats.clear();
-        self.reviews.clear();
-        self.review_from.clear();
-        self.history.clear();
-        self.server = entry.map(|entry| cx.new(|cx| ServerConnection::new(entry, cx)));
-        self._server_subscription = self.server.as_ref().map(|server| cx.observe(server, |_, _, cx| cx.notify()));
-        if matches!(self.page, Page::Project(_) | Page::Chat(_) | Page::Review(_)) {
-            self.page = Page::Inbox;
+    /// Connects to the servers the settings list now: a known one keeps its
+    /// connection, an edited one gets a new one, and a removed one's open
+    /// conversations and reviews close with it.
+    pub(super) fn sync_servers(&mut self, cx: &mut Context<Self>) {
+        let settings = Settings::get(cx).clone();
+        let mut old = std::mem::take(&mut self.servers);
+        for entry in &settings.servers {
+            let kept = old.iter().position(|server| server.read(cx).entry == *entry).map(|index| old.remove(index));
+            self.servers.push(kept.unwrap_or_else(|| {
+                let entry = entry.clone();
+                cx.new(|cx| ServerConnection::new(entry, cx))
+            }));
         }
+        let gone: Vec<ProjectId> = old.iter().flat_map(|server| server.read(cx).projects.iter().map(|project| project.id)).collect();
+        if !gone.is_empty() {
+            self.chats.retain(|chat| !gone.contains(&chat.read(cx).project_id));
+            self.reviews.retain(|project, _| !gone.contains(project));
+            self.review_from.retain(|project, _| !gone.contains(project));
+            let open = |page: &Page, shell: &Self| match *page {
+                Page::Project(id) | Page::Review(id) => !gone.contains(&id),
+                Page::Chat(id) => shell.chat(id).is_some(),
+                _ => true,
+            };
+            let history = std::mem::take(&mut self.history);
+            self.history = history.into_iter().filter(|page| open(page, self)).collect();
+            if !open(&self.page, self) {
+                self.page = self.page.section().root();
+            }
+        }
+        self._server_subscriptions = self.servers.iter().map(|server| cx.observe(server, |_, _, cx| cx.notify())).collect();
+        self.server = settings
+            .active
+            .as_deref()
+            .and_then(|active| self.connection(active, cx))
+            .or_else(|| self.servers.first().cloned());
+        cx.notify();
+    }
+
+    /// The connection to the server with this id in the settings.
+    pub(crate) fn connection(&self, id: &str, cx: &gpui_kit::App) -> Option<Entity<ServerConnection>> {
+        self.servers.iter().find(|server| server.read(cx).entry.id == id).cloned()
+    }
+
+    /// The server a project is on; project ids are unique across servers.
+    pub(crate) fn server_of(&self, project: ProjectId, cx: &gpui_kit::App) -> Option<Entity<ServerConnection>> {
+        self.servers.iter().find(|server| server.read(cx).project(project).is_some()).cloned()
+    }
+
+    /// Makes the server with this id the one in use, and remembers it.
+    pub(super) fn use_server(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(server) = self.connection(id, cx) else { return };
+        if Settings::get(cx).active.as_deref() != Some(id) {
+            Settings::update(cx, |settings| settings.active = Some(id.to_owned()));
+        }
+        self.server = Some(server);
         cx.notify();
     }
 
@@ -158,8 +210,15 @@ impl Shell {
 
     fn show(&mut self, page: Page, cx: &mut Context<Self>) {
         self.mark_seen(cx);
-        if let (Page::Project(id), Some(server)) = (page, &self.server) {
-            server.update(cx, |server, cx| server.refresh_instances(id, cx));
+        // The projects listed beside a project's page are its server's.
+        if let Page::Project(id) | Page::Review(id) = page
+            && let Some(server) = self.server_of(id, cx)
+        {
+            let entry = server.read(cx).entry.id.clone();
+            self.use_server(&entry, cx);
+            if let Page::Project(id) = page {
+                server.update(cx, |server, cx| server.refresh_instances(id, cx));
+            }
         }
         self.page = page;
         self.mark_seen(cx);
@@ -179,8 +238,9 @@ impl Shell {
 
     /// Remembers how far the conversation on screen has been read.
     fn mark_seen(&self, cx: &mut Context<Self>) {
-        let (Page::Chat(id), Some(server)) = (self.page, &self.server) else { return };
+        let Page::Chat(id) = self.page else { return };
         let Some(chat) = self.chat(id) else { return };
+        let Some(server) = self.server_of(chat.read(cx).project_id, cx) else { return };
         let session = chat.read(cx).session.read(cx);
         let Some(session_id) = session.session_id.clone() else { return };
         let seq = session.last_seq();
@@ -234,7 +294,7 @@ impl Shell {
                 return;
             }
         }
-        let Some(client) = self.server.as_ref().and_then(|server| server.read(cx).client().cloned()) else {
+        let Some(client) = self.server_of(project.id, cx).and_then(|server| server.read(cx).client().cloned()) else {
             return;
         };
         let session = cx.new(|cx| {
@@ -266,7 +326,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(server) = self.server.clone() else { return };
+        let Some(server) = self.server_of(project, cx) else { return };
         Settings::update(cx, |settings| settings.last_agent = Some(agent.clone()));
         let this = cx.entity().downgrade();
         let window_handle = window.window_handle();
@@ -275,7 +335,7 @@ impl Shell {
                 Ok(instance) => {
                     let _ = window_handle.update(cx, |_, window, cx| {
                         let _ = this.update(cx, |shell, cx| {
-                            let project = shell.server.as_ref().and_then(|server| server.read(cx).project(project).cloned());
+                            let project = shell.server_of(project, cx).and_then(|server| server.read(cx).project(project).cloned());
                             if let Some(project) = project {
                                 shell.open_chat(&project, &instance, None, prompt, window, cx);
                             }
@@ -321,7 +381,7 @@ impl Shell {
 
     fn render_placeholder(&self, icon: IconName, text: &'static str, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
-        let text = if self.server.is_none() { "Add a server to begin." } else { text };
+        let text = if self.servers.is_empty() { "Add a server to begin." } else { text };
         v_flex()
             .size_full()
             .items_center()
@@ -339,7 +399,7 @@ impl Shell {
                     .child(gpui_kit::component::Icon::new(icon).large()),
             )
             .child(div().text_sm().child(text))
-            .when(self.server.is_some() && self.page.section() == Section::Inbox, |column| {
+            .when(!self.servers.is_empty() && self.page.section() == Section::Inbox, |column| {
                 column.child(
                     Button::new("placeholder-new")
                         .primary()
@@ -353,8 +413,12 @@ impl Shell {
 
     /// What the bar across the top says about the page. A desktop's
     /// section pages have their heading in the column: the bar names the
-    /// server instead.
+    /// server instead, or every server for the inbox, which is theirs.
     fn title(&self, phone: bool, cx: &Context<Self>) -> (SharedString, Option<SharedString>) {
+        if !phone && self.page == Page::Inbox && self.servers.len() > 1 {
+            let names = self.servers.iter().map(|server| server.read(cx).entry.name.clone()).collect::<Vec<_>>();
+            return ("All servers".into(), Some(names.join(" · ").into()));
+        }
         if !phone && self.page.is_root() {
             return match &self.server {
                 Some(server) => {
@@ -370,7 +434,7 @@ impl Shell {
             };
         }
         let project_name = |id: ProjectId| {
-            self.server.as_ref().and_then(|server| server.read(cx).project(id).map(|project| project.name.clone())).unwrap_or_default()
+            self.server_of(id, cx).and_then(|server| server.read(cx).project(id).map(|project| project.name.clone())).unwrap_or_default()
         };
         match self.page {
             Page::Inbox => ("Inbox".into(), None),
@@ -395,16 +459,17 @@ impl Shell {
     /// A conversation's title: the server's (from its first prompt, or the
     /// agent's), else the agent's name.
     fn session_title(&self, session: &AgentSession, cx: &Context<Self>) -> SharedString {
-        let known = self.server.as_ref().and_then(|server| {
-            let server = server.read(cx);
-            let id = session.session_id.as_deref()?;
-            server
-                .instances
-                .values()
-                .flatten()
-                .flat_map(|instance| &instance.sessions)
-                .find(|summary| summary.session_id == id && !summary.title.is_empty())
-                .map(|summary| summary.title.clone())
+        let known = session.session_id.as_deref().and_then(|id| {
+            self.servers.iter().find_map(|server| {
+                server
+                    .read(cx)
+                    .instances
+                    .values()
+                    .flatten()
+                    .flat_map(|instance| &instance.sessions)
+                    .find(|summary| summary.session_id == id && !summary.title.is_empty())
+                    .map(|summary| summary.title.clone())
+            })
         });
         known.unwrap_or_else(|| "New conversation".into()).into()
     }
@@ -509,7 +574,7 @@ impl Render for Shell {
         let page = self.render_page(phone, window, cx);
         let body = if phone {
             let tabs = self.page.is_root().then(|| self.render_tabs(cx));
-            let fab = (self.page == Page::Inbox && self.server.is_some()).then(|| self.render_fab(cx));
+            let fab = (self.page == Page::Inbox && !self.servers.is_empty()).then(|| self.render_fab(cx));
             v_flex()
                 .flex_1()
                 .min_h_0()

@@ -1,5 +1,5 @@
-//! Every conversation on the server in use, in the order a person wants to
-//! see them: the ones waiting on them first, then the ones at work, then what
+//! Every conversation on every server this device knows, in one list in the
+//! order a person wants to see them: the ones waiting on them first, then the ones at work, then what
 //! finished unread, then the rest. Pure, so the rules are tested here; the
 //! inbox page (`ui/inbox.rs`) only draws the result.
 
@@ -34,6 +34,8 @@ impl Group {
 /// One conversation, with what a row needs to show it.
 #[derive(Debug, Clone)]
 pub struct Listed {
+    /// The server's id in the settings.
+    pub server: String,
     pub project: Project,
     pub instance: Instance,
     pub session: SessionSummary,
@@ -46,10 +48,11 @@ impl Listed {
     }
 }
 
-/// The conversations of `instances`, grouped and newest first in each group.
-/// `seen` says how far a conversation was read; `showing` is the one on
-/// screen, which is never unread.
+/// The conversations of one server's `instances`, grouped and newest first
+/// in each group. `seen` says how far a conversation was read; `showing` is
+/// the one on screen, which is never unread.
 pub fn list(
+    server: &str,
     projects: &[Project],
     instances: &HashMap<ProjectId, Vec<Instance>>,
     seen: impl Fn(&str) -> u64,
@@ -61,6 +64,7 @@ pub fn list(
             for session in &instance.sessions {
                 let read = showing == Some(session.session_id.as_str()) || session.last_seq <= seen(&session.session_id);
                 listed.push(Listed {
+                    server: server.to_owned(),
                     project: project.clone(),
                     instance: instance.clone(),
                     session: session.clone(),
@@ -69,8 +73,20 @@ pub fn list(
             }
         }
     }
-    listed.sort_by(|a, b| a.group.cmp(&b.group).then(b.session.updated_at_ms.cmp(&a.session.updated_at_ms)));
+    sort(&mut listed);
     listed
+}
+
+/// Several servers' lists as one: what needs the person first, whichever
+/// server it is on.
+pub fn merge(lists: impl IntoIterator<Item = Vec<Listed>>) -> Vec<Listed> {
+    let mut listed: Vec<_> = lists.into_iter().flatten().collect();
+    sort(&mut listed);
+    listed
+}
+
+fn sort(listed: &mut [Listed]) {
+    listed.sort_by(|a, b| a.group.cmp(&b.group).then(b.session.updated_at_ms.cmp(&a.session.updated_at_ms)));
 }
 
 pub fn group(state: InstanceState, session: &SessionSummary, read: bool) -> Group {
@@ -175,7 +191,7 @@ mod tests {
             ]),
         ]);
         let seen = |id: &str| if id == "fresh" { 4 } else { 5 };
-        let order: Vec<_> = list(&[web, api], &instances, seen, None)
+        let order: Vec<_> = list("home", &[web, api], &instances, seen, None)
             .into_iter()
             .map(|listed| (listed.session.session_id, listed.group))
             .collect();
@@ -200,7 +216,25 @@ mod tests {
         assert_eq!(group(InstanceState::Ready, &failed, true), Group::Recent);
         let web = project("web");
         let instances = HashMap::from([(web.id, vec![instance(&web, InstanceState::Ready, vec![session("s", 1, 7)])])]);
-        assert_eq!(list(&[web], &instances, |_| 0, Some("s"))[0].group, Group::Recent);
+        assert_eq!(list("home", &[web], &instances, |_| 0, Some("s"))[0].group, Group::Recent);
+    }
+
+    #[test]
+    fn every_server_comes_in_one_list_by_what_it_needs() {
+        let (web, api) = (project("web"), project("api"));
+        let mut asking = session("asking", 1, 5);
+        asking.permissions.push(PendingPermission { request_id: json!(1), title: "Run tests".into(), options: Vec::new() });
+        let home = HashMap::from([(web.id, vec![instance(&web, InstanceState::Ready, vec![session("old", 3, 5)])])]);
+        let work = HashMap::from([(api.id, vec![instance(&api, InstanceState::Ready, vec![asking, session("new", 9, 5)])])]);
+        let order: Vec<_> = merge([
+            list("home", std::slice::from_ref(&web), &home, |_| 5, None),
+            list("work", std::slice::from_ref(&api), &work, |_| 5, None),
+        ])
+        .into_iter()
+        .map(|listed| (listed.server, listed.session.session_id))
+        .collect();
+        let pair = |server: &str, session: &str| (server.to_owned(), session.to_owned());
+        assert_eq!(order, [pair("work", "asking"), pair("work", "new"), pair("home", "old")]);
     }
 
     #[test]

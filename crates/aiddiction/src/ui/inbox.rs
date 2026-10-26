@@ -1,4 +1,4 @@
-//! The inbox — every conversation on the server, grouped by what it needs
+//! The inbox — every conversation on every server, grouped by what it needs
 //! (`crate::inbox` decides) — and the list of projects. Their rows, the
 //! projects' avatars and the status tags are shared with the project page
 //! and the bar.
@@ -16,23 +16,26 @@ use crate::inbox::{self, Group, Listed};
 use crate::settings::Settings;
 
 impl Shell {
-    /// Every conversation on the server, in the inbox's order.
+    /// Every conversation on every server, in the inbox's order.
     pub(crate) fn listed(&self, cx: &App) -> Vec<Listed> {
-        let Some(server) = &self.server else { return Vec::new() };
-        let server = server.read(cx);
         let settings = Settings::get(cx);
         let showing = self.showing_session(cx);
-        inbox::list(&server.projects, &server.instances, |session| settings.seen(&server.entry.id, session), showing.as_deref())
+        inbox::merge(self.servers.iter().map(|server| {
+            let server = server.read(cx);
+            let id = &server.entry.id;
+            inbox::list(id, &server.projects, &server.instances, |session| settings.seen(id, session), showing.as_deref())
+        }))
     }
 
     /// The inbox: a desktop's column, with its heading, or a phone's page,
     /// whose bar is the heading.
     pub(super) fn render_inbox(&mut self, heading: bool, cx: &mut Context<Self>) -> AnyElement {
         let listed = self.listed(cx);
+        let theme = cx.theme().clone();
         let mut column = v_flex().id("inbox").size_full().overflow_y_scroll().p_2().pb_24();
         column = column.when(heading, |column| column.child(column_heading(
             "Inbox",
-            self.server.is_some().then(|| {
+            (!self.servers.is_empty()).then(|| {
                 Button::new("inbox-new")
                     .ghost()
                     .small()
@@ -43,12 +46,33 @@ impl Shell {
             }),
             cx,
         )));
+        // A server that does not answer has its conversations missing here:
+        // say so rather than let them quietly vanish.
+        for server in &self.servers {
+            let server = server.read(cx);
+            if let crate::server::Status::Offline(error) = &server.status {
+                column = column.child(
+                    h_flex()
+                        .gap_1p5()
+                        .mx_1()
+                        .mb_1()
+                        .px_2()
+                        .py_1p5()
+                        .rounded(theme.radius)
+                        .bg(theme.danger.opacity(0.1))
+                        .text_xs()
+                        .text_color(theme.danger)
+                        .child(Icon::new(IconName::CircleX).xsmall())
+                        .child(div().flex_1().min_w_0().truncate().child(format!("{}: {error}", server.entry.name))),
+                );
+            }
+        }
         if listed.is_empty() {
             return column
                 .child(empty(
                     IconName::Inbox,
-                    if self.server.is_some() { "No conversations yet" } else { "No server yet" },
-                    if self.server.is_some() {
+                    if !self.servers.is_empty() { "No conversations yet" } else { "No server yet" },
+                    if !self.servers.is_empty() {
                         "Start one with an agent in any of your projects: they all come here."
                     } else {
                         "Add the server your projects live on."
@@ -85,11 +109,19 @@ impl Shell {
             Group::Unread => Some(dot(theme.primary)),
             Group::Recent | Group::Stopped => None,
         };
-        let meta: SharedString = if show_project {
-            format!("{} · {}", item.project.name, item.instance.agent_name).into()
+        let server = self.connection(&item.server, cx);
+        let mut meta = if show_project {
+            format!("{} · {}", item.project.name, item.instance.agent_name)
         } else {
-            item.instance.agent_name.clone().into()
+            item.instance.agent_name.clone()
         };
+        // With more than one server, which one it is on.
+        if show_project && self.servers.len() > 1
+            && let Some(server) = &server
+        {
+            meta = format!("{} · {meta}", server.read(cx).entry.name);
+        }
+        let meta: SharedString = meta.into();
         let time = inbox::ago(inbox::now_ms(), item.session.updated_at_ms);
         let unread = matches!(item.group, Group::Unread | Group::NeedsYou);
 
@@ -121,7 +153,7 @@ impl Shell {
         if let Some(permission) = item.session.permissions.first() {
             let mut buttons = h_flex().gap_1p5().flex_wrap();
             for option in permission.options.iter().take(3) {
-                let server = self.server.clone();
+                let server = server.clone();
                 let answer = PermissionAnswer { request_id: permission.request_id.clone(), option_id: option.id.clone() };
                 let instance = item.instance.id;
                 // Big enough for a finger: this is how a phone answers.

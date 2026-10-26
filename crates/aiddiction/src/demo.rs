@@ -1,10 +1,12 @@
 //! `AIDDICTION_DEMO=1`: a server of its own with the fake agent, and a sample
 //! git repository with uncommitted changes as its first project, so the
 //! application — the review included — can be tried (and screenshotted)
-//! without a real server.
+//! without a real server. `AIDDICTION_DEMO=2` starts a second such server
+//! too ("Second server", its project "Second repo"), for an inbox of more
+//! than one server.
 //!
-//! The server and the fake agent are looked for beside this executable
-//! (`cargo build --workspace` puts them there). Its data lives under this
+//! The servers and the fake agent are looked for beside this executable
+//! (`cargo build --workspace` puts them there). Their data lives under this
 //! installation's data directory; point `XDG_DATA_HOME` and
 //! `XDG_CONFIG_HOME` somewhere temporary to keep a demo away from real
 //! settings.
@@ -18,23 +20,57 @@ use gpui_kit::{App, Global};
 use crate::settings::{ServerEntry, Settings};
 
 const TOKEN: &str = "demo";
-/// How long the server has to start answering.
+/// How long a server has to start answering.
 const STARTUP: Duration = Duration::from_secs(10);
 
-struct DemoServer(Child);
+/// The demo servers: their id in the settings, their name, their directory
+/// under this installation's data, and their sample project's name.
+const SERVERS: [(&str, &str, &str, &str); 2] =
+    [("demo", "Demo server", "demo", "Sample repo"), ("demo-2", "Second server", "demo-2", "Second repo")];
 
-impl Global for DemoServer {}
+struct DemoServers(Vec<Child>);
+
+impl Global for DemoServers {}
 
 pub fn start_if_requested(cx: &mut App) {
-    if std::env::var_os("AIDDICTION_DEMO").is_none() {
+    let Ok(demo) = std::env::var("AIDDICTION_DEMO") else {
         return;
-    }
+    };
+    let count = if demo.trim() == "2" { 2 } else { 1 };
     let Some(dir) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(PathBuf::from)) else {
         return;
     };
-    let data = crate::paths::data_dir().join("demo");
+    cx.set_global(DemoServers(Vec::new()));
+    cx.on_app_quit(|cx| {
+        for server in &cx.global::<DemoServers>().0 {
+            // SIGTERM: the server stops its agents on the way out.
+            // SAFETY: a plain signal to a child this process started.
+            unsafe { libc::kill(server.id() as i32, libc::SIGTERM) };
+        }
+        async {}
+    })
+    .detach();
+    let mut entries = Vec::new();
+    for (id, name, data, project) in &SERVERS[..count] {
+        if let Some(url) = start(&dir, &crate::paths::data_dir().join(data), project, cx) {
+            entries.push(ServerEntry { id: (*id).into(), name: (*name).into(), url, token: TOKEN.into() });
+        }
+    }
+    // The entries are rewritten every time: the ports are new every time.
+    Settings::update(cx, |settings| {
+        settings.servers.retain(|server| SERVERS.iter().all(|(id, ..)| server.id != *id));
+        for (index, entry) in entries.into_iter().enumerate() {
+            settings.servers.insert(index, entry);
+        }
+        settings.active = Some("demo".into());
+    });
+}
+
+/// One demo server, its data in `data` and `project` made on it: its
+/// address, once it answers.
+fn start(dir: &Path, data: &Path, project: &str, cx: &mut App) -> Option<String> {
     let config = data.join("config.toml");
-    let _ = std::fs::create_dir_all(&data);
+    let _ = std::fs::create_dir_all(data);
     let agent = dir.join("aiddiction-fake-agent");
     let _ = std::fs::write(
         &config,
@@ -46,7 +82,7 @@ pub fn start_if_requested(cx: &mut App) {
         Ok(port) => port,
         Err(error) => {
             tracing::error!("no port for the demo server: {error}");
-            return;
+            return None;
         }
     };
     let url = format!("127.0.0.1:{port}");
@@ -59,7 +95,7 @@ pub fn start_if_requested(cx: &mut App) {
         .env("AIDDICTION_PROJECTS_ROOT", data.join("projects"))
         .env("AIDDICTION_TOKEN", TOKEN);
     // The kernel ends the server when this process ends, however it ends:
-    // `on_app_quit` below does not run on a crash or a kill.
+    // `on_app_quit` above does not run on a crash or a kill.
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::process::CommandExt as _;
@@ -71,46 +107,26 @@ pub fn start_if_requested(cx: &mut App) {
             });
         }
     }
-    let child = command.spawn();
-    match child {
-        Ok(child) => {
-            cx.set_global(DemoServer(child));
-            cx.on_app_quit(|cx| {
-                if let Some(server) = cx.try_global::<DemoServer>() {
-                    // SIGTERM: the server stops its agents on the way out.
-                    // SAFETY: a plain signal to the child this process started.
-                    unsafe { libc::kill(server.0.id() as i32, libc::SIGTERM) };
-                }
-                async {}
-            })
-            .detach();
-        }
+    match command.spawn() {
+        Ok(child) => cx.global_mut::<DemoServers>().0.push(child),
         Err(error) => {
             tracing::error!("could not start the demo server: {error}");
-            return;
+            return None;
         }
     }
     let client = match aiddiction_client::ServerClient::new(&url, TOKEN) {
         Ok(client) => client,
         Err(error) => {
             tracing::error!("the demo server's address: {error}");
-            return;
+            return None;
         }
     };
     if let Err(error) = wait_for(&client) {
         tracing::error!("the demo server did not start: {error}");
-    } else if let Err(error) = add_sample(&data, &client) {
+    } else if let Err(error) = add_sample(data, project, &client) {
         tracing::warn!("no sample repository: {error}");
     }
-    // The entry is rewritten every time: the port is new every time.
-    Settings::update(cx, |settings| {
-        settings.servers.retain(|server| server.id != "demo");
-        settings.servers.insert(
-            0,
-            ServerEntry { id: "demo".into(), name: "Demo server".into(), url: url.clone(), token: TOKEN.into() },
-        );
-        settings.active = Some("demo".into());
-    });
+    Some(url)
 }
 
 /// A port nothing listens on now. Another process could take it before the
@@ -136,7 +152,7 @@ fn wait_for(client: &aiddiction_client::ServerClient) -> Result<(), String> {
 /// A repository with a commit and changes on top of it — one file changed,
 /// one deleted, one new — made once and added to the demo server as a
 /// project.
-fn add_sample(data: &Path, client: &aiddiction_client::ServerClient) -> Result<(), String> {
+fn add_sample(data: &Path, name: &str, client: &aiddiction_client::ServerClient) -> Result<(), String> {
     let repo = data.join("sample-repo");
     if !repo.join(".git").exists() {
         std::fs::create_dir_all(repo.join("src")).map_err(|error| error.to_string())?;
@@ -158,7 +174,7 @@ fn add_sample(data: &Path, client: &aiddiction_client::ServerClient) -> Result<(
         if known.iter().any(|project| project.path.as_deref() == Some(repo.display().to_string().as_str())) {
             return Ok(());
         }
-        let project = aiddiction_api::NewProject { name: "Sample repo".into(), source };
+        let project = aiddiction_api::NewProject { name: name.into(), source };
         client.create_project(&project).await.map(|_| ()).map_err(|error| error.to_string())
     })
 }

@@ -30,8 +30,9 @@ AIDDICTION_DEMO=1 cargo run -p aiddiction
 
 `AIDDICTION_DEMO` starts `aiddiction-server` from beside the executable on
 127.0.0.1:7979 with token `demo` and the fake agent configured, and makes it
-the server in use. Never try things against the default directories: that is
-the person's own server list.
+the server in use; `AIDDICTION_DEMO=2` adds a second one ("Second server",
+project "Second repo") for the inbox of several servers. Never try things
+against the default directories: that is the person's own server list.
 
 A server for experiments: `AIDDICTION_LISTEN`, `AIDDICTION_DATA_DIR`,
 `AIDDICTION_PROJECTS_ROOT`, `AIDDICTION_TOKEN` override its configuration, and
@@ -180,20 +181,27 @@ registry.
   `receive`, `after`. Never touch an entity from a Tokio task.
 - `settings::Settings` (GPUI global over `settings.json`, mode 0600): servers
   and the active one.
-- `server::ServerConnection` (entity) is the one owner of the REST client and
-  the event socket. Its methods take a `done` callback; that callback runs
+- Every server in the settings is connected at once (`Shell::servers`,
+  `Shell::sync_servers` after the list changes). The inbox and the new
+  conversation dialog span all of them; the active one (`Shell::server`) is
+  only whose projects and agents the columns list. A project's page, review
+  and conversations find their server by the project (`Shell::server_of`;
+  project ids are unique across servers), and opening a project makes its
+  server the active one.
+- `server::ServerConnection` (entity) is one server's only owner of the REST
+  client and the event socket. Its methods take a `done` callback; that callback runs
   *after* the entity's update (`cx.defer`), so it may update it again.
 - `session::AgentSession` (entity) is one conversation: its own JSON-RPC over
   the ACP socket, reconnection with `afterSeq`, and the `thread::Thread`
   (pure, tested) the chat draws.
 - `ui::shell::Shell` holds the page, a history for back, and the open chats;
   pages are `impl Shell` blocks in `ui/*.rs`. Three sections: the inbox (every
-  conversation on the server, home), projects, settings (appearance, agents,
+  conversation on every server, home), projects, settings (appearance, agents,
   servers). A desktop has a rail (`ui/nav.rs`), the section's list in a
   column and the page beside it (the review takes the column's room too); a
   phone shows one page with the sections as tabs and back going where it
   came from. `crate::inbox` (pure, tested) groups the conversations — needs
-  you, working, done unread, recent, stopped — from the server's summaries
+  you, working, done unread, recent, stopped — from the servers' summaries
   and `Settings::seen` (the last sequence number shown, per conversation);
   `ui/inbox.rs` draws the rows, which answer the agent's questions in place.
   A new conversation is one dialog (`ui/new_session.rs`: searchable project

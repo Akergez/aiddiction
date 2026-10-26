@@ -1,5 +1,5 @@
 //! The servers this installation knows: add, edit, remove, and pick the one
-//! in use. Adding one checks it first, so a typo is found here and not later.
+//! in use (whose projects and agents are listed; the inbox has them all). Adding one checks it first, so a typo is found here and not later.
 
 use aiddiction_client::ServerClient;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
@@ -48,10 +48,8 @@ impl Shell {
                     )
                     .when(!active, |row| {
                         row.child(Button::new("use").small().primary().label("Use").on_click(cx.listener(move |this, _, _, cx| {
-                            let entry = use_entry.clone();
-                            Settings::update(cx, |settings| settings.active = Some(entry.id.clone()));
-                            this.use_server(Some(entry), cx);
-                            this.go_root(Page::Inbox, cx);
+                            this.use_server(&use_entry.id, cx);
+                            this.go_root(Page::Projects, cx);
                         })))
                     })
                     .when(active, |row| row.child(div().text_sm().text_color(theme.primary).child("In use")))
@@ -133,12 +131,11 @@ impl Shell {
                                 }
                             });
                             let _ = shell.update(cx, |shell, cx| {
-                                let in_use = Settings::get(cx).active.as_deref() == Some(entry.id.as_str());
-                                if in_use {
-                                    shell.use_server(Some(entry), cx);
+                                shell.sync_servers(cx);
+                                // The first server: there is an inbox to see now.
+                                if shell.servers.len() == 1 {
                                     shell.go_root(Page::Inbox, cx);
                                 }
-                                cx.notify();
                             });
                             let _ = window_handle.update(cx, |_, window, cx| window.close_dialog(cx));
                         }
@@ -176,10 +173,7 @@ impl Shell {
                             settings.active = settings.servers.first().map(|server| server.id.clone());
                         }
                     });
-                    if was_active {
-                        let next = Settings::get(cx).active_server().cloned();
-                        let _ = shell.update(cx, |shell, cx| shell.use_server(next, cx));
-                    }
+                    let _ = shell.update(cx, |shell, cx| shell.sync_servers(cx));
                     true
                 })
         });

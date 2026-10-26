@@ -17,8 +17,8 @@ use crate::server::ServerConnection;
 impl Shell {
     pub(super) fn render_project(&mut self, id: ProjectId, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
-        let Some(server) = self.server.clone() else {
-            return div().into_any_element();
+        let Some(server) = self.server_of(id, cx) else {
+            return div().p_4().text_color(theme.muted_foreground).child("This project is gone.").into_any_element();
         };
         let (project, instances, tasks) = {
             let server = server.read(cx);
@@ -262,7 +262,7 @@ impl Shell {
 
     /// The dialog for a new card in `status`'s column, or for `task`.
     fn edit_task(&mut self, project: ProjectId, task: Option<Task>, status: TaskStatus, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(server) = self.server.clone() else { return };
+        let Some(server) = self.server_of(project, cx) else { return };
         let form = cx.new(|cx| TaskForm::new(task.as_ref(), status, window, cx));
         let first = form.read(cx).first(cx);
         let (title, commit) = if task.is_some() { ("Edit task", "Save") } else { ("New task", "Create") };
@@ -319,7 +319,7 @@ impl Shell {
     }
 
     fn delete_project(&mut self, id: ProjectId, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(server) = self.server.clone() else { return };
+        let Some(server) = self.server_of(id, cx) else { return };
         let shell = cx.entity().downgrade();
         let (name, adopted) = server
             .read(cx)

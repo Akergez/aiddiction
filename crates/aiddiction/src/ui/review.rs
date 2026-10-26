@@ -14,11 +14,11 @@ use super::shell::{Page, Shell};
 use crate::review::ServerBackend;
 
 impl Shell {
-    /// The project's review, made on first use and kept while the server
-    /// is, so annotations survive going elsewhere and back.
+    /// The project's review, made on first use and kept while its server
+    /// is known, so annotations survive going elsewhere and back.
     pub(super) fn open_review(&mut self, project: ProjectId, window: &mut Window, cx: &mut Context<Self>) {
         if !self.reviews.contains_key(&project) {
-            let Some(client) = self.server.as_ref().and_then(|server| server.read(cx).client().cloned()) else { return };
+            let Some(client) = self.server_of(project, cx).and_then(|server| server.read(cx).client().cloned()) else { return };
             let backend = Rc::new(ServerBackend::new(client, project));
             let options = ReviewOptions { submit_label: "Send to agent".into(), discard_label: None };
             let view = cx.new(|cx| ReviewView::new(backend, DiffRequest::default(), options, window, cx));
