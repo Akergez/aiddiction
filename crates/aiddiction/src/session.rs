@@ -41,7 +41,10 @@ pub struct RpcError {
 
 impl RpcError {
     fn local(message: impl Into<String>) -> Self {
-        Self { code: 0, message: message.into() }
+        Self {
+            code: 0,
+            message: message.into(),
+        }
     }
 
     fn auth_required(&self) -> bool {
@@ -93,7 +96,8 @@ pub struct SignInPage {
     opened: bool,
 }
 
-type Callback = Box<dyn FnOnce(&mut AgentSession, Result<Value, RpcError>, &mut Context<AgentSession>)>;
+type Callback =
+    Box<dyn FnOnce(&mut AgentSession, Result<Value, RpcError>, &mut Context<AgentSession>)>;
 
 pub struct AgentSession {
     client: ServerClient,
@@ -173,42 +177,47 @@ impl AgentSession {
         let client = self.client.clone();
         let instance = self.instance_id;
         let this = cx.entity().downgrade();
-        runtime::spawn(async move { client.acp(instance).await }, move |result, cx| {
-            let _ = this.update(cx, |session, cx| {
-                if session.connection != connection {
-                    return;
-                }
-                match result {
-                    Ok(socket) => {
-                        session.out = Some(socket.outgoing);
-                        let lines = this.clone();
-                        let closed = this.clone();
-                        runtime::receive(
-                            socket.incoming,
-                            move |line, cx| {
-                                lines
-                                    .update(cx, |session, cx| {
-                                        if session.connection != connection {
-                                            return false;
-                                        }
-                                        session.on_line(&line, cx);
-                                        true
-                                    })
-                                    .unwrap_or(false)
-                            },
-                            move |cx| {
-                                let _ = closed.update(cx, |session, cx| session.on_closed(connection, cx));
-                            },
-                        );
-                        session.initialize(cx);
+        runtime::spawn(
+            async move { client.acp(instance).await },
+            move |result, cx| {
+                let _ = this.update(cx, |session, cx| {
+                    if session.connection != connection {
+                        return;
                     }
-                    Err(error) => {
-                        session.out = None;
-                        session.lost(error.to_string(), cx);
+                    match result {
+                        Ok(socket) => {
+                            session.out = Some(socket.outgoing);
+                            let lines = this.clone();
+                            let closed = this.clone();
+                            runtime::receive(
+                                socket.incoming,
+                                move |line, cx| {
+                                    lines
+                                        .update(cx, |session, cx| {
+                                            if session.connection != connection {
+                                                return false;
+                                            }
+                                            session.on_line(&line, cx);
+                                            true
+                                        })
+                                        .unwrap_or(false)
+                                },
+                                move |cx| {
+                                    let _ = closed.update(cx, |session, cx| {
+                                        session.on_closed(connection, cx)
+                                    });
+                                },
+                            );
+                            session.initialize(cx);
+                        }
+                        Err(error) => {
+                            session.out = None;
+                            session.lost(error.to_string(), cx);
+                        }
                     }
-                }
-            });
-        });
+                });
+            },
+        );
     }
 
     fn initialize(&mut self, cx: &mut Context<Self>) {
@@ -217,35 +226,50 @@ impl AgentSession {
             "clientCapabilities": { "fs": { "readTextFile": false, "writeTextFile": false }, "terminal": false },
             "clientInfo": { "name": "aiddiction", "version": env!("CARGO_PKG_VERSION") },
         });
-        self.request("initialize", params, cx, |session, result, cx| match result {
-            Ok(result) => {
-                session.load_session = result.pointer("/agentCapabilities/loadSession").and_then(Value::as_bool).unwrap_or(false);
-                session.sign_in.methods = login::methods(&result);
-                session.open(cx);
-            }
-            Err(error) => session.close(format!("The agent did not start: {error}"), cx),
-        });
+        self.request(
+            "initialize",
+            params,
+            cx,
+            |session, result, cx| match result {
+                Ok(result) => {
+                    session.load_session = result
+                        .pointer("/agentCapabilities/loadSession")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    session.sign_in.methods = login::methods(&result);
+                    session.open(cx);
+                }
+                Err(error) => session.close(format!("The agent did not start: {error}"), cx),
+            },
+        );
     }
 
     /// A new session, or the one this view had: attached, else loaded.
     fn open(&mut self, cx: &mut Context<Self>) {
         let Some(session_id) = self.session_id.clone() else {
-            self.request("session/new", json!({ "cwd": ".", "mcpServers": [] }), cx, |session, result, cx| {
-                match result {
+            self.request(
+                "session/new",
+                json!({ "cwd": ".", "mcpServers": [] }),
+                cx,
+                |session, result, cx| match result {
                     Ok(result) => {
                         session.session_id = result["sessionId"].as_str().map(str::to_owned);
                         session.thread.set_modes(&result);
                         session.ready(cx);
                     }
                     Err(error) if error.auth_required() => session.needs_sign_in(cx),
-                    Err(error) => session.close(format!("Could not start a conversation: {error}"), cx),
-                }
-            });
+                    Err(error) => {
+                        session.close(format!("Could not start a conversation: {error}"), cx)
+                    }
+                },
+            );
             return;
         };
         let params = json!({ "sessionId": session_id, "afterSeq": self.last_seq });
         self.request(ext::ATTACH, params, cx, move |session, result, cx| {
-            let attach = result.ok().and_then(|result| serde_json::from_value::<AttachResult>(result).ok());
+            let attach = result
+                .ok()
+                .and_then(|result| serde_json::from_value::<AttachResult>(result).ok());
             match attach {
                 Some(attach) if attach.known => {
                     if attach.truncated {
@@ -259,14 +283,20 @@ impl AgentSession {
                     session.thread.clear();
                     session.last_seq = 0;
                     let params = json!({ "sessionId": session_id, "cwd": ".", "mcpServers": [] });
-                    session.request("session/load", params, cx, |session, result, cx| match result {
-                        Ok(result) => {
-                            session.thread.set_modes(&result);
-                            session.ready(cx);
-                        }
-                        Err(error) if error.auth_required() => session.needs_sign_in(cx),
-                        Err(error) => session.close(format!("Could not reopen the conversation: {error}"), cx),
-                    });
+                    session.request(
+                        "session/load",
+                        params,
+                        cx,
+                        |session, result, cx| match result {
+                            Ok(result) => {
+                                session.thread.set_modes(&result);
+                                session.ready(cx);
+                            }
+                            Err(error) if error.auth_required() => session.needs_sign_in(cx),
+                            Err(error) => session
+                                .close(format!("Could not reopen the conversation: {error}"), cx),
+                        },
+                    );
                 }
                 _ => session.close("The agent no longer has this conversation.".into(), cx),
             }
@@ -314,7 +344,8 @@ impl AgentSession {
         }
         self.phase = Phase::Reconnecting(reason);
         cx.notify();
-        let delay = Duration::from_millis(500 * 2u64.pow(self.retries.min(5))).min(Duration::from_secs(15));
+        let delay =
+            Duration::from_millis(500 * 2u64.pow(self.retries.min(5))).min(Duration::from_secs(15));
         self.retries += 1;
         let client = self.client.clone();
         let instance = self.instance_id;
@@ -327,12 +358,20 @@ impl AgentSession {
             },
             move |result, cx| {
                 let _ = this.update(cx, |session, cx| {
-                    if session.connection != connection || matches!(session.phase, Phase::Closed(_)) {
+                    if session.connection != connection || matches!(session.phase, Phase::Closed(_))
+                    {
                         return;
                     }
                     match result {
-                        Ok(instance) if matches!(instance.state, InstanceState::Exited | InstanceState::Failed) => {
-                            let mut reason = instance.message.unwrap_or_else(|| "The agent stopped.".into());
+                        Ok(instance)
+                            if matches!(
+                                instance.state,
+                                InstanceState::Exited | InstanceState::Failed
+                            ) =>
+                        {
+                            let mut reason = instance
+                                .message
+                                .unwrap_or_else(|| "The agent stopped.".into());
                             if let Some(last) = instance.stderr_tail.last() {
                                 reason = format!("{reason}\n{last}");
                             }
@@ -372,16 +411,23 @@ impl AgentSession {
     }
 
     fn on_line(&mut self, line: &str, cx: &mut Context<Self>) {
-        let Ok(message) = serde_json::from_str::<Value>(line) else { return };
+        let Ok(message) = serde_json::from_str::<Value>(line) else {
+            return;
+        };
         let method = message["method"].as_str();
         let id = message.get("id").filter(|id| !id.is_null());
         match (method, id) {
             (None, Some(id)) => {
-                let Some(callback) = id.as_u64().and_then(|id| self.pending.remove(&id)) else { return };
+                let Some(callback) = id.as_u64().and_then(|id| self.pending.remove(&id)) else {
+                    return;
+                };
                 let result = match message.get("error") {
                     Some(error) => Err(RpcError {
                         code: error["code"].as_i64().unwrap_or_default(),
-                        message: error["message"].as_str().unwrap_or("the agent refused").to_owned(),
+                        message: error["message"]
+                            .as_str()
+                            .unwrap_or("the agent refused")
+                            .to_owned(),
                     }),
                     None => Ok(message.get("result").cloned().unwrap_or(Value::Null)),
                 };
@@ -421,7 +467,9 @@ impl AgentSession {
                 return;
             }
             "elicitation/complete" => {
-                if self.sign_in.page.as_ref().is_some_and(|page| page.elicitation_id.as_deref() == params["elicitationId"].as_str()) {
+                if self.sign_in.page.as_ref().is_some_and(|page| {
+                    page.elicitation_id.as_deref() == params["elicitationId"].as_str()
+                }) {
                     self.sign_in.page = None;
                 }
                 return;
@@ -432,7 +480,10 @@ impl AgentSession {
             return;
         }
         // Something the server replays twice is applied once.
-        if let Some(seq) = params.pointer(&format!("/_meta/{}", ext::SEQ_META)).and_then(Value::as_u64) {
+        if let Some(seq) = params
+            .pointer(&format!("/_meta/{}", ext::SEQ_META))
+            .and_then(Value::as_u64)
+        {
             if seq <= self.last_seq {
                 return;
             }
@@ -454,12 +505,15 @@ impl AgentSession {
     }
 
     pub fn prompt(&mut self, text: String, cx: &mut Context<Self>) {
-        let Some(session_id) = self.session_id.clone() else { return };
+        let Some(session_id) = self.session_id.clone() else {
+            return;
+        };
         if !self.is_ready() || self.busy || text.trim().is_empty() {
             return;
         }
         self.busy = true;
-        let params = json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": text }] });
+        let params =
+            json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": text }] });
         self.request("session/prompt", params, cx, |session, result, cx| {
             session.busy = false;
             match result {
@@ -477,7 +531,9 @@ impl AgentSession {
     }
 
     pub fn cancel(&mut self, cx: &mut Context<Self>) {
-        let Some(session_id) = self.session_id.clone() else { return };
+        let Some(session_id) = self.session_id.clone() else {
+            return;
+        };
         self.send(json!({ "jsonrpc": "2.0", "method": "session/cancel", "params": { "sessionId": session_id } }));
         // Questions the agent is waiting on are answered "cancelled", as the
         // protocol asks of a client that cancels.
@@ -487,7 +543,12 @@ impl AgentSession {
         cx.notify();
     }
 
-    pub fn answer_permission(&mut self, request_id: Value, option_id: String, cx: &mut Context<Self>) {
+    pub fn answer_permission(
+        &mut self,
+        request_id: Value,
+        option_id: String,
+        cx: &mut Context<Self>,
+    ) {
         let outcome = json!({ "outcome": "selected", "optionId": option_id });
         self.send(json!({ "jsonrpc": "2.0", "id": request_id, "result": { "outcome": outcome } }));
         self.thread.remove_permission(&request_id);
@@ -495,16 +556,47 @@ impl AgentSession {
     }
 
     pub fn set_mode(&mut self, mode_id: String, cx: &mut Context<Self>) {
-        let Some(session_id) = self.session_id.clone() else { return };
+        let Some(session_id) = self.session_id.clone() else {
+            return;
+        };
         let params = json!({ "sessionId": session_id, "modeId": mode_id });
         let chosen = mode_id.clone();
-        self.request("session/set_mode", params, cx, move |session, result, cx| {
-            match result {
-                Ok(_) => session.thread.current_mode = Some(chosen),
-                Err(error) => session.thread.notice(format!("Could not change the mode: {error}"), true),
-            }
-            cx.notify();
-        });
+        self.request(
+            "session/set_mode",
+            params,
+            cx,
+            move |session, result, cx| {
+                match result {
+                    Ok(_) => session.thread.current_mode = Some(chosen),
+                    Err(error) => session
+                        .thread
+                        .notice(format!("Could not change the mode: {error}"), true),
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    pub fn set_config_option(&mut self, config_id: String, value: String, cx: &mut Context<Self>) {
+        let Some(session_id) = self.session_id.clone() else {
+            return;
+        };
+        let params =
+            json!({ "sessionId": session_id, "configId": config_id, "type": "id", "value": value });
+        self.request(
+            "session/set_config_option",
+            params,
+            cx,
+            |session, result, cx| {
+                match result {
+                    Ok(result) => session.thread.set_config_options(&result["configOptions"]),
+                    Err(error) => session
+                        .thread
+                        .notice(format!("Could not change the setting: {error}"), true),
+                }
+                cx.notify();
+            },
+        );
     }
 
     /// Starts signing the agent in one of the ways it offers. An API key is
@@ -522,11 +614,16 @@ impl AgentSession {
     }
 
     pub fn submit_key(&mut self, key: &str, cx: &mut Context<Self>) {
-        let Some(method) = self.sign_in.method.clone() else { return };
+        let Some(method) = self.sign_in.method.clone() else {
+            return;
+        };
         if key.trim().is_empty() || self.sign_in.busy {
             return;
         }
-        self.authenticate(json!({ "methodId": method.id, "_meta": { "api-key": { "apiKey": key.trim() } } }), cx);
+        self.authenticate(
+            json!({ "methodId": method.id, "_meta": { "api-key": { "apiKey": key.trim() } } }),
+            cx,
+        );
     }
 
     fn authenticate(&mut self, params: Value, cx: &mut Context<Self>) {
@@ -535,7 +632,9 @@ impl AgentSession {
             session.sign_in.busy = false;
             session.sign_in.page = None;
             // Cancelled by the person: nothing to say.
-            let Some(method) = session.sign_in.method.clone() else { return };
+            let Some(method) = session.sign_in.method.clone() else {
+                return;
+            };
             match result {
                 Ok(_) => session.signed_in(cx),
                 Err(error) => {
@@ -554,17 +653,25 @@ impl AgentSession {
         let client = self.client.clone();
         let instance = self.instance_id;
         let this = cx.entity().downgrade();
-        runtime::spawn(async move { client.start_login(instance, &method_id).await }, move |result, cx| {
-            let _ = this.update(cx, |session, cx| {
-                session.sign_in.busy = false;
-                session.terminal_read(result, cx);
-            });
-        });
+        runtime::spawn(
+            async move { client.start_login(instance, &method_id).await },
+            move |result, cx| {
+                let _ = this.update(cx, |session, cx| {
+                    session.sign_in.busy = false;
+                    session.terminal_read(result, cx);
+                });
+            },
+        );
     }
 
     /// What the terminal sign-in says now: read again while it runs.
     fn terminal_read(&mut self, result: aiddiction_client::Result<Login>, cx: &mut Context<Self>) {
-        if self.sign_in.method.as_ref().is_none_or(|method| method.kind != MethodKind::Terminal) {
+        if self
+            .sign_in
+            .method
+            .as_ref()
+            .is_none_or(|method| method.kind != MethodKind::Terminal)
+        {
             return;
         }
         match result {
@@ -591,8 +698,15 @@ impl AgentSession {
             }
             Ok(login) if login.success == Some(true) => self.signed_in(cx),
             Ok(login) => {
-                let last = login.output.lines().rev().find(|line| !line.trim().is_empty()).map(str::trim).map(str::to_owned);
-                self.sign_in.error = Some(last.unwrap_or_else(|| "The sign-in did not succeed.".into()));
+                let last = login
+                    .output
+                    .lines()
+                    .rev()
+                    .find(|line| !line.trim().is_empty())
+                    .map(str::trim)
+                    .map(str::to_owned);
+                self.sign_in.error =
+                    Some(last.unwrap_or_else(|| "The sign-in did not succeed.".into()));
                 self.sign_in.method = None;
                 self.sign_in.terminal = None;
             }
@@ -614,14 +728,17 @@ impl AgentSession {
         let client = self.client.clone();
         let instance = self.instance_id;
         let this = cx.entity().downgrade();
-        runtime::spawn(async move { client.login_input(instance, &text).await }, move |result, cx| {
-            if let Err(error) = result {
-                let _ = this.update(cx, |session, cx| {
-                    session.sign_in.error = Some(error.to_string());
-                    cx.notify();
-                });
-            }
-        });
+        runtime::spawn(
+            async move { client.login_input(instance, &text).await },
+            move |result, cx| {
+                if let Err(error) = result {
+                    let _ = this.update(cx, |session, cx| {
+                        session.sign_in.error = Some(error.to_string());
+                        cx.notify();
+                    });
+                }
+            },
+        );
     }
 
     /// The page the agent asks to open, told that the person went there.
@@ -637,7 +754,9 @@ impl AgentSession {
     }
 
     pub fn cancel_sign_in(&mut self, cx: &mut Context<Self>) {
-        let Some(method) = self.sign_in.method.take() else { return };
+        let Some(method) = self.sign_in.method.take() else {
+            return;
+        };
         self.sign_in.busy = false;
         self.sign_in.terminal = None;
         self.sign_in.error = None;
@@ -654,12 +773,18 @@ impl AgentSession {
 
     fn signed_in(&mut self, cx: &mut Context<Self>) {
         let refused = self.sign_in.refused;
-        self.sign_in = SignIn { methods: std::mem::take(&mut self.sign_in.methods), ..SignIn::default() };
+        self.sign_in = SignIn {
+            methods: std::mem::take(&mut self.sign_in.methods),
+            ..SignIn::default()
+        };
         if self.phase == Phase::SignIn {
             self.phase = Phase::Connecting;
             self.open(cx);
         } else if refused {
-            self.thread.notice(format!("Signed in to {}. Send the message again.", self.agent_name), false);
+            self.thread.notice(
+                format!("Signed in to {}. Send the message again.", self.agent_name),
+                false,
+            );
         }
         cx.notify();
     }
