@@ -1,7 +1,7 @@
 //! A project's page: where it came from, the agents running in it, and its
 //! conversations. New conversations and the review start here too.
 
-use aiddiction_api::{InstanceState, ProjectId, ProjectState};
+use aiddiction_api::{InstanceState, ProjectId, ProjectState, TaskStatus};
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme, IconName, WindowExt, h_flex, v_flex};
@@ -18,12 +18,12 @@ impl Shell {
         let Some(server) = self.server.clone() else {
             return div().into_any_element();
         };
-        let (project, instances) = {
+        let (project, instances, tasks) = {
             let server = server.read(cx);
             let Some(project) = server.project(id).cloned() else {
                 return div().p_4().text_color(theme.muted_foreground).child("This project is gone.").into_any_element();
             };
-            (project, server.instances.get(&id).cloned().unwrap_or_default())
+            (project, server.instances.get(&id).cloned().unwrap_or_default(), server.tasks.get(&id).cloned().unwrap_or_default())
         };
         let ready = project.state == ProjectState::Ready;
 
@@ -158,6 +158,15 @@ impl Shell {
                 }
 
                 let listed: Vec<_> = self.listed(cx).into_iter().filter(|item| item.project.id == id).collect();
+                let mut board = h_flex().gap_3().w_full().overflow_x_scroll();
+                for (status, label) in [(TaskStatus::Todo, "Todo"), (TaskStatus::InProgress, "In progress"), (TaskStatus::Done, "Done")] {
+                    let mut column = v_flex().gap_2().p_3().min_w(gpui_kit::rems(16.)).flex_1().rounded(theme.radius).bg(theme.muted).child(div().font_semibold().child(label));
+                    for task in tasks.iter().filter(|task| task.status == status) {
+                        column = column.child(v_flex().gap_1().p_3().rounded(theme.radius).bg(theme.background).child(div().font_semibold().child(task.title.clone())).child(div().text_sm().text_color(theme.muted_foreground).child(task.markdown.clone())));
+                    }
+                    board = board.child(column);
+                }
+                page = page.child(v_flex().gap_2().child(section("Tasks", cx)).child(board));
                 let mut conversations = v_flex().gap_0p5().child(div().mb_2().child(section("Conversations", cx)));
                 if listed.is_empty() {
                     conversations = conversations.child(

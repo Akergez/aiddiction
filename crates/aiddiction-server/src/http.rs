@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use aiddiction_api::{
     API_VERSION, AgentInput, ApiError, ErrorBody, Health, InstanceId, InstanceState, LoginInput, NewProject,
-    PermissionAnswer, ProjectId, ProjectState, ServerEvent, ServerInfo, StartInstance, StartLogin,
+    PermissionAnswer, ProjectId, ProjectState, ServerEvent, ServerInfo, StartInstance, StartLogin, TaskId, TaskInput,
 };
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, Request, State};
@@ -15,6 +15,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use futures::{SinkExt as _, StreamExt as _};
 use serde::Deserialize;
+use serde_json::{json, Value};
 use tokio::sync::broadcast;
 
 use crate::agents::{Catalog, CatalogError};
@@ -48,6 +49,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/projects/{id}/review/refs", get(review_refs))
         .route("/projects/{id}", axum::routing::patch(rename_project).delete(delete_project))
         .route("/projects/{id}/instances", get(list_instances).post(start_instance))
+        .route("/projects/{id}/tasks", get(list_tasks).post(create_task))
+        .route("/projects/{id}/tasks/{task_id}", axum::routing::patch(update_task).delete(delete_task))
         .route("/instances", get(list_all_instances))
         .route("/instances/{id}", get(get_instance).delete(stop_instance))
         .route("/instances/{id}/permission", axum::routing::post(answer_permission))
@@ -55,6 +58,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/instances/{id}/login/input", axum::routing::post(login_input))
         .route("/instances/{id}/acp", get(acp_socket))
         .route("/events", get(event_socket))
+        .route("/mcp", axum::routing::post(mcp))
         .layer(middleware::from_fn_with_state(state.clone(), authorize));
     Router::new()
         .route("/api/v1/health", get(health))
@@ -168,6 +172,39 @@ async fn list_projects(State(state): Shared) -> impl IntoResponse {
 async fn create_project(State(state): Shared, Json(input): Json<NewProject>) -> Result<impl IntoResponse> {
     let project = state.projects.create(input)?;
     Ok((StatusCode::CREATED, Json(project)))
+}
+
+async fn list_tasks(State(state): Shared, Path(id): Path<ProjectId>) -> Result<impl IntoResponse> { Ok(Json(state.projects.tasks(id)?)) }
+async fn create_task(State(state): Shared, Path(id): Path<ProjectId>, Json(input): Json<TaskInput>) -> Result<impl IntoResponse> { Ok((StatusCode::CREATED, Json(state.projects.create_task(id, input)?))) }
+async fn update_task(State(state): Shared, Path((id, task_id)): Path<(ProjectId, TaskId)>, Json(input): Json<TaskInput>) -> Result<impl IntoResponse> { Ok(Json(state.projects.update_task(id, task_id, input)?)) }
+async fn delete_task(State(state): Shared, Path((id, task_id)): Path<(ProjectId, TaskId)>) -> Result<impl IntoResponse> { state.projects.delete_task(id, task_id)?; Ok(StatusCode::NO_CONTENT) }
+
+/// Small HTTP MCP endpoint used by agents. It intentionally exposes the same
+/// task store as the UI, so an agent can create, edit and move cards.
+async fn mcp(State(state): Shared, Json(request): Json<Value>) -> Result<impl IntoResponse> {
+    let id = request.get("id").cloned().unwrap_or(Value::Null);
+    let method = request.get("method").and_then(Value::as_str).unwrap_or("");
+    let params = request.get("params").cloned().unwrap_or_else(|| json!({}));
+    let result = match method {
+        "initialize" => json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"aiddiction","version":env!("CARGO_PKG_VERSION")}}),
+        "tools/list" => json!({"tools":[
+            {"name":"list_tasks","description":"List project task cards","inputSchema":{"type":"object","required":["projectId"],"properties":{"projectId":{"type":"string"}}}},
+            {"name":"create_task","description":"Create a markdown task card","inputSchema":{"type":"object","required":["projectId","title"],"properties":{"projectId":{"type":"string"},"title":{"type":"string"},"markdown":{"type":"string"},"status":{"type":"string"}}}},
+            {"name":"update_task","description":"Edit or move a task card","inputSchema":{"type":"object","required":["projectId","taskId"],"properties":{"projectId":{"type":"string"},"taskId":{"type":"string"},"title":{"type":"string"},"markdown":{"type":"string"},"status":{"type":"string"}}}}
+        ]}),
+        "tools/call" => {
+            let name = params.get("name").and_then(Value::as_str).unwrap_or(""); let a = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+            let project = a.get("projectId").and_then(Value::as_str).and_then(|s| s.parse().ok()).ok_or_else(|| Failure(StatusCode::BAD_REQUEST,"invalid","projectId is required".into()))?;
+            let text = match name {
+                "list_tasks" => serde_json::to_string(&state.projects.tasks(project)?).unwrap(),
+                "create_task" => serde_json::to_string(&state.projects.create_task(project, serde_json::from_value(a).map_err(|e| Failure(StatusCode::BAD_REQUEST,"invalid",e.to_string()))?)?).unwrap(),
+                "update_task" => { let task = a.get("taskId").and_then(Value::as_str).and_then(|s| s.parse().ok()).ok_or_else(|| Failure(StatusCode::BAD_REQUEST,"invalid","taskId is required".into()))?; serde_json::to_string(&state.projects.update_task(project, task, serde_json::from_value(a).map_err(|e| Failure(StatusCode::BAD_REQUEST,"invalid",e.to_string()))?)?).unwrap() },
+                _ => return Ok(Json(json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"unknown tool"}}))),
+            }; json!({"content":[{"type":"text","text":text}]})
+        }
+        _ => return Ok(Json(json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"method not found"}}))),
+    };
+    Ok(Json(json!({"jsonrpc":"2.0","id":id,"result":result})))
 }
 
 /// git in the project's folder, through the review model's own `LocalRepo`

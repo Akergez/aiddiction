@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use aiddiction_api::{
-    Agent, AgentInput, Instance, InstanceId, NewProject, PermissionAnswer, Project, ProjectId, ServerEvent, ServerInfo,
+    Agent, AgentInput, Instance, InstanceId, NewProject, PermissionAnswer, Project, ProjectId, ServerEvent, ServerInfo, Task,
 };
 use aiddiction_client::{Error, ServerClient};
 use gpui_kit::{App, Context};
@@ -31,6 +31,7 @@ pub struct ServerConnection {
     pub projects: Vec<Project>,
     pub agents: Vec<Agent>,
     pub instances: HashMap<ProjectId, Vec<Instance>>,
+    pub tasks: HashMap<ProjectId, Vec<Task>>,
     /// Bumped on every (re)connection, so a stale event loop stops.
     generation: u64,
 }
@@ -49,6 +50,7 @@ impl ServerConnection {
             projects: Vec::new(),
             agents: Vec::new(),
             instances: HashMap::new(),
+            tasks: HashMap::new(),
             generation: 0,
         };
         this.connect(cx);
@@ -83,6 +85,7 @@ impl ServerConnection {
                         this.refresh_projects(cx);
                         this.refresh_agents(cx);
                         this.refresh_all_instances(cx);
+                        this.refresh_all_tasks(cx);
                         this.listen(generation, cx);
                     }
                     Err(error) => this.went_offline(error, generation, cx),
@@ -155,6 +158,7 @@ impl ServerConnection {
             }
             ServerEvent::AgentsChanged => self.refresh_agents(cx),
             ServerEvent::InstancesChanged { project_id } => self.refresh_instances(project_id, cx),
+            ServerEvent::TasksChanged { project_id } => self.refresh_tasks(project_id, cx),
         }
     }
 
@@ -240,6 +244,17 @@ impl ServerConnection {
                 }
                 Err(error) => tracing::warn!("could not read the instances: {error}"),
             }
+        });
+    }
+
+    pub fn refresh_all_tasks(&mut self, cx: &mut Context<Self>) {
+        let projects = self.projects.iter().map(|p| p.id).collect::<Vec<_>>();
+        for project in projects { self.refresh_tasks(project, cx); }
+    }
+
+    pub fn refresh_tasks(&mut self, project: ProjectId, cx: &mut Context<Self>) {
+        self.call(cx, move |client| async move { client.tasks(project).await }, move |this, result, _| {
+            if let Ok(tasks) = result { this.tasks.insert(project, tasks); }
         });
     }
 

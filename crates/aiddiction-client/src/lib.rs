@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use aiddiction_api::{
     Agent, AgentInput, DirListing, ErrorBody, Health, Instance, InstanceId, Login, LoginInput, NewProject, PermissionAnswer, Project,
-    ProjectId, ServerEvent, ServerInfo, StartInstance, StartLogin,
+    ProjectId, ServerEvent, ServerInfo, StartInstance, StartLogin, Task, TaskId, TaskInput,
 };
 use futures::{SinkExt as _, StreamExt as _};
 use reqwest::{Method, StatusCode};
@@ -143,6 +143,10 @@ impl ServerClient {
     pub async fn create_project(&self, input: &NewProject) -> Result<Project> {
         self.call(Method::POST, "/projects", Some(serde_json::to_value(input).unwrap())).await
     }
+    pub async fn tasks(&self, project: ProjectId) -> Result<Vec<Task>> { self.call(Method::GET, &format!("/projects/{project}/tasks"), None).await }
+    pub async fn create_task(&self, project: ProjectId, input: &TaskInput) -> Result<Task> { self.call(Method::POST, &format!("/projects/{project}/tasks"), Some(serde_json::to_value(input).unwrap())).await }
+    pub async fn update_task(&self, project: ProjectId, id: TaskId, input: &TaskInput) -> Result<Task> { self.call(Method::PATCH, &format!("/projects/{project}/tasks/{id}"), Some(serde_json::to_value(input).unwrap())).await }
+    pub async fn delete_task(&self, project: ProjectId, id: TaskId) -> Result<()> { self.call(Method::DELETE, &format!("/projects/{project}/tasks/{id}"), None).await }
 
     /// The unified diff of a project, as `request` asks for it.
     pub async fn review_diff(&self, project: ProjectId, request: &diffreview::DiffRequest) -> Result<String> {

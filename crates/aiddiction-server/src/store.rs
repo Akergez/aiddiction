@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use aiddiction_api::{Agent, Project};
+use aiddiction_api::{Agent, Project, Task};
 use anyhow::Context as _;
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -33,6 +33,9 @@ impl Store {
     pub fn save_custom_agents(&self, agents: &[Agent]) -> anyhow::Result<()> {
         self.write("agents.json", agents)
     }
+
+    pub fn tasks(&self) -> anyhow::Result<Vec<Task>> { self.read("tasks.json") }
+    pub fn save_tasks(&self, tasks: &[Task]) -> anyhow::Result<()> { self.write("tasks.json", tasks) }
 
     /// The access token: the one stored here, or a new one stored now.
     pub fn token(&self) -> anyhow::Result<(String, bool)> {

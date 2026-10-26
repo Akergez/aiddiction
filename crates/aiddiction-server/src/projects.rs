@@ -5,7 +5,7 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use aiddiction_api::{DirEntry, DirListing, NewProject, Project, ProjectId, ProjectSource, ProjectState, ServerEvent};
+use aiddiction_api::{DirEntry, DirListing, NewProject, Project, ProjectId, ProjectSource, ProjectState, ServerEvent, Task, TaskId, TaskInput, TaskStatus};
 use anyhow::Context as _;
 use tokio::io::AsyncReadExt as _;
 use tokio::process::Command;
@@ -64,6 +64,37 @@ impl Projects {
 
     pub fn get(&self, id: ProjectId) -> Option<Project> {
         self.list.lock().unwrap().iter().find(|project| project.id == id).cloned()
+    }
+
+    pub fn tasks(&self, project: ProjectId) -> Result<Vec<Task>, ProjectError> {
+        self.get(project).ok_or(ProjectError::NotFound)?;
+        Ok(self.store.tasks()?.into_iter().filter(|task| task.project_id == project).collect())
+    }
+
+    pub fn create_task(&self, project: ProjectId, input: TaskInput) -> Result<Task, ProjectError> {
+        self.get(project).ok_or(ProjectError::NotFound)?;
+        let title = input.title.trim();
+        if title.is_empty() { return Err(ProjectError::Invalid("the task needs a title".into())); }
+        let now = now_ms();
+        let task = Task { id: uuid::Uuid::now_v7(), project_id: project, title: title.into(), markdown: input.markdown, status: input.status.unwrap_or(TaskStatus::Todo), created_at_ms: now, updated_at_ms: now };
+        let mut tasks = self.store.tasks()?; tasks.push(task.clone()); self.store.save_tasks(&tasks)?;
+        let _ = self.events.send(ServerEvent::TasksChanged { project_id: project });
+        Ok(task)
+    }
+
+    pub fn update_task(&self, project: ProjectId, id: TaskId, input: TaskInput) -> Result<Task, ProjectError> {
+        self.get(project).ok_or(ProjectError::NotFound)?;
+        let mut tasks = self.store.tasks()?;
+        let task = tasks.iter_mut().find(|task| task.id == id && task.project_id == project).ok_or(ProjectError::NotFound)?;
+        if input.title.trim().is_empty() { return Err(ProjectError::Invalid("the task needs a title".into())); }
+        task.title = input.title.trim().into(); task.markdown = input.markdown; if let Some(status) = input.status { task.status = status; } task.updated_at_ms = now_ms();
+        let updated = task.clone(); self.store.save_tasks(&tasks)?; let _ = self.events.send(ServerEvent::TasksChanged { project_id: project }); Ok(updated)
+    }
+
+    pub fn delete_task(&self, project: ProjectId, id: TaskId) -> Result<(), ProjectError> {
+        self.get(project).ok_or(ProjectError::NotFound)?;
+        let mut tasks = self.store.tasks()?; let before = tasks.len(); tasks.retain(|task| !(task.id == id && task.project_id == project));
+        if tasks.len() == before { return Err(ProjectError::NotFound); } self.store.save_tasks(&tasks)?; let _ = self.events.send(ServerEvent::TasksChanged { project_id: project }); Ok(())
     }
 
     pub fn dir(&self, project: &Project) -> PathBuf {

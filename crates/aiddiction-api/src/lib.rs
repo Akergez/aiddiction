@@ -37,6 +37,7 @@ pub mod ext {
 
 pub type ProjectId = Uuid;
 pub type InstanceId = Uuid;
+pub type TaskId = Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -178,6 +179,33 @@ pub struct NewProject {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub enum TaskStatus { Todo, InProgress, Done }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Task {
+    pub id: TaskId,
+    pub project_id: ProjectId,
+    pub title: String,
+    #[serde(default)]
+    pub markdown: String,
+    pub status: TaskStatus,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskInput {
+    pub title: String,
+    #[serde(default)]
+    pub markdown: String,
+    #[serde(default)]
+    pub status: Option<TaskStatus>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum InstanceState {
     Starting,
     Ready,
@@ -300,6 +328,7 @@ pub enum ServerEvent {
     ProjectsChanged,
     AgentsChanged,
     InstancesChanged { project_id: ProjectId },
+    TasksChanged { project_id: ProjectId },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
