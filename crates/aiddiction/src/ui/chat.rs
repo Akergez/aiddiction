@@ -598,7 +598,7 @@ impl ChatView {
         )
     }
 
-    fn render_commands(&self, cx: &App) -> Option<AnyElement> {
+    fn render_commands(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let typed = self.composer.read(cx).value();
         let prefix = typed.strip_prefix('/')?;
         if prefix.contains(char::is_whitespace) {
@@ -620,8 +620,16 @@ impl ChatView {
         }
         let mut column = v_flex().px_3().py_2().gap_0p5().border_b_1().border_color(theme.border);
         for command in commands {
+            let value = format!("/{} ", command.name);
+            let composer = self.composer.clone();
             column = column.child(
                 h_flex()
+                    .id(ElementId::Name(format!("command-{}", command.name).into()))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |_, _, window, cx| {
+                        composer.update(cx, |input, cx| input.set_value(value.clone(), window, cx));
+                        composer.read(cx).focus_handle(cx).focus(window, cx);
+                    }))
                     .gap_2()
                     .text_sm()
                     .child(div().font_family(theme.mono_font_family.clone()).child(format!("/{}", command.name)))
@@ -702,7 +710,7 @@ impl Render for ChatView {
             .bg(theme.background)
             .overflow_hidden()
             .children(self.render_plan(cx))
-            .children(self.render_commands(cx))
+            .children(self.render_commands(window, cx))
             .child(
                 div()
                     .px_1()
