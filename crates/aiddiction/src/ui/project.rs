@@ -4,6 +4,7 @@
 use aiddiction_api::{InstanceState, ProjectId, ProjectState, TaskStatus};
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{ActiveTheme, IconName, WindowExt, h_flex, v_flex};
 use gpui_kit::component::{Sizable as _, StyledExt as _};
 use gpui_kit::prelude::*;
@@ -158,7 +159,7 @@ impl Shell {
                 }
 
                 let listed: Vec<_> = self.listed(cx).into_iter().filter(|item| item.project.id == id).collect();
-                let mut board = h_flex().gap_3().w_full().overflow_x_scroll();
+                let mut board = h_flex().gap_3().w_full().overflow_x_scrollbar();
                 for (status, label) in [(TaskStatus::Todo, "Todo"), (TaskStatus::InProgress, "In progress"), (TaskStatus::Done, "Done")] {
                     let mut column = v_flex().gap_2().p_3().min_w(gpui_kit::rems(16.)).flex_1().rounded(theme.radius).bg(theme.muted).child(div().font_semibold().child(label));
                     for task in tasks.iter().filter(|task| task.status == status) {

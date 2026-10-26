@@ -598,7 +598,7 @@ impl ChatView {
         )
     }
 
-    fn render_commands(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn render_commands(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let typed = self.composer.read(cx).value();
         let prefix = typed.strip_prefix('/')?;
         if prefix.contains(char::is_whitespace) {
@@ -710,7 +710,7 @@ impl Render for ChatView {
             .bg(theme.background)
             .overflow_hidden()
             .children(self.render_plan(cx))
-            .children(self.render_commands(window, cx))
+            .children(self.render_commands(cx))
             .child(
                 div()
                     .px_1()
