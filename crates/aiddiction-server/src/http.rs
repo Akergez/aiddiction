@@ -15,7 +15,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use futures::{SinkExt as _, StreamExt as _};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 use tokio::sync::broadcast;
 
 use crate::agents::{Catalog, CatalogError};
@@ -179,32 +179,13 @@ async fn create_task(State(state): Shared, Path(id): Path<ProjectId>, Json(input
 async fn update_task(State(state): Shared, Path((id, task_id)): Path<(ProjectId, TaskId)>, Json(input): Json<TaskInput>) -> Result<impl IntoResponse> { Ok(Json(state.projects.update_task(id, task_id, input)?)) }
 async fn delete_task(State(state): Shared, Path((id, task_id)): Path<(ProjectId, TaskId)>) -> Result<impl IntoResponse> { state.projects.delete_task(id, task_id)?; Ok(StatusCode::NO_CONTENT) }
 
-/// Small HTTP MCP endpoint used by agents. It intentionally exposes the same
-/// task store as the UI, so an agent can create, edit and move cards.
-async fn mcp(State(state): Shared, Json(request): Json<Value>) -> Result<impl IntoResponse> {
-    let id = request.get("id").cloned().unwrap_or(Value::Null);
-    let method = request.get("method").and_then(Value::as_str).unwrap_or("");
-    let params = request.get("params").cloned().unwrap_or_else(|| json!({}));
-    let result = match method {
-        "initialize" => json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"aiddiction","version":env!("CARGO_PKG_VERSION")}}),
-        "tools/list" => json!({"tools":[
-            {"name":"list_tasks","description":"List project task cards","inputSchema":{"type":"object","required":["projectId"],"properties":{"projectId":{"type":"string"}}}},
-            {"name":"create_task","description":"Create a markdown task card","inputSchema":{"type":"object","required":["projectId","title"],"properties":{"projectId":{"type":"string"},"title":{"type":"string"},"markdown":{"type":"string"},"status":{"type":"string"}}}},
-            {"name":"update_task","description":"Edit or move a task card","inputSchema":{"type":"object","required":["projectId","taskId"],"properties":{"projectId":{"type":"string"},"taskId":{"type":"string"},"title":{"type":"string"},"markdown":{"type":"string"},"status":{"type":"string"}}}}
-        ]}),
-        "tools/call" => {
-            let name = params.get("name").and_then(Value::as_str).unwrap_or(""); let a = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
-            let project = a.get("projectId").and_then(Value::as_str).and_then(|s| s.parse().ok()).ok_or_else(|| Failure(StatusCode::BAD_REQUEST,"invalid","projectId is required".into()))?;
-            let text = match name {
-                "list_tasks" => serde_json::to_string(&state.projects.tasks(project)?).unwrap(),
-                "create_task" => serde_json::to_string(&state.projects.create_task(project, serde_json::from_value(a).map_err(|e| Failure(StatusCode::BAD_REQUEST,"invalid",e.to_string()))?)?).unwrap(),
-                "update_task" => { let task = a.get("taskId").and_then(Value::as_str).and_then(|s| s.parse().ok()).ok_or_else(|| Failure(StatusCode::BAD_REQUEST,"invalid","taskId is required".into()))?; serde_json::to_string(&state.projects.update_task(project, task, serde_json::from_value(a).map_err(|e| Failure(StatusCode::BAD_REQUEST,"invalid",e.to_string()))?)?).unwrap() },
-                _ => return Ok(Json(json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"unknown tool"}}))),
-            }; json!({"content":[{"type":"text","text":text}]})
-        }
-        _ => return Ok(Json(json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"method not found"}}))),
-    };
-    Ok(Json(json!({"jsonrpc":"2.0","id":id,"result":result})))
+/// The MCP server agents use (`crate::mcp`): a notification is taken with
+/// 202 and no body, as Streamable HTTP wants.
+async fn mcp(State(state): Shared, Json(message): Json<Value>) -> Response {
+    match crate::mcp::handle(&state.projects, &message) {
+        Some(answer) => Json(answer).into_response(),
+        None => StatusCode::ACCEPTED.into_response(),
+    }
 }
 
 /// git in the project's folder, through the review model's own `LocalRepo`

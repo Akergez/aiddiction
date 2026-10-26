@@ -14,6 +14,7 @@ mod http;
 mod install;
 mod instances;
 mod login;
+mod mcp;
 mod projects;
 mod proxy;
 mod store;
