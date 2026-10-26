@@ -94,8 +94,8 @@ and linker (host clang + the NDK's sysroot + rust-lld).
 | Crate | Role |
 |---|---|
 | `aiddiction-paths` | Where both programs keep files: an XDG variable if set, else the platform's standard directory. |
-| `aiddiction-api` | REST/event DTOs and the names of the proxy's ACP extensions (`_aiddiction/attach`, `_aiddiction/prompt_finished`, `_aiddiction/request_resolved`, `_meta.aiddictionSeq`). No Tokio, no UI. `SessionSummary` carries what a list of conversations shows: busy, the agent's open questions, a preview, the last sequence number. |
-| `aiddiction-server` | The server: `config`, `store` (JSON files), `agents` (catalogue), `projects` (dirs, git clone), `instances` (agent processes), `proxy` (ACP), `http` (routes). |
+| `aiddiction-api` | REST/event DTOs and the names of the proxy's ACP extensions (`_aiddiction/attach`, `_aiddiction/prompt_finished`, `_aiddiction/request_resolved`, `_meta.aiddictionSeq`) and of the adapters' `_auth/status_update`. No Tokio, no UI. `SessionSummary` carries what a list of conversations shows: busy, the agent's open questions, a preview, the last sequence number. |
+| `aiddiction-server` | The server: `config`, `store` (JSON files), `agents` (catalogue), `projects` (dirs, git clone), `instances` (agent processes), `login` (an agent's terminal sign-in), `proxy` (ACP), `http` (routes). |
 | `aiddiction-client` | REST + event socket + ACP socket on Tokio. No UI, and it must stay that way. |
 | `aiddiction` | The application: a library (Android loads it) and a thin `main.rs`. |
 | `aiddiction-fake-agent` | A scripted ACP agent (stdio) for tests and the demo. |
@@ -126,6 +126,22 @@ gives every project's instances with them, and `POST
 /instances/{id}/permission` answers an agent's question with no conversation
 open, settling it for every client like a client's answer would. Whatever a
 list shows that changes fires `InstancesChanged`.
+
+### Signing an agent in
+
+The server's `initialize` declares `auth.terminal` and `elicitation.url`,
+so the adapters offer every way they have. Codex signs in over ACP:
+`authenticate`, and its device-code page comes as `elicitation/create`,
+which the proxy sends only to the client whose `authenticate` it names
+(`requestId`). Claude Code offers only `terminal` methods — a command line
+for the client to run — and ACP has no request for that, so the server runs
+it with pipes (`login.rs`, `/instances/{id}/login`): the chat shows its
+output and passes the code back. The proxy keeps the last
+`_auth/status_update` for clients that come later. In the client, an
+"authentication required" (-32000) or a signed-out status brings up the
+card in `ui/chat.rs` (`session::SignIn`, `crate::login`). The fake agent
+needs signing in with `FAKE_AGENT_SIGN_IN=<file>`; scenarios set it with
+`# env:`.
 
 ### Review
 

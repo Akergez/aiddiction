@@ -1,14 +1,15 @@
 //! A conversation with an agent: the thread, the agent's questions, and the
 //! composer with the plan and the agent's mode on it. Tool calls in a row are
 //! one line that unfolds, so a long turn reads as what was said, not as a
-//! wall of steps.
+//! wall of steps. An agent that is not signed in gets a card for signing it
+//! in where its questions go.
 
 use std::collections::HashSet;
 
 use aiddiction_api::ProjectId;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
-use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
+use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::TextView;
@@ -21,6 +22,7 @@ use gpui_kit::{
     Render, SharedString, Subscription, Window, div, list, px, rems,
 };
 
+use crate::login::MethodKind;
 use crate::session::{AgentSession, Phase};
 use crate::thread::{Entry, ToolCall, ToolContent, ToolStatus};
 
@@ -36,6 +38,10 @@ pub struct ChatView {
     pub session: Entity<AgentSession>,
     pub project_id: ProjectId,
     composer: Entity<TextareaState>,
+    /// The API key a sign-in asks for.
+    key_input: Entity<InputState>,
+    /// The code a sign-in page gave.
+    code_input: Entity<InputState>,
     list: ListState,
     /// Entries whose thoughts or tool output are unfolded (a run of tool
     /// calls by its first).
@@ -54,6 +60,10 @@ impl ChatView {
                 .placeholder("Ask the agent…")
         });
         super::keyboard_for(&composer, gpui_android_glue::keyboard::Purpose::Message, cx);
+        let key_input = cx.new(|cx| InputState::new(window, cx).placeholder("API key"));
+        super::keyboard_for(&key_input, gpui_android_glue::keyboard::Purpose::Password, cx);
+        let code_input = cx.new(|cx| InputState::new(window, cx).placeholder("The code the page gives"));
+        super::keyboard_for(&code_input, gpui_android_glue::keyboard::Purpose::Plain, cx);
         let list = ListState::new(0, ListAlignment::Bottom, px(400.));
         list.set_follow_mode(FollowMode::Tail);
 
@@ -73,8 +83,18 @@ impl ChatView {
                     this.send(window, cx);
                 }
             }),
+            cx.subscribe_in(&key_input, window, |this, _, event: &InputEvent, window, cx| {
+                if let InputEvent::PressEnter { .. } = event {
+                    this.submit_sign_in(window, cx);
+                }
+            }),
+            cx.subscribe_in(&code_input, window, |this, _, event: &InputEvent, window, cx| {
+                if let InputEvent::PressEnter { .. } = event {
+                    this.submit_sign_in(window, cx);
+                }
+            }),
         ];
-        Self { session, project_id, composer, list, open: HashSet::new(), plan_open: false, subscriptions }
+        Self { session, project_id, composer, key_input, code_input, list, open: HashSet::new(), plan_open: false, subscriptions }
     }
 
     /// Where typing goes: the composer.
@@ -99,6 +119,25 @@ impl ChatView {
         self.session.update(cx, |session, cx| session.prompt(text, cx));
         self.composer.update(cx, |composer, cx| composer.set_value("", window, cx));
         self.list.scroll_to_end();
+    }
+
+    /// The key or the code typed into the sign-in card.
+    fn submit_sign_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let kind = self.session.read(cx).sign_in.method.as_ref().map(|method| method.kind.clone());
+        let input = match kind {
+            Some(MethodKind::ApiKey) => self.key_input.clone(),
+            Some(MethodKind::Terminal) => self.code_input.clone(),
+            _ => return,
+        };
+        let text = input.read(cx).value().to_string();
+        if text.trim().is_empty() {
+            return;
+        }
+        self.session.update(cx, |session, cx| match kind {
+            Some(MethodKind::ApiKey) => session.submit_key(&text, cx),
+            _ => session.type_into_sign_in(&text, cx),
+        });
+        input.update(cx, |input, cx| input.set_value("", window, cx));
     }
 
     fn toggle(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -361,12 +400,146 @@ impl ChatView {
         Some(column.into_any_element())
     }
 
+    /// Signing the agent in: its ways, then whatever the one picked needs —
+    /// a key, a page to open, what the sign-in on the server says and the
+    /// code it asks for.
+    fn render_sign_in(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let theme = cx.theme().clone();
+        let session = self.session.read(cx);
+        let sign_in = &session.sign_in;
+        if !sign_in.shown(&session.phase) {
+            return None;
+        }
+        let mut card = v_flex()
+            .gap_3()
+            .p_3()
+            .rounded(theme.radius * 2.)
+            .border_1()
+            .border_color(theme.primary)
+            .bg(theme.primary.opacity(0.06))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .font_semibold()
+                    .child(Icon::new(IconName::User).small().text_color(theme.primary))
+                    .child(div().flex_1().min_w_0().child(format!("Sign in to {}", session.agent_name))),
+            );
+        if session.has_queued() {
+            card = card.child(div().text_sm().text_color(theme.muted_foreground).child("Your message goes once it is signed in."));
+        }
+        if let Some(error) = &sign_in.error {
+            card = card.child(div().text_sm().text_color(theme.danger).child(error.clone()));
+        }
+        let cancel = Button::new("sign-in-cancel")
+            .small()
+            .outline()
+            .label("Cancel")
+            .on_click(cx.listener(|this, _, _, cx| this.session.update(cx, |session, cx| session.cancel_sign_in(cx))));
+        let input_row = |state: &Entity<InputState>, masked: bool, cx: &mut Context<Self>| {
+            let mut input = Input::new(state);
+            if masked {
+                input = input.mask_toggle();
+            }
+            h_flex()
+                .gap_2()
+                .child(div().flex_1().min_w_0().child(gpui_android_glue::keyboard::on_tap(input, state, cx)))
+                .child(Button::new("sign-in-submit").small().primary().label("Send").on_click(cx.listener(|this, _, window, cx| this.submit_sign_in(window, cx))))
+        };
+
+        let Some(method) = sign_in.method.clone() else {
+            if sign_in.methods.is_empty() {
+                return Some(
+                    card.child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child("The agent offers no way to sign in from here. Sign it in on the server, then retry."),
+                    )
+                    .into_any_element(),
+                );
+            }
+            let mut buttons = h_flex().gap_2().flex_wrap();
+            for (at, method) in sign_in.methods.iter().enumerate() {
+                let chosen = method.clone();
+                let mut button = Button::new(ElementId::Name(format!("sign-in-{at}").into()))
+                    .small()
+                    .label(method.name.clone())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let chosen = chosen.clone();
+                        this.session.update(cx, |session, cx| session.sign_in_with(chosen, cx));
+                    }));
+                button = if at == 0 { button.primary() } else { button.outline() };
+                if !method.description.is_empty() {
+                    button = button.tooltip(method.description.clone());
+                }
+                buttons = buttons.child(button);
+            }
+            return Some(card.child(buttons).into_any_element());
+        };
+
+        let busy = sign_in.busy;
+        let page = sign_in.page.clone();
+        let terminal = sign_in.terminal.clone();
+        let waiting = |text: String| h_flex().gap_2().text_sm().text_color(theme.muted_foreground).child(Spinner::new().small()).child(text);
+        card = match method.kind {
+            MethodKind::ApiKey => card
+                .child(input_row(&self.key_input, true, cx))
+                .when(busy, |card| card.child(waiting("Checking the key…".into()))),
+            MethodKind::Agent => match page {
+                Some(page) => card
+                    .child(div().text_sm().child(page.message.clone()))
+                    .child(div().text_xs().text_color(theme.muted_foreground).truncate().child(page.url.clone()))
+                    .child(
+                        h_flex().gap_2().child(
+                            Button::new("sign-in-open").small().primary().icon(IconName::ExternalLink).label("Open the page").on_click(cx.listener(
+                                |this, _, _, cx| {
+                                    if let Some(url) = this.session.update(cx, |session, _| session.open_sign_in_page()) {
+                                        super::open_url(&url, cx);
+                                    }
+                                },
+                            )),
+                        ),
+                    ),
+                None => card.child(waiting(format!("Waiting for {}…", method.name))),
+            },
+            MethodKind::Terminal => match terminal {
+                None => card.child(waiting("Starting the sign-in on the server…".into())),
+                Some(login) => {
+                    let url = crate::login::first_url(&login.output).map(str::to_owned);
+                    card.child(
+                        div()
+                            .id("sign-in-output")
+                            .max_h(rems(10.))
+                            .overflow_y_scroll()
+                            .p_2()
+                            .rounded(theme.radius)
+                            .bg(theme.muted)
+                            .font_family(theme.mono_font_family.clone())
+                            .text_xs()
+                            .child(login.output.trim().to_owned()),
+                    )
+                    .when_some(url, |card, url| {
+                        card.child(
+                            h_flex().child(Button::new("sign-in-open").small().primary().icon(IconName::ExternalLink).label("Open the link").on_click(
+                                move |_, _, cx| super::open_url(&url, cx),
+                            )),
+                        )
+                    })
+                    .child(input_row(&self.code_input, false, cx))
+                }
+            },
+        };
+        Some(card.child(h_flex().justify_end().child(cancel)).into_any_element())
+    }
+
     fn render_status(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let theme = cx.theme().clone();
         let (text, error, can_retry): (SharedString, bool, bool) = match &self.session.read(cx).phase {
             Phase::Ready => return None,
             Phase::Connecting => ("Connecting to the agent…".into(), false, false),
             Phase::Reconnecting(reason) => (format!("{reason}; connecting again…").into(), false, true),
+            // The sign-in card says it.
+            Phase::SignIn => return None,
             Phase::Closed(reason) => (reason.clone().into(), true, true),
         };
         Some(
@@ -593,6 +766,7 @@ impl Render for ChatView {
                         .px_3()
                         .pt_1()
                         .pb(px(10.) + bottom)
+                        .children(self.render_sign_in(cx))
                         .children(self.render_permissions(cx))
                         .child(composer),
                 ),

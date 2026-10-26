@@ -1,6 +1,7 @@
 //! The server binary, the fake agent, and the client crate, together: a
 //! project is made, a custom agent is added and started in it, a prompt that
 //! writes a file is allowed, and a second connection replays the session.
+//! And an agent that wants signing in is signed in both ways a client can.
 
 use std::path::PathBuf;
 use std::process::{Child, Command};
@@ -182,4 +183,80 @@ async fn a_custom_agent_writes_a_file_and_the_session_replays() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     panic!("the agent did not stop");
+}
+
+/// An agent that refuses sessions until it is signed in: once through the
+/// server's terminal sign-in, once through `authenticate` and its page.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agent_is_signed_in_in_a_terminal_and_with_a_page() {
+    aiddiction_client::install_crypto_provider();
+    let server = start_server().await;
+    let client = ServerClient::new(&server.url, "secret").unwrap();
+    let marker = tempfile::tempdir().unwrap();
+    let signed_in = marker.path().join("signed-in");
+    let env = [("FAKE_AGENT_SIGN_IN".to_owned(), signed_in.display().to_string())].into_iter().collect();
+    let fake = client
+        .add_agent(&AgentInput {
+            name: "Locked".into(),
+            command: AgentCommand { command: fake_agent().display().to_string(), args: vec![], env },
+        })
+        .await
+        .unwrap();
+    let project = client.create_project(&NewProject { name: "Locked".into(), source: ProjectSource::Empty }).await.unwrap();
+    let instance = client.start_instance(project.id, &fake.id).await.unwrap();
+
+    let mut acp = Acp { socket: client.acp(instance.id).await.unwrap(), next_id: 0 };
+    let init = acp.request("initialize", json!({ "protocolVersion": 1, "clientCapabilities": {} })).await;
+    let mut seen = Vec::new();
+    let answer = acp.until_response(init, &mut seen).await;
+    assert_eq!(answer["result"]["authMethods"][0]["type"], "terminal");
+    let status = acp.next().await;
+    assert_eq!(status["method"], ext::AUTH_STATUS, "a client is told the agent is signed out");
+    assert_eq!(status["params"]["authStatus"]["kind"], "none");
+
+    let new = acp.request("session/new", json!({ "cwd": ".", "mcpServers": [] })).await;
+    assert_eq!(acp.until_response(new, &mut seen).await["error"]["code"], -32000);
+
+    assert!(client.start_login(instance.id, "page").await.is_err(), "only terminal methods run on the server");
+    let login = client.start_login(instance.id, "terminal").await.unwrap();
+    assert!(login.running);
+    let mut login = login;
+    for _ in 0..100 {
+        if login.output.contains("paste the code") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        login = client.login(instance.id).await.unwrap();
+    }
+    assert!(login.output.contains("https://example.com/fake-sign-in"), "{}", login.output);
+    client.login_input(instance.id, "1234").await.unwrap();
+    for _ in 0..100 {
+        login = client.login(instance.id).await.unwrap();
+        if !login.running {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(login.success, Some(true), "{}", login.output);
+    assert_eq!(std::fs::read_to_string(&signed_in).unwrap(), "1234");
+    let new = acp.request("session/new", json!({ "cwd": ".", "mcpServers": [] })).await;
+    assert!(acp.until_response(new, &mut seen).await["result"]["sessionId"].is_string());
+
+    std::fs::remove_file(&signed_in).unwrap();
+    let authenticate = acp.request("authenticate", json!({ "methodId": "page" })).await;
+    let mut page = acp.next().await;
+    while page["method"] == "session/update" {
+        page = acp.next().await;
+    }
+    assert_eq!(page["method"], "elicitation/create");
+    assert_eq!(page["params"]["requestId"], authenticate, "the page names the client's own request");
+    acp.socket
+        .outgoing
+        .send(json!({ "jsonrpc": "2.0", "id": page["id"], "result": { "action": "accept" } }).to_string())
+        .unwrap();
+    let mut after = Vec::new();
+    let answer = acp.until_response(authenticate, &mut after).await;
+    assert!(answer.get("error").is_none(), "{answer}");
+    assert!(after.iter().any(|message| message["method"] == "elicitation/complete"));
+    assert!(signed_in.exists());
 }

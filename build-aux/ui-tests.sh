@@ -8,7 +8,8 @@
 #   build-aux/ui-tests.sh [--headless] first-chat   only these
 #
 # A scenario is an AIDDICTION_SCRIPT (crates/aiddiction/src/script.rs), one step
-# a line, with `# size: 1100x760` in its header. Screenshots (`shot:<name>`)
+# a line, with `# size: 1100x760` in its header and perhaps `# env: A=1 B=2`
+# (the demo server, and so the fake agent, inherits it). Screenshots (`shot:<name>`)
 # land in $UI_SHOTS (default target/ui-shots).
 #
 # In a container, the way CI would run it:
@@ -83,6 +84,7 @@ for file in "${files[@]}"; do
   name=$(basename -- "$file" .script)
   [[ -f $file ]] || { echo "no such scenario: $name" >&2; exit 2; }
   size=$(header "$file" size)
+  read -r -a extra_env <<< "$(header "$file" env)"
   script=$(grep -v -E '^\s*(#|$)' "$file" | paste -sd ';')
 
   home=$work/$name
@@ -90,7 +92,7 @@ for file in "${files[@]}"; do
   $headless && swaymsg -q output HEADLESS-1 resolution "${size:-1100x760}"
 
   status=0
-  env XDG_CONFIG_HOME="$home/config" XDG_CACHE_HOME="$home/cache" XDG_DATA_HOME="$home/data" \
+  env "${extra_env[@]}" XDG_CONFIG_HOME="$home/config" XDG_CACHE_HOME="$home/cache" XDG_DATA_HOME="$home/data" \
     AIDDICTION_DEMO=1 AIDDICTION_COLOR=${AIDDICTION_COLOR:-#0b57d0} AIDDICTION_SIZE="${size:-1100x760}" AIDDICTION_SCRIPT="$script" \
     AIDDICTION_SHOT_CMD="$shot_cmd" FAKE_AGENT_DELAY_MS=${FAKE_AGENT_DELAY_MS:-20} \
     timeout "$timeout_s" "$app" >"$home/app.log" 2>&1 || status=$?

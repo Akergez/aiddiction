@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aiddiction_api::{
-    Agent, AgentInput, DirListing, ErrorBody, Health, Instance, InstanceId, NewProject, PermissionAnswer, Project, ProjectId, ServerEvent,
-    ServerInfo, StartInstance,
+    Agent, AgentInput, DirListing, ErrorBody, Health, Instance, InstanceId, Login, LoginInput, NewProject, PermissionAnswer, Project,
+    ProjectId, ServerEvent, ServerInfo, StartInstance, StartLogin,
 };
 use futures::{SinkExt as _, StreamExt as _};
 use reqwest::{Method, StatusCode};
@@ -182,6 +182,26 @@ impl ServerClient {
     pub async fn answer_permission(&self, instance: InstanceId, answer: &PermissionAnswer) -> Result<()> {
         let body = serde_json::to_value(answer).unwrap();
         self.call(Method::POST, &format!("/instances/{instance}/permission"), Some(body)).await
+    }
+
+    /// Runs one of the agent's terminal sign-ins on the server.
+    pub async fn start_login(&self, instance: InstanceId, method_id: &str) -> Result<Login> {
+        let body = serde_json::to_value(StartLogin { method_id: method_id.to_owned() }).unwrap();
+        self.call(Method::POST, &format!("/instances/{instance}/login"), Some(body)).await
+    }
+
+    pub async fn login(&self, instance: InstanceId) -> Result<Login> {
+        self.call(Method::GET, &format!("/instances/{instance}/login"), None).await
+    }
+
+    /// A line for the sign-in to read: the code a sign-in page gave.
+    pub async fn login_input(&self, instance: InstanceId, text: &str) -> Result<()> {
+        let body = serde_json::to_value(LoginInput { text: text.to_owned() }).unwrap();
+        self.call(Method::POST, &format!("/instances/{instance}/login/input"), Some(body)).await
+    }
+
+    pub async fn stop_login(&self, instance: InstanceId) -> Result<()> {
+        self.call(Method::DELETE, &format!("/instances/{instance}/login"), None).await
     }
 
     pub async fn start_instance(&self, project: ProjectId, agent_id: &str) -> Result<Instance> {

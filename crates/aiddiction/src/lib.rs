@@ -8,7 +8,8 @@
 //!
 //! - [`settings`] — the servers this installation knows;
 //! - [`server`] — the server in use: projects, agents, instances;
-//! - [`session`] and [`thread`] — one conversation with an agent;
+//! - [`session`] and [`thread`] — one conversation with an agent, [`login`]
+//!   the ways of signing its agent in;
 //! - [`ui`] — the window.
 
 mod appearance;
@@ -16,6 +17,7 @@ mod appearance;
 #[cfg(all(unix, not(target_os = "android")))]
 mod demo;
 mod inbox;
+mod login;
 mod paths;
 mod review;
 mod runtime;

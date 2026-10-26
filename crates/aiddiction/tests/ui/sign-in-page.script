@@ -1,0 +1,30 @@
+# Signing an agent in with a page it shows (Codex's device code): the card
+# shows the page's message and address; cancelling goes back to the ways.
+# size: 1100x760
+# env: FAKE_AGENT_SIGN_IN=.fake-signed-in
+until:page=inbox
+until:projects=1
+wait:800
+click:748,452
+until:dialog=open
+click:550,229
+wait:400
+type:fake
+key:enter
+wait:300
+click:550,318
+type:hello
+key:enter
+until:page=chat
+until:sign-in=choose
+wait:300
+click:569,643
+until:sign-in=agent
+wait:800
+shot:sign-in-page
+click:1044,643
+until:sign-in=choose
+wait:500
+expect:sessions=0
+shot:sign-in-page-cancelled
+quit

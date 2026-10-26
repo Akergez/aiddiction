@@ -13,6 +13,7 @@ mod config;
 mod http;
 mod install;
 mod instances;
+mod login;
 mod projects;
 mod proxy;
 mod store;

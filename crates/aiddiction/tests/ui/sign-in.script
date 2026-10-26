@@ -1,0 +1,37 @@
+# An agent that is not signed in: the first message waits while the chat
+# offers the agent's ways of signing in, the terminal one runs on the server
+# and takes the code its page gives, and then the message goes.
+# size: 1100x760
+# env: FAKE_AGENT_SIGN_IN=.fake-signed-in
+until:page=inbox
+until:projects=1
+wait:800
+click:748,452
+until:dialog=open
+click:550,229
+wait:400
+type:fake
+key:enter
+wait:300
+click:550,318
+type:hello
+key:enter
+until:page=chat
+until:sign-in=choose
+wait:300
+shot:sign-in-choose
+# In a terminal: the server runs it and the card shows what it says.
+click:468,643
+until:sign-in=terminal
+wait:1500
+shot:sign-in-terminal
+# The code, then the conversation opens and the waiting message goes.
+click:700,603
+type:1234
+key:enter
+until:sign-in=none
+until:sessions=1
+until:busy=no
+wait:500
+shot:sign-in-done
+quit

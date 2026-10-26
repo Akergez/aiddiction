@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use aiddiction_api::{
-    API_VERSION, AgentInput, ApiError, ErrorBody, Health, InstanceId, InstanceState, NewProject, PermissionAnswer,
-    ProjectId, ProjectState, ServerEvent, ServerInfo, StartInstance,
+    API_VERSION, AgentInput, ApiError, ErrorBody, Health, InstanceId, InstanceState, LoginInput, NewProject,
+    PermissionAnswer, ProjectId, ProjectState, ServerEvent, ServerInfo, StartInstance, StartLogin,
 };
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, Request, State};
@@ -51,6 +51,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/instances", get(list_all_instances))
         .route("/instances/{id}", get(get_instance).delete(stop_instance))
         .route("/instances/{id}/permission", axum::routing::post(answer_permission))
+        .route("/instances/{id}/login", get(get_login).post(start_login).delete(stop_login))
+        .route("/instances/{id}/login/input", axum::routing::post(login_input))
         .route("/instances/{id}/acp", get(acp_socket))
         .route("/events", get(event_socket))
         .layer(middleware::from_fn_with_state(state.clone(), authorize));
@@ -291,6 +293,34 @@ async fn answer_permission(
     } else {
         Err(Failure(StatusCode::CONFLICT, "already_answered", "the agent is no longer asking".into()))
     }
+}
+
+/// Runs one of the agent's terminal sign-ins for a client to read and answer.
+async fn start_login(State(state): Shared, Path(id): Path<InstanceId>, Json(input): Json<StartLogin>) -> Result<impl IntoResponse> {
+    let instance = state.supervisor.get(id).ok_or_else(instance_not_found)?;
+    let login = instance.start_login(&input.method_id).map_err(|error| Failure(StatusCode::BAD_REQUEST, "login_failed", error))?;
+    Ok((StatusCode::CREATED, Json(login.info())))
+}
+
+fn no_login() -> Failure {
+    Failure(StatusCode::NOT_FOUND, "login_not_found", "no sign-in was started".into())
+}
+
+async fn get_login(State(state): Shared, Path(id): Path<InstanceId>) -> Result<impl IntoResponse> {
+    let instance = state.supervisor.get(id).ok_or_else(instance_not_found)?;
+    Ok(Json(instance.login().ok_or_else(no_login)?.info()))
+}
+
+async fn login_input(State(state): Shared, Path(id): Path<InstanceId>, Json(input): Json<LoginInput>) -> Result<impl IntoResponse> {
+    let instance = state.supervisor.get(id).ok_or_else(instance_not_found)?;
+    instance.login().ok_or_else(no_login)?.write(&input.text);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn stop_login(State(state): Shared, Path(id): Path<InstanceId>) -> Result<impl IntoResponse> {
+    let instance = state.supervisor.get(id).ok_or_else(instance_not_found)?;
+    instance.stop_login();
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Stops a running instance; one that already ended is forgotten.

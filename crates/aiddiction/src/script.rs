@@ -12,7 +12,9 @@
 //!   (conversations that need the person),
 //!   `agents=<n>`, `annotations=<n>` (of the review on screen),
 //!   `entries=<n>` (of the conversation on screen), `busy=yes|no`,
-//!   `permissions=<n>`, `dialog=open|closed`, `theme=light|dark`
+//!   `permissions=<n>`, `sign-in=none|choose|terminal|key|agent` (the card
+//!   for signing the agent in, and the way being tried), `dialog=open|closed`,
+//!   `theme=light|dark`
 //! - `until:<what>=<value>` — waits (up to 15 s) until it holds, else fails
 //! - `quit`
 
@@ -112,6 +114,19 @@ fn observe(what: &str, shell: &Entity<Shell>, window: &mut Window, cx: &mut App)
         "entries" => chat?.thread.entries.len().to_string(),
         "busy" => if chat?.busy { "yes" } else { "no" }.to_owned(),
         "permissions" => chat?.thread.permissions.len().to_string(),
+        "sign-in" => {
+            let chat = chat?;
+            match &chat.sign_in.method {
+                _ if !chat.sign_in.shown(&chat.phase) => "none",
+                None => "choose",
+                Some(method) => match method.kind {
+                    crate::login::MethodKind::Terminal => "terminal",
+                    crate::login::MethodKind::ApiKey => "key",
+                    crate::login::MethodKind::Agent => "agent",
+                },
+            }
+            .to_owned()
+        }
         "dialog" => if window.has_active_dialog(cx) { "open" } else { "closed" }.to_owned(),
         "theme" => if gpui_kit::component::ActiveTheme::theme(cx).mode.is_dark() { "dark" } else { "light" }.to_owned(),
         _ => return None,

@@ -65,6 +65,8 @@ struct State {
     /// Session ids in the order they were created, for the summary list.
     order: Vec<String>,
     init: InitState,
+    /// The agent's last `_auth/status_update`, for clients that come later.
+    auth_status: Option<String>,
     exited: Option<String>,
 }
 
@@ -193,6 +195,10 @@ impl Proxy {
             "clientCapabilities": {
                 "fs": { "readTextFile": true, "writeTextFile": true },
                 "terminal": false,
+                // A terminal sign-in is run by the server for a client
+                // (`login.rs`); a sign-in page is shown by the client.
+                "auth": { "terminal": true },
+                "elicitation": { "url": {} },
             },
             "clientInfo": { "name": "aiddiction-server", "version": env!("CARGO_PKG_VERSION") },
         });
@@ -221,6 +227,7 @@ impl Proxy {
                 Err(message) => error_response(&id, INTERNAL_ERROR, message),
             };
             state.send(conn, line);
+            state.send_auth_status(conn);
         }
         state.init = match outcome {
             Ok(result) => InitState::Done(result),
@@ -246,6 +253,20 @@ impl Proxy {
         state.owners.retain(|_, owner| *owner != conn);
         if let InitState::Waiting(waiting) = &mut state.init {
             waiting.retain(|(waiting_conn, _)| *waiting_conn != conn);
+        }
+    }
+
+    /// The agent was signed in some way the proxy did not see (a terminal
+    /// sign-in): what it said before is no longer so.
+    pub fn forget_auth_status(&self) {
+        self.state.lock().unwrap().auth_status = None;
+    }
+
+    /// The agent's answer to the server's `initialize`, once it came.
+    pub fn init_result(&self) -> Option<Value> {
+        match &self.state.lock().unwrap().init {
+            InitState::Done(result) => Some(result.clone()),
+            _ => None,
         }
     }
 
@@ -353,6 +374,7 @@ impl Proxy {
                 };
                 if let Some(line) = line {
                     state.send(conn, line);
+                    state.send_auth_status(conn);
                 }
                 return;
             }
@@ -471,13 +493,22 @@ impl Proxy {
             }
             Some(Kind::Request { id, method }) => {
                 let session = session_of(&message);
+                let key = id.to_string();
+                let method = method.to_owned();
                 let mut state = self.state.lock().unwrap();
-                state.pending_agent.insert(
-                    id.to_string(),
-                    PendingAgent { session: session.clone(), method: method.to_owned(), line: line.to_owned() },
-                );
-                for conn in state.audience(session.as_deref()) {
-                    state.send(conn, line.to_owned());
+                // A question about a request of a client (the sign-in page
+                // of an `authenticate`) goes to that client, in its ids.
+                let (audience, line) = match state.asker_of(&message) {
+                    Some((conn, client_id)) => {
+                        let mut message = message;
+                        message["params"]["requestId"] = client_id;
+                        (vec![conn], message.to_string())
+                    }
+                    None => (state.audience(session.as_deref()), line.to_owned()),
+                };
+                state.pending_agent.insert(key, PendingAgent { session, method, line: line.clone() });
+                for conn in audience {
+                    state.send(conn, line.clone());
                 }
                 drop(state);
                 (self.on_sessions_changed)();
@@ -494,6 +525,9 @@ impl Proxy {
                         }
                     }
                     None => {
+                        if method == ext::AUTH_STATUS {
+                            state.auth_status = Some(line.to_owned());
+                        }
                         for conn in state.audience(None) {
                             state.send(conn, line.to_owned());
                         }
@@ -527,6 +561,9 @@ impl Proxy {
                         state.owners.insert(new, conn);
                         sessions_changed = true;
                     }
+                if method == "authenticate" && message.get("error").is_none() {
+                    state.auth_status = None;
+                }
                 if method == "session/prompt"
                     && let Some(session) = &session {
                         let finished = PromptFinished {
@@ -567,6 +604,22 @@ impl State {
             && tx.send(line).is_err() {
                 self.conns.remove(&conn);
             }
+    }
+
+    fn send_auth_status(&mut self, conn: ConnId) {
+        if let Some(line) = self.auth_status.clone() {
+            self.send(conn, line);
+        }
+    }
+
+    /// The connection, and its own id, of the client request an agent
+    /// request names in `params.requestId`, while it is still open.
+    fn asker_of(&self, message: &Value) -> Option<(ConnId, Value)> {
+        let upstream = message.pointer("/params/requestId")?.as_u64()?;
+        match self.pending_client.get(&upstream)? {
+            PendingClient::Client { conn, id, .. } => Some((*conn, id.clone())),
+            PendingClient::Internal(_) => None,
+        }
     }
 
     /// Who hears about a session: its owner while connected, else everyone.
@@ -1009,6 +1062,37 @@ mod tests {
         h.proxy.initialized(Ok(json!({ "protocolVersion": 1, "agentInfo": { "name": "x" } })));
         let answer = json_of(a_rx.try_recv().unwrap());
         assert_eq!(answer["result"]["agentInfo"]["name"], "x");
+    }
+
+    #[test]
+    fn a_client_that_initializes_is_told_the_last_auth_status() {
+        let mut h = harness();
+        h.ready();
+        h.proxy.on_agent_line(r#"{"jsonrpc":"2.0","method":"_auth/status_update","params":{"authStatus":{"kind":"none"}}}"#);
+        let (a, mut a_rx) = h.proxy.connect().unwrap();
+        h.proxy.on_client_line(a, r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}"#);
+        assert_eq!(json_of(a_rx.try_recv().unwrap())["id"], 0);
+        let status = json_of(a_rx.try_recv().unwrap());
+        assert_eq!(status["method"], ext::AUTH_STATUS);
+        assert_eq!(status["params"]["authStatus"]["kind"], "none");
+    }
+
+    #[test]
+    fn a_sign_in_page_goes_to_the_client_that_asked_to_sign_in() {
+        let mut h = harness();
+        h.ready();
+        let (a, mut a_rx) = h.proxy.connect().unwrap();
+        let (_b, mut b_rx) = h.proxy.connect().unwrap();
+        h.proxy.on_client_line(a, r#"{"jsonrpc":"2.0","id":7,"method":"authenticate","params":{"methodId":"chat-gpt-device-code"}}"#);
+        let authenticate = json_of(h.agent.try_recv().unwrap());
+        let page = json!({ "jsonrpc": "2.0", "id": 0, "method": "elicitation/create", "params": { "mode": "url", "requestId": authenticate["id"], "url": "https://x/device", "message": "code", "elicitationId": "e" } });
+        h.proxy.on_agent_line(&page.to_string());
+        let got = json_of(a_rx.try_recv().unwrap());
+        assert_eq!(got["params"]["requestId"], 7, "in the client's own ids");
+        assert!(b_rx.try_recv().is_err());
+
+        h.proxy.on_client_line(a, r#"{"jsonrpc":"2.0","id":0,"result":{"action":"accept"}}"#);
+        assert_eq!(json_of(h.agent.try_recv().unwrap())["result"]["action"], "accept");
     }
 
     #[test]

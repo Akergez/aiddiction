@@ -145,7 +145,7 @@ dependencies = [
 
 [[package]]
 name = "aiddiction"
-version = "1.3.0"
+version = "1.4.0"
 dependencies = [
  "aiddiction-api",
  "aiddiction-client",
@@ -169,7 +169,7 @@ dependencies = [
 
 [[package]]
 name = "aiddiction-api"
-version = "1.3.0"
+version = "1.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -178,7 +178,7 @@ dependencies = [
 
 [[package]]
 name = "aiddiction-client"
-version = "1.3.0"
+version = "1.4.0"
 dependencies = [
  "aiddiction-api",
  "diffreview",
@@ -196,21 +196,21 @@ dependencies = [
 
 [[package]]
 name = "aiddiction-fake-agent"
-version = "1.3.0"
+version = "1.4.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "aiddiction-paths"
-version = "1.3.0"
+version = "1.4.0"
 dependencies = [
  "dirs 6.0.0",
 ]
 
 [[package]]
 name = "aiddiction-server"
-version = "1.3.0"
+version = "1.4.0"
 dependencies = [
  "aiddiction-api",
  "aiddiction-client",
@@ -1605,7 +1605,7 @@ dependencies = [
 
 [[package]]
 name = "diffreview"
-version = "1.3.0"
+version = "1.4.0"
 dependencies = [
  "serde",
  "tempfile",
@@ -1613,7 +1613,7 @@ dependencies = [
 
 [[package]]
 name = "diffreview-ui"
-version = "1.3.0"
+version = "1.4.0"
 dependencies = [
  "diffreview",
  "gpui-android-glue",

@@ -25,6 +25,11 @@ pub mod ext {
     /// Server → client notification: an agent request one client answered is
     /// settled, the others should drop it. Params `{ "requestId": … }`.
     pub const REQUEST_RESOLVED: &str = "_aiddiction/request_resolved";
+    /// Agent → client notification of who the agent is signed in as
+    /// (`{ "authStatus": { "kind": "none", … } }` when it is not), from the
+    /// Claude and Codex adapters. The server keeps the last one and sends it
+    /// to every client that initializes.
+    pub const AUTH_STATUS: &str = "_auth/status_update";
     /// The key under `_meta` that carries the journal sequence number of a
     /// replayable notification.
     pub const SEQ_META: &str = "aiddictionSeq";
@@ -256,6 +261,35 @@ pub struct Instance {
 #[serde(rename_all = "camelCase")]
 pub struct StartInstance {
     pub agent_id: String,
+}
+
+/// Body of `POST /instances/{id}/login`: one of the agent's `authMethods`
+/// of type `terminal`, which the server runs with pipes for a terminal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartLogin {
+    pub method_id: String,
+}
+
+/// Body of `POST /instances/{id}/login/input`: a line for the login to read.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginInput {
+    pub text: String,
+}
+
+/// An agent's terminal sign-in running on the server, as a client shows it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Login {
+    pub method_id: String,
+    /// What it wrote to its terminal, without escape sequences: the tail
+    /// when there was a lot.
+    pub output: String,
+    pub running: bool,
+    /// Whether it ended well, once it ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub success: Option<bool>,
 }
 
 /// What the event socket carries. Clients re-read the affected list; the

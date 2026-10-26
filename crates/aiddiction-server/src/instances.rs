@@ -12,6 +12,7 @@ use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::process::Command;
 use tokio::sync::{broadcast, mpsc};
 
+use crate::login::TerminalLogin;
 use crate::proxy::Proxy;
 
 /// How many stderr lines an instance keeps to show when it fails.
@@ -29,6 +30,9 @@ pub struct Instance {
     pub project_id: ProjectId,
     pub agent: Agent,
     pub proxy: Arc<Proxy>,
+    root: PathBuf,
+    /// The agent's terminal sign-in, the last one started.
+    login: Mutex<Option<Arc<TerminalLogin>>>,
     status: Mutex<(InstanceState, Option<String>)>,
     stderr: Mutex<VecDeque<String>>,
     pid: Mutex<Option<u32>>,
@@ -61,18 +65,44 @@ impl Instance {
         matches!(self.state(), InstanceState::Starting | InstanceState::Ready)
     }
 
-    /// Ends the agent and everything it started: the process group is asked
-    /// first, then told.
+    /// Ends the agent and everything it started.
     pub fn stop(&self) {
-        let Some(pid) = *self.pid.lock().unwrap() else { return };
-        let group = -(pid as i32);
-        // SAFETY: plain syscalls on a process group this server created.
-        unsafe { libc::kill(group, libc::SIGTERM) };
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(3)).await;
-            unsafe { libc::kill(group, libc::SIGKILL) };
-        });
+        self.stop_login();
+        if let Some(pid) = *self.pid.lock().unwrap() {
+            stop_group(pid);
+        }
     }
+
+    /// Starts one of the agent's terminal sign-ins, in place of any other.
+    pub fn start_login(&self, method_id: &str) -> Result<Arc<TerminalLogin>, String> {
+        let init = self.proxy.init_result().ok_or("the agent has not started yet")?;
+        self.stop_login();
+        let proxy = self.proxy.clone();
+        let login = TerminalLogin::start(&self.agent, &self.root, &init, method_id, move || proxy.forget_auth_status())?;
+        *self.login.lock().unwrap() = Some(login.clone());
+        Ok(login)
+    }
+
+    pub fn login(&self) -> Option<Arc<TerminalLogin>> {
+        self.login.lock().unwrap().clone()
+    }
+
+    pub fn stop_login(&self) {
+        if let Some(login) = self.login.lock().unwrap().take() {
+            login.stop();
+        }
+    }
+}
+
+/// Ends a process group this server started: asked first, then told.
+pub(crate) fn stop_group(pid: u32) {
+    let group = -(pid as i32);
+    // SAFETY: plain syscalls on a process group this server created.
+    unsafe { libc::kill(group, libc::SIGTERM) };
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        unsafe { libc::kill(group, libc::SIGKILL) };
+    });
 }
 
 impl Supervisor {
@@ -153,7 +183,7 @@ impl Supervisor {
         let (to_agent, mut agent_rx) = mpsc::unbounded_channel::<String>();
         let id = uuid::Uuid::now_v7();
         let events = self.events.clone();
-        let proxy = Arc::new(Proxy::new(root, to_agent, move || {
+        let proxy = Arc::new(Proxy::new(root.clone(), to_agent, move || {
             let _ = events.send(ServerEvent::InstancesChanged { project_id: project });
         }));
         let instance = Arc::new(Instance {
@@ -161,6 +191,8 @@ impl Supervisor {
             project_id: project,
             agent: agent.clone(),
             proxy: proxy.clone(),
+            root,
+            login: Mutex::new(None),
             status: Mutex::new((InstanceState::Starting, None)),
             stderr: Mutex::new(VecDeque::new()),
             pid: Mutex::new(child.id()),
@@ -259,12 +291,19 @@ impl Supervisor {
 /// terminal (`npx -y pkg`, `FOO=1 agent --acp`), with the configured
 /// arguments after it. Bash runs a lone command in its own place; whatever
 /// the command starts shares its process group and is stopped with it.
-fn shell_command(agent: &Agent) -> Command {
+///
+/// The agent never talks to the terminal of an ssh session that started the
+/// server, so it is not told of one: Claude Code would offer a sign-in that
+/// needs a real terminal instead of the one that works over pipes.
+pub(crate) fn shell_command(agent: &Agent) -> Command {
     let mut command = Command::new("bash");
     command
         .arg("-c")
         .arg(format!("{} \"$@\"", agent.command.command))
         .arg("aiddiction-agent")
-        .args(&agent.command.args);
+        .args(&agent.command.args)
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_CLIENT")
+        .env_remove("SSH_TTY");
     command
 }
