@@ -1,5 +1,6 @@
 # The project's board: a card made from a column's plus button, edited by a
-# click, moved to the next column and deleted.
+# click, moved to the next column and deleted. The titles are short so that
+# no font wraps them: the card's buttons are under the title.
 # size: 1100x760
 until:page=inbox
 until:projects=1
@@ -13,7 +14,7 @@ shot:tasks-board
 # Todo's plus button.
 click:600,197
 until:dialog=open
-type:Write the README
+type:Docs
 wait:300
 shot:tasks-new
 key:enter
@@ -31,13 +32,13 @@ expect:tasks=1
 click:730,243
 until:dialog=open
 key:end
-type: and the docs
+type: now
 key:enter
 until:dialog=closed
 wait:800
 shot:tasks-edited
 # Its delete button.
-click:819,296
+click:819,270
 until:tasks=0
 wait:300
 shot:tasks-deleted
