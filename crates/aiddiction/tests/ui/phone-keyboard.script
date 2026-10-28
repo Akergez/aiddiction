@@ -1,0 +1,24 @@
+# The phone with its keyboard up (GPUI_KEYBOARD pretends one): the new
+# conversation dialog moves above it, and the chat's composer sits on it.
+# size: 400x800
+# env: GPUI_KEYBOARD=300
+until:page=inbox
+until:projects=1
+wait:1000
+click:356,694
+until:dialog=open
+wait:400
+shot:phone-keyboard-dialog
+click:200,169
+wait:400
+type:fake
+key:enter
+wait:300
+click:200,258
+type:please make a file
+key:enter
+until:page=chat
+until:permissions=1
+wait:500
+shot:phone-keyboard-chat
+quit

@@ -69,15 +69,16 @@ pub fn is_phone(window: &Window) -> bool {
     window.viewport_size().width / window.rem_size() < 44.0
 }
 
-/// How much of the top and the bottom the system draws over: the status
-/// bar, and the navigation bar or the on-screen keyboard. Nothing on a
-/// desktop.
+/// How much of the top and the bottom the system's bars draw over: the
+/// status bar and the navigation bar, never the on-screen keyboard
+/// (`keyboard_inset`). Nothing on a desktop.
 pub fn insets() -> (Pixels, Pixels) {
     gpui_android_glue::insets::system_bars()
 }
 
-/// How tall the on-screen keyboard is over `window`, nothing while it is
-/// down.
+/// How tall the on-screen keyboard is over `window` in this frame (the
+/// navigation bar under it included), nothing while it is down. While it
+/// slides this is how far it has come: read it in `render`, never keep it.
 pub use gpui_android_glue::keyboard::keyboard_inset;
 
 /// Tells a phone's keyboard what `input` (an `InputState` or a

@@ -112,7 +112,7 @@ dependencies {
     // The Java half of gpui-android-glue: the classes gpui-mobile and the
     // glue call by name, and the androidx libraries they use. The same
     // version as the crate in crates/aiddiction/Cargo.toml.
-    implementation("com.akergez.gpui:android-glue:0.1.2")
+    implementation("com.akergez.gpui:android-glue:0.3.0")
     // The Java half of the certificate check; see rustlsPlatformVerifier.
     implementation("org.rustls:rustls-platform-verifier:$rustlsPlatformVerifier")
 }
