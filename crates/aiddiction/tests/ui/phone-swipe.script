@@ -1,0 +1,27 @@
+# A finger on the phone scrolls one way at a time: a sideways swipe over the
+# project's board moves the board, not the page under it, and a swipe up
+# moves the page.
+# size: 400x330
+until:page=inbox
+until:projects=1
+wait:1000
+click:200,305
+until:page=projects
+wait:300
+click:200,100
+until:page=project
+wait:500
+shot:phone-swipe-before
+# Left over the board.
+swipe:300,245,-200,0
+wait:1500
+shot:phone-swipe-board
+# A touch stops the board's fling, as a finger does on a phone; a swipe
+# would catch it and keep its axis.
+swipe:200,280,0,0
+wait:300
+# Up over the page.
+swipe:200,280,0,-200
+wait:1500
+shot:phone-swipe-page
+quit

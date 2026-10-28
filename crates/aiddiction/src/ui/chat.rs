@@ -8,6 +8,7 @@ use std::collections::HashSet;
 
 use aiddiction_api::ProjectId;
 use gpui_kit::Focusable as _;
+use gpui_kit::base::InteractiveElementExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
@@ -744,6 +745,7 @@ impl ChatView {
                             .id("sign-in-output")
                             .max_h(rems(10.))
                             .overflow_y_scroll()
+                            .lock_scroll_axis()
                             .p_2()
                             .rounded(theme.radius)
                             .bg(theme.muted)

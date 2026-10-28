@@ -5,6 +5,8 @@
 //! plays those steps into the window once it opens. Steps:
 //!
 //! - `wait:<ms>`, `click:<x>,<y>`, `key:<keystroke>`, `type:<text>`
+//! - `swipe:<x>,<y>,<dx>,<dy>` — a finger from (x, y) moved by (dx, dy) and
+//!   lifted, as a phone's touches: gpui makes it a pan of whatever is under it
 //! - `shot:<name>` — runs `$AIDDICTION_SHOT_CMD <name>`
 //! - `expect:<what>=<value>` — ends the process with status 1 unless it
 //!   holds: `page=inbox|projects|project|chat|review|settings|appearance|agents|servers`,
@@ -24,7 +26,7 @@ use std::time::{Duration, Instant};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::{
     AnyWindowHandle, App, Entity, Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    PlatformInput, Window, point, px,
+    PlatformInput, TouchEvent, TouchId, TouchPhase, Window, point, px,
 };
 
 use crate::ui::shell::{Page, Shell};
@@ -33,6 +35,7 @@ use crate::ui::shell::{Page, Shell};
 enum Step {
     Wait(u64),
     Click(f32, f32),
+    Swipe(f32, f32, f32, f32),
     Key(String),
     Type(String),
     Shot(String),
@@ -55,6 +58,11 @@ fn parse(script: &str) -> Vec<Step> {
                 "click" => {
                     let (x, y) = rest.split_once(',')?;
                     Step::Click(x.trim().parse().ok()?, y.trim().parse().ok()?)
+                }
+                "swipe" => {
+                    let numbers: Vec<f32> = rest.split(',').map(|number| number.trim().parse().ok()).collect::<Option<_>>()?;
+                    let [x, y, dx, dy] = numbers[..] else { return None };
+                    Step::Swipe(x, y, dx, dy)
                 }
                 "key" => Step::Key(rest.to_owned()),
                 "type" => Step::Type(rest.to_owned()),
@@ -166,6 +174,20 @@ fn next(handle: AnyWindowHandle, shell: Entity<Shell>, mut steps: VecDeque<Step>
                 cx,
             );
         }
+        Step::Swipe(x, y, dx, dy) => {
+            let (x, y, dx, dy) = (*x, *y, *dx, *dy);
+            const MOVES: u16 = 10;
+            for step in 0..=MOVES + 1 {
+                let (phase, done) = match step {
+                    0 => (TouchPhase::Started, 0.),
+                    step if step <= MOVES => (TouchPhase::Moved, f32::from(step) / f32::from(MOVES)),
+                    _ => (TouchPhase::Ended, 1.),
+                };
+                let position = point(px(x + dx * done), px(y + dy * done));
+                let touch = TouchEvent { id: TouchId(1), phase, position, predicted_position: None, force: None };
+                window.dispatch_event(PlatformInput::Touch(touch), cx);
+            }
+        }
         Step::Key(key) => match Keystroke::parse(key) {
             Ok(keystroke) => {
                 window.dispatch_keystroke(keystroke, cx);
@@ -222,10 +244,11 @@ mod tests {
     #[test]
     fn a_script_is_steps_between_semicolons() {
         assert_eq!(
-            parse("wait:200; click:10,20 ;key:enter;type:a:b;until:page=chat;quit;bogus"),
+            parse("wait:200; click:10,20 ;swipe:1,2,-3,0;swipe:1,2;key:enter;type:a:b;until:page=chat;quit;bogus"),
             [
                 Step::Wait(200),
                 Step::Click(10.0, 20.0),
+                Step::Swipe(1.0, 2.0, -3.0, 0.0),
                 Step::Key("enter".into()),
                 Step::Type("a:b".into()),
                 Step::Until("page".into(), "chat".into(), None),

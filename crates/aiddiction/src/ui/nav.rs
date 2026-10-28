@@ -2,6 +2,7 @@
 //! along a phone's bottom, the button that starts a conversation, and the
 //! list of the settings' pages.
 
+use gpui_kit::base::InteractiveElementExt as _;
 use gpui_kit::component::badge::Badge;
 use gpui_kit::component::{ActiveTheme, Icon, IconName, h_flex, v_flex};
 use gpui_kit::component::{Sizable as _, StyledExt as _};
@@ -138,7 +139,7 @@ impl Shell {
             (Page::Agents, IconName::Bot, "Agents", "What the server can run"),
             (Page::Servers, IconName::HardDrive, "Servers", "Where the projects live"),
         ];
-        let mut column = v_flex().id("settings-menu").size_full().overflow_y_scroll().p_2().gap_0p5();
+        let mut column = v_flex().id("settings-menu").size_full().overflow_y_scroll().lock_scroll_axis().p_2().gap_0p5();
         if heading {
             column = column.child(super::inbox::column_heading("Settings", None, cx));
         }

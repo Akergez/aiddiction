@@ -3,6 +3,7 @@
 //! can be added, edited and removed.
 
 use aiddiction_api::{Agent, AgentSource};
+use gpui_kit::base::InteractiveElementExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{ActiveTheme, IconName, h_flex, v_flex};
 use gpui_kit::component::{Sizable as _, StyledExt as _};
@@ -24,6 +25,7 @@ impl Shell {
             .id("agents")
             .size_full()
             .overflow_y_scroll()
+            .lock_scroll_axis()
             .child(
                 h_flex().w_full().justify_center().p_6().child(
                     v_flex()

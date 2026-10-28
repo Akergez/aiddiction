@@ -4,6 +4,7 @@
 //! and the bar.
 
 use aiddiction_api::{InstanceState, PermissionAnswer, Project, ProjectState};
+use gpui_kit::base::InteractiveElementExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme, Icon, IconName, h_flex, v_flex};
@@ -32,7 +33,7 @@ impl Shell {
     pub(super) fn render_inbox(&mut self, heading: bool, cx: &mut Context<Self>) -> AnyElement {
         let listed = self.listed(cx);
         let theme = cx.theme().clone();
-        let mut column = v_flex().id("inbox").size_full().overflow_y_scroll().p_2().pb_24();
+        let mut column = v_flex().id("inbox").size_full().overflow_y_scroll().lock_scroll_axis().p_2().pb_24();
         column = column.when(heading, |column| column.child(column_heading(
             "Inbox",
             (!self.servers.is_empty()).then(|| {
@@ -227,7 +228,7 @@ impl Shell {
 
     pub(super) fn render_projects(&mut self, heading: bool, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
-        let mut column = v_flex().id("projects").size_full().overflow_y_scroll().p_2();
+        let mut column = v_flex().id("projects").size_full().overflow_y_scroll().lock_scroll_axis().p_2();
         column = column.when(heading, |column| column.child(column_heading(
             "Projects",
             self.server.is_some().then(|| {

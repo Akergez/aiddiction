@@ -662,6 +662,12 @@ impl ReviewView {
             )
             .track_scroll(&self.scroll)
             .size_full()
+            // A sideways swipe must not scroll the rows down: a list has no
+            // `lock_scroll_axis`, so the style says it.
+            .map(|mut list| {
+                list.style().restrict_scroll_to_axis = Some(true);
+                list
+            })
             .into_any_element()
         };
         v_flex().size_full().child(header).child(div().flex_1().min_h_0().child(body)).into_any_element()

@@ -42,7 +42,8 @@ A server for experiments: `AIDDICTION_LISTEN`, `AIDDICTION_DATA_DIR`,
 
 `AIDDICTION_SCRIPT="until:page=inbox;click:748,452;type:hello;key:enter;shot:x;quit"`
 drives the window (`crates/aiddiction/src/script.rs`); `AIDDICTION_SIZE=WxH` sets
-its size (below 44 rem wide is the phone layout). Scenarios with `expect:` /
+its size (below 44 rem wide is the phone layout); `swipe:x,y,dx,dy` is a
+finger's swipe. Scenarios with `expect:` /
 `until:` checks live in `crates/aiddiction/tests/ui/*.script`; run them
 headless in the sway container, screenshots go to `target/ui-shots/`:
 
@@ -211,3 +212,8 @@ registry.
   `Thread::run_start`); its list redraws from a run's first entry. The plan
   and the agent's mode sit on the composer; the bar has the title, Review
   and close.
+- A scroll area of one axis made with gpui's `overflow_y_scroll()` /
+  `overflow_x_scroll()` also takes `.lock_scroll_axis()` (a `uniform_list`:
+  `style().restrict_scroll_to_axis`); without it a finger's sideways swipe
+  scrolls it along its own axis too. gpui-kit's `overflow_*_scrollbar()`
+  already locks. `phone-swipe.script` checks it with `swipe:`.

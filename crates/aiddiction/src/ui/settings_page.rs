@@ -3,6 +3,7 @@
 //! (`gpui-zed-themes`); this page only lays them out.
 
 use gpui_adaptive_colors::Color;
+use gpui_kit::base::InteractiveElementExt as _;
 use gpui_kit::component::button::{Button, ButtonGroup};
 use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectState};
 use gpui_kit::component::tooltip::Tooltip;
@@ -121,6 +122,7 @@ impl Render for SettingsPage {
             .id("settings")
             .size_full()
             .overflow_y_scroll()
+            .lock_scroll_axis()
             .p_4()
             .gap_4()
             .child(div().text_lg().font_semibold().child("Appearance"))

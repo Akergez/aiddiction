@@ -2,6 +2,7 @@
 //! in use (whose projects and agents are listed; the inbox has them all). Adding one checks it first, so a typo is found here and not later.
 
 use aiddiction_client::ServerClient;
+use gpui_kit::base::InteractiveElementExt as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::{ActiveTheme, IconName, WindowExt, h_flex, v_flex};
 use gpui_kit::component::{Sizable as _, StyledExt as _};
@@ -70,6 +71,7 @@ impl Shell {
             .id("servers")
             .size_full()
             .overflow_y_scroll()
+            .lock_scroll_axis()
             .p_6()
             .gap_4()
             .child(

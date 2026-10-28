@@ -2,6 +2,7 @@
 //! conversations. New conversations and the review start here too.
 
 use aiddiction_api::{InstanceState, ProjectId, ProjectState, Task, TaskStatus};
+use gpui_kit::base::InteractiveElementExt as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::scroll::ScrollableElement;
@@ -181,6 +182,7 @@ impl Shell {
             .id("project")
             .size_full()
             .overflow_y_scroll()
+            .lock_scroll_axis()
             .child(h_flex().w_full().justify_center().px_6().py_6().child(page))
             .into_any_element()
     }

@@ -8,6 +8,7 @@ use std::rc::Rc;
 
 use aiddiction_api::{Agent, AgentCommand, AgentInput, DirListing, NewProject, ProjectSource, Task, TaskId, TaskInput, TaskStatus};
 use aiddiction_client::ServerClient;
+use gpui_kit::base::InteractiveElementExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
 use gpui_kit::component::form::{field, v_form};
@@ -50,7 +51,7 @@ pub fn open_form<F: Render>(
             let rem = window.rem_size();
             let top = super::insets().0 + rem * DIALOG_GAP;
             let room = window.viewport_size().height - keyboard - top - rem * DIALOG_CHROME;
-            let body = div().id("form-body").max_h(room.max(rem * DIALOG_BODY_AT_LEAST)).overflow_y_scroll().child(form.clone());
+            let body = div().id("form-body").max_h(room.max(rem * DIALOG_BODY_AT_LEAST)).overflow_y_scroll().lock_scroll_axis().child(form.clone());
             (dialog.margin_top(top), body.into_any_element())
         } else {
             (dialog, form.clone().into_any_element())
@@ -266,7 +267,7 @@ impl ProjectForm {
     /// change size (and move its buttons) as the listing changes.
     fn render_folders(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme().clone();
-        let mut list = v_flex().id("folders").h_48().overflow_y_scroll().border_1().border_color(theme.border).rounded(theme.radius);
+        let mut list = v_flex().id("folders").h_48().overflow_y_scroll().lock_scroll_axis().border_1().border_color(theme.border).rounded(theme.radius);
         let Some(listing) = &self.listing else {
             return list.child(div().p_2().text_sm().text_color(theme.muted_foreground).child("Reading the server's folders…"));
         };
