@@ -603,10 +603,16 @@ impl Shell {
         let body = if phone {
             let tabs = self.page.is_root().then(|| self.render_tabs(cx));
             let fab = (self.page == Page::Inbox && !self.servers.is_empty()).then(|| self.render_fab(cx));
+            // Every page stands on the keyboard, frame by frame as it slides:
+            // what is typed into is never under it. The pages pad the bar
+            // under them themselves (the tabs, the composer); the keyboard
+            // covers that bar too.
+            let over_the_bar = (super::keyboard_inset(window) - super::insets().1).max(px(0.));
             v_flex()
                 .flex_1()
                 .min_h_0()
                 .w_full()
+                .pb(over_the_bar)
                 .child(div().relative().flex_1().min_h_0().w_full().child(page).children(fab))
                 .children(tabs)
                 .into_any_element()

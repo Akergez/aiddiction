@@ -1055,7 +1055,8 @@ impl Render for ChatView {
                 .disabled(!ready)
                 .on_click(cx.listener(|this, _, window, cx| this.send(window, cx)))
         };
-        let bottom = super::insets().1.max(super::keyboard_inset(window));
+        // The shell lifts the page onto the keyboard; this is the bar's room.
+        let bottom = super::insets().1;
 
         let composer = v_flex()
             .w_full()

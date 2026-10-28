@@ -1,11 +1,13 @@
-# The phone with its keyboard up (GPUI_KEYBOARD pretends one): the new
-# conversation dialog moves above it, and the chat's composer sits on it.
+# The phone with its keyboard up (GPUI_KEYBOARD pretends one): every page
+# stands on it (the inbox's round button with it), the new conversation
+# dialog moves above it, and the chat's composer sits on it.
 # size: 400x800
 # env: GPUI_KEYBOARD=300
 until:page=inbox
 until:projects=1
 wait:1000
-click:356,694
+shot:phone-keyboard-inbox
+click:356,394
 until:dialog=open
 wait:400
 shot:phone-keyboard-dialog
