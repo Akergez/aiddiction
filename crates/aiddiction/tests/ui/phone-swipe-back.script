@@ -1,0 +1,42 @@
+# Back on a phone by a finger drawn to the right across the conversation:
+# the page follows the finger over the inbox it goes back to, goes back
+# where it was if lifted early, and goes back to the inbox if drawn far.
+# Escape (the back key) closes the new conversation dialog first.
+# size: 400x800
+until:page=inbox
+until:projects=1
+wait:1000
+click:356,694
+until:dialog=open
+key:escape
+until:dialog=closed
+expect:page=inbox
+click:356,694
+until:dialog=open
+click:200,233
+wait:400
+type:fake
+key:enter
+wait:300
+click:200,322
+type:please make a file
+key:enter
+until:page=chat
+until:permissions=1
+wait:500
+# Halfway (and a bit less), finger still down: the inbox shows under it.
+hold:60,400,150,0
+wait:300
+shot:phone-swipe-back-held
+expect:page=chat
+# Lifted there: the conversation comes back.
+lift
+wait:600
+expect:page=chat
+shot:phone-swipe-back-returned
+# Far: back to the inbox.
+swipe:60,400,250,0
+until:page=inbox
+wait:500
+shot:phone-swipe-back-inbox
+quit

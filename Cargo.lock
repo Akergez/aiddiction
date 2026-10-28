@@ -145,7 +145,7 @@ dependencies = [
 
 [[package]]
 name = "aiddiction"
-version = "1.8.2"
+version = "1.9.0"
 dependencies = [
  "aiddiction-api",
  "aiddiction-client",
@@ -169,7 +169,7 @@ dependencies = [
 
 [[package]]
 name = "aiddiction-api"
-version = "1.8.2"
+version = "1.9.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -178,7 +178,7 @@ dependencies = [
 
 [[package]]
 name = "aiddiction-client"
-version = "1.8.2"
+version = "1.9.0"
 dependencies = [
  "aiddiction-api",
  "diffreview",
@@ -196,21 +196,21 @@ dependencies = [
 
 [[package]]
 name = "aiddiction-fake-agent"
-version = "1.8.2"
+version = "1.9.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "aiddiction-paths"
-version = "1.8.2"
+version = "1.9.0"
 dependencies = [
  "dirs 6.0.0",
 ]
 
 [[package]]
 name = "aiddiction-server"
-version = "1.8.2"
+version = "1.9.0"
 dependencies = [
  "aiddiction-api",
  "aiddiction-client",
@@ -1605,7 +1605,7 @@ dependencies = [
 
 [[package]]
 name = "diffreview"
-version = "1.8.2"
+version = "1.9.0"
 dependencies = [
  "serde",
  "tempfile",
@@ -1613,7 +1613,7 @@ dependencies = [
 
 [[package]]
 name = "diffreview-ui"
-version = "1.8.2"
+version = "1.9.0"
 dependencies = [
  "diffreview",
  "gpui-android-glue",
@@ -2523,8 +2523,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-android-glue"
-version = "0.3.0"
-source = "git+https://github.com/Akergez/gpui-android-glue?tag=v0.3.0#305b1052e1ef10fa4a0a68eeb787d102383e82ea"
+version = "0.4.0"
+source = "git+https://github.com/Akergez/gpui-android-glue?tag=v0.4.0#a45958b730a9250a0ed7cd0c4e798c846a403429"
 dependencies = [
  "android-activity",
  "android_logger",

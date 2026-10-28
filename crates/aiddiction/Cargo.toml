@@ -31,7 +31,7 @@ gpui-kit = "0.7.0"
 # hands the activity to rustls-platform-verifier, which the client's event and
 # ACP sockets check certificates with. To work on it beside the application,
 # swap this for the path variant and build the package with -PglueLocal.
-gpui-android-glue = { git = "https://github.com/Akergez/gpui-android-glue", tag = "v0.3.0", features = ["platform-verifier"] }
+gpui-android-glue = { git = "https://github.com/Akergez/gpui-android-glue", tag = "v0.4.0", features = ["platform-verifier"] }
 # gpui-android-glue = { path = "../../../gpui-android-glue", features = ["platform-verifier"] }
 # The theme's colours: a Material You scheme made from the system's colour,
 # and themes made for the Zed editor to wear instead (money-manager-ng's and

@@ -515,7 +515,6 @@ impl Shell {
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let phone = super::is_phone(window);
-        let (title, subtitle) = self.title(phone, cx);
         let can_go_back = phone && !self.page.is_root();
         // The system's back does what the button does, while there is one;
         // without it back leaves the application.
@@ -525,6 +524,35 @@ impl Render for Shell {
                 gpui_android_glue::back::push(move |_, cx| shell.update(cx, |shell, cx| shell.back(cx)).is_ok())
             });
         }
+        // While a gesture of back is under way the page moves aside with the
+        // finger and shows the one back goes to; in a conversation a finger
+        // drawn to the right goes back too.
+        let gesture = self.back.as_ref().and_then(|back| back.gesture(window, cx));
+        let screen = self.render_screen(phone, window, cx);
+        let under = gesture.map(|_| {
+            let target = self.back_target();
+            let page = std::mem::replace(&mut self.page, target);
+            let under = self.render_screen(phone, window, cx);
+            self.page = page;
+            under
+        });
+        gpui_android_glue::back::preview(screen, gesture)
+            .under(under)
+            .swipe_back(phone && matches!(self.page, Page::Chat(_)))
+    }
+}
+
+impl Shell {
+    /// The page back goes to: what [`Self::back`] shows.
+    fn back_target(&self) -> Page {
+        let gone = |page: &&Page| matches!(**page, Page::Chat(id) if self.chat(id).is_none());
+        self.history.iter().rev().find(|page| !gone(page)).copied().unwrap_or(self.page.section().root())
+    }
+
+    /// The window's whole content for the page up now: its bar and the page.
+    fn render_screen(&mut self, phone: bool, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let (title, subtitle) = self.title(phone, cx);
+        let can_go_back = phone && !self.page.is_root();
         let theme = cx.theme().clone();
 
         // A phone has no room for the subtitle beside the title: it goes under it.
@@ -618,5 +646,6 @@ impl Render for Shell {
             .text_color(theme.foreground)
             .child(super::title_frame(bar, cx))
             .child(body)
+            .into_any_element()
     }
 }

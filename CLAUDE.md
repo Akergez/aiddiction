@@ -43,7 +43,8 @@ A server for experiments: `AIDDICTION_LISTEN`, `AIDDICTION_DATA_DIR`,
 `AIDDICTION_SCRIPT="until:page=inbox;click:748,452;type:hello;key:enter;shot:x;quit"`
 drives the window (`crates/aiddiction/src/script.rs`); `AIDDICTION_SIZE=WxH` sets
 its size (below 44 rem wide is the phone layout); `swipe:x,y,dx,dy` is a
-finger's swipe. Scenarios with `expect:` /
+finger's swipe, `hold:x,y,dx,dy` the same finger left down and `lift` lifts
+it. Scenarios with `expect:` /
 `until:` checks live in `crates/aiddiction/tests/ui/*.script`; run them
 headless in the sway container, screenshots go to `target/ui-shots/`:
 
@@ -217,3 +218,13 @@ registry.
   `style().restrict_scroll_to_axis`); without it a finger's sideways swipe
   scrolls it along its own axis too. gpui-kit's `overflow_*_scrollbar()`
   already locks. `phone-swipe.script` checks it with `swipe:`.
+- Back on a phone is gpui-android-glue's `back`: `Shell::render` keeps one
+  layer while there is somewhere to go back to, and lays the screen out with
+  `back::preview` — while predictive back's gesture (Android 14+) or a swipe
+  is under way the page moves with the finger over the page back goes to
+  (`Shell::back_target`, rendered by swapping `self.page` for a moment). A
+  finger drawn to the right goes back from a conversation only: other pages
+  scroll sideways (the board, the diff). Dialogs are opened with
+  `back::open_dialog` (`forms::open_form`), since with predictive back the
+  gesture over a dialog on a root page would otherwise leave the
+  application. `phone-swipe-back.script` checks it.

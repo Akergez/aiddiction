@@ -13,7 +13,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
 use gpui_kit::component::form::{field, v_form};
 use gpui_kit::component::input::{Input, InputState, Textarea, TextareaState};
-use gpui_kit::component::{ActiveTheme, Icon, IconName, WindowExt, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, h_flex, v_flex};
 use gpui_kit::component::{Selectable as _, Sizable as _};
 use gpui_kit::Focusable as _;
 use gpui_kit::prelude::*;
@@ -40,7 +40,9 @@ pub fn open_form<F: Render>(
 ) {
     let (title, commit): (SharedString, SharedString) = (title.into(), commit.into());
     let submit = Rc::new(submit);
-    window.open_dialog(cx, move |dialog, window, _| {
+    // A layer of back for as long as it is open: predictive back's gesture
+    // closes it even over a page with nowhere to go back to.
+    gpui_android_glue::back::open_dialog(window, cx, move |dialog, window, _| {
         let (form, submit) = (form.clone(), submit.clone());
         // With the on-screen keyboard up, the dialog moves to the top of what
         // is left of the window and its fields scroll inside that, so what is
