@@ -202,10 +202,12 @@ registry.
   servers). A desktop has a rail (`ui/nav.rs`), the section's list in a
   column and the page beside it (the review takes the column's room too); a
   phone shows one page with the sections as tabs and back going where it
-  came from. `crate::inbox` (pure, tested) groups the conversations — needs
-  you, working, done unread, recent, stopped — from the servers' summaries
-  and `Settings::seen` (the last sequence number shown, per conversation);
-  `ui/inbox.rs` draws the rows, which answer the agent's questions in place.
+  came from. `crate::inbox` (pure, tested) orders the conversations in one
+  list by project — the project whose conversation needs you most first —
+  and within it by need — needs you, working, done unread, recent, stopped —
+  from the servers' summaries and `Settings::seen` (the last sequence number
+  shown, per conversation); `ui/inbox.rs` draws them under their projects'
+  names, and the rows answer the agent's questions in place.
   A new conversation is one dialog (`ui/new_session.rs`: searchable project
   and agent lists, the first message, sent once the session is ready). Read
   the gpui-kit skill's Coding Guides before changing structure.
