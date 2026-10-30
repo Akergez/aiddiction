@@ -1,5 +1,5 @@
-//! The inbox — every conversation on every server in one list, grouped by
-//! project and then by what it needs (`crate::inbox` decides) — and the list of projects. Their rows, the
+//! The inbox — every conversation on every server, grouped by what it needs
+//! (`crate::inbox` decides) — and the list of projects. Their rows, the
 //! projects' avatars and the status tags are shared with the project page
 //! and the bar.
 
@@ -82,46 +82,20 @@ impl Shell {
                 ))
                 .into_any_element();
         }
-        let mut project = None;
+        let mut group = None;
         for item in listed {
-            if project != Some(item.project.id) {
-                project = Some(item.project.id);
-                column = column.child(self.project_heading(&item, cx));
+            if group != Some(item.group) {
+                group = Some(item.group);
+                column = column.child(group_heading(item.group, cx));
             }
-            column = column.child(self.session_row(&item, cx));
+            column = column.child(self.session_row(&item, true, cx));
         }
         column.into_any_element()
     }
 
-    /// The project a run of the inbox's rows belongs to, with its server when
-    /// there are several; it opens the project.
-    fn project_heading(&self, item: &Listed, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut title = item.project.name.clone();
-        if self.servers.len() > 1
-            && let Some(server) = self.connection(&item.server, cx)
-        {
-            title = format!("{title} · {}", server.read(cx).entry.name);
-        }
-        let project = item.project.id;
-        let hover = cx.theme().foreground;
-        div()
-            .id(ElementId::Name(format!("inbox-project-{project}").into()))
-            .px_3()
-            .pt_3()
-            .pb_1()
-            .truncate()
-            .text_xs()
-            .font_semibold()
-            .text_color(cx.theme().muted_foreground)
-            .cursor_pointer()
-            .hover(move |style| style.text_color(hover))
-            .child(title)
-            .on_click(cx.listener(move |this, _, _, cx| this.go(Page::Project(project), cx)))
-    }
-
-    /// One conversation: its title, what it is doing, and the
+    /// One conversation: its project, its title, what it is doing, and the
     /// agent's question with its answers when it asks one.
-    pub(super) fn session_row(&self, item: &Listed, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn session_row(&self, item: &Listed, show_project: bool, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let selected = self.showing_session(cx).as_deref() == Some(item.session.session_id.as_str());
         let stripe = match item.group {
@@ -137,7 +111,18 @@ impl Shell {
             Group::Recent | Group::Stopped => None,
         };
         let server = self.connection(&item.server, cx);
-        let meta: SharedString = item.instance.agent_name.clone().into();
+        let mut meta = if show_project {
+            format!("{} · {}", item.project.name, item.instance.agent_name)
+        } else {
+            item.instance.agent_name.clone()
+        };
+        // With more than one server, which one it is on.
+        if show_project && self.servers.len() > 1
+            && let Some(server) = &server
+        {
+            meta = format!("{} · {meta}", server.read(cx).entry.name);
+        }
+        let meta: SharedString = meta.into();
         let time = inbox::ago(inbox::now_ms(), item.session.updated_at_ms);
         let unread = matches!(item.group, Group::Unread | Group::NeedsYou);
 
@@ -351,6 +336,17 @@ pub fn column_heading(title: &'static str, action: Option<AnyElement>, cx: &App)
         .mb_1()
         .child(div().flex_1().text_lg().font_semibold().child(title))
         .children(action)
+}
+
+fn group_heading(group: Group, cx: &App) -> impl IntoElement {
+    div()
+        .px_3()
+        .pt_3()
+        .pb_1()
+        .text_xs()
+        .font_semibold()
+        .text_color(if group == Group::NeedsYou { cx.theme().warning } else { cx.theme().muted_foreground })
+        .child(group.title())
 }
 
 fn empty(icon: IconName, title: &'static str, text: &'static str, cx: &App) -> impl IntoElement {

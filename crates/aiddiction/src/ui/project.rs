@@ -172,7 +172,7 @@ impl Shell {
                     );
                 }
                 for item in &listed {
-                    conversations = conversations.child(self.session_row(item, cx));
+                    conversations = conversations.child(self.session_row(item, false, cx));
                 }
                 page = page.child(conversations);
             }
