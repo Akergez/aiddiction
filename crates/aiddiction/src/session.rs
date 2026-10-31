@@ -267,14 +267,20 @@ impl AgentSession {
         };
         let params = json!({ "sessionId": session_id, "afterSeq": self.last_seq });
         self.request(ext::ATTACH, params, cx, move |session, result, cx| {
+            let result = result.ok();
             let attach = result
-                .ok()
+                .clone()
                 .and_then(|result| serde_json::from_value::<AttachResult>(result).ok());
             match attach {
                 Some(attach) if attach.known => {
                     if attach.truncated {
                         session.thread.clear();
                         session.last_seq = 0;
+                    }
+                    // The modes and the model, which only `session/new` and
+                    // `session/load` answer with otherwise.
+                    if let Some(result) = &result {
+                        session.thread.set_modes(result);
                     }
                     session.busy = attach.busy;
                     session.ready(cx);

@@ -26,7 +26,7 @@ async-channel = "2.5"
 gpui-kit = "0.7.0"
 # The interface's intents (gpui-mobile-components): one screen, drawn for a
 # pointer on a desktop and for a finger on a phone.
-gpui-adaptive = { git = "https://github.com/Akergez/gpui-mobile-components", tag = "v0.1.1" }
+gpui-adaptive = { git = "https://github.com/Akergez/gpui-mobile-components", tag = "v0.1.2" }
 # gpui-adaptive = { path = "../../../gpui-mobile-components/crates/gpui-adaptive" }
 # The Android side shared with money-manager-ng and matterfast: android_main,
 # the keyboard, back, the status bar, the insets, links. Every function of it

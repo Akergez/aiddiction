@@ -129,6 +129,11 @@ fn observe(what: &str, shell: &Entity<Shell>, window: &mut Window, cx: &mut App)
         "tasks" => shell.server.as_ref().map_or(0, |server| server.read(cx).tasks.values().map(Vec::len).sum::<usize>()).to_string(),
         "entries" => chat?.thread.entries.len().to_string(),
         "busy" => if chat?.busy { "yes" } else { "no" }.to_owned(),
+        // The agent's mode in use: "none" when it offers none.
+        "mode" => {
+            let thread = &chat?.thread;
+            if thread.modes.is_empty() { "none".to_owned() } else { thread.current_mode.clone().unwrap_or_default() }
+        }
         "permissions" => chat?.thread.permissions.len().to_string(),
         "sign-in" => {
             let chat = chat?;

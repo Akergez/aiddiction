@@ -7,14 +7,14 @@
 until:page=inbox
 until:projects=1
 wait:1000
-click:286,676
+click:356,676
 until:dialog=open
 wait:600
 key:escape
 until:dialog=closed
 expect:page=inbox
 wait:600
-click:286,676
+click:356,676
 until:dialog=open
 wait:800
 click:200,643

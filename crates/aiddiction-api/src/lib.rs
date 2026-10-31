@@ -365,6 +365,14 @@ pub struct AttachResult {
     /// Whether a `session/prompt` for the session is still running.
     pub busy: bool,
     pub last_seq: u64,
+    /// The agent's modes as `session/new` gives them (`{ currentModeId,
+    /// availableModes }`), as they are now; null when it has none.
+    #[serde(default)]
+    pub modes: serde_json::Value,
+    /// The agent's configuration options (the model, how hard it thinks),
+    /// as they are now; null when it has none.
+    #[serde(default)]
+    pub config_options: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

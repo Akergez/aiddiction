@@ -120,7 +120,8 @@ deliberate (most come from multiagent-ui's `acp-ws-bridge.mjs`):
   way back; a response goes only to the socket that asked.
 - A session belongs to the socket that last drove it; its notifications go
   there (everyone, when the owner is gone) and into a bounded journal with a
-  sequence number. `_aiddiction/attach` answers first, then replays.
+  sequence number. `_aiddiction/attach` answers first (with the
+  session's modes and options as they are now), then replays.
 - The prompt is echoed into the journal as `user_message_chunk`: the client
   shows user messages only from there, never adds them itself.
 

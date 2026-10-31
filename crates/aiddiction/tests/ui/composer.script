@@ -47,4 +47,14 @@ shot:composer-mode
 click:460,735
 wait:400
 shot:composer-mode-auto
+expect:mode=auto
+# Opened again from the inbox, the conversation is attached to, not
+# created: the mode is still offered, as it was left.
+click:1056,16
+until:chats=0
+click:228,110
+until:page=chat
+until:mode=auto
+wait:500
+shot:composer-reopened
 quit

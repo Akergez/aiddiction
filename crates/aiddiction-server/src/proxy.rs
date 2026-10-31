@@ -112,6 +112,11 @@ struct Session {
     /// Tool call titles by id, for naming a permission request that only
     /// gives the id.
     tools: HashMap<String, String>,
+    /// The agent's modes (`{ currentModeId, availableModes }`) and its
+    /// configuration options as it last gave them, for a client that
+    /// attaches instead of creating or loading the session.
+    modes: Value,
+    config_options: Value,
 }
 
 impl Session {
@@ -131,6 +136,19 @@ impl Session {
             preview: String::new(),
             error: None,
             tools: HashMap::new(),
+            modes: Value::Null,
+            config_options: Value::Null,
+        }
+    }
+
+    /// Keeps the modes and options a `session/new|load|resume` or
+    /// `session/set_config_option` answer carries.
+    fn remember_choices(&mut self, result: &Value) {
+        if let Some(modes) = result.get("modes").filter(|modes| !modes.is_null()) {
+            self.modes = modes.clone();
+        }
+        if let Some(options) = result.get("configOptions").filter(|options| !options.is_null()) {
+            self.config_options = options.clone();
         }
     }
 }
@@ -417,6 +435,15 @@ impl Proxy {
                     state.list_session(session);
                     state.owners.insert(session.clone(), conn);
                 }
+                "session/set_mode" => {
+                    // Agents do not all announce a mode the client set.
+                    if let Some(mode) = message["params"]["modeId"].as_str() {
+                        let entry = state.sessions.entry(session.clone()).or_insert_with(Session::new);
+                        if entry.modes.is_object() {
+                            entry.modes["currentModeId"] = json!(mode);
+                        }
+                    }
+                }
                 "session/resume" => {
                     state.sessions.entry(session.clone()).or_insert_with(Session::new);
                     state.list_session(session);
@@ -561,6 +588,17 @@ impl Proxy {
                         state.owners.insert(new, conn);
                         sessions_changed = true;
                     }
+                if message.get("error").is_none()
+                    && matches!(method.as_str(), "session/new" | "session/load" | "session/resume" | "session/set_config_option")
+                {
+                    let id = match method.as_str() {
+                        "session/new" => message.pointer("/result/sessionId").and_then(Value::as_str).map(str::to_owned),
+                        _ => session.clone(),
+                    };
+                    if let Some(entry) = id.and_then(|id| state.sessions.get_mut(&id)) {
+                        entry.remember_choices(&message["result"]);
+                    }
+                }
                 if method == "authenticate" && message.get("error").is_none() {
                     state.auth_status = None;
                 }
@@ -666,7 +704,15 @@ impl State {
     /// after it: the journal past `after_seq`, then the agent's open questions.
     fn attach(&mut self, conn: ConnId, params: &AttachParams) -> (AttachResult, Vec<String>) {
         let Some(entry) = self.sessions.get(&params.session_id) else {
-            return (AttachResult { known: false, truncated: false, busy: false, last_seq: 0 }, Vec::new());
+            let unknown = AttachResult {
+                known: false,
+                truncated: false,
+                busy: false,
+                last_seq: 0,
+                modes: Value::Null,
+                config_options: Value::Null,
+            };
+            return (unknown, Vec::new());
         };
         let first = entry.journal.front().map(|(seq, _)| *seq).unwrap_or(entry.next_seq);
         let truncated = entry.dropped && first > params.after_seq + 1;
@@ -681,6 +727,8 @@ impl State {
             truncated,
             busy: entry.prompts_running > 0,
             last_seq: entry.next_seq - 1,
+            modes: entry.modes.clone(),
+            config_options: entry.config_options.clone(),
         };
         self.owners.insert(params.session_id.clone(), conn);
         // Questions the agent is still waiting on go to the new owner too.
@@ -732,6 +780,18 @@ impl State {
                 if let (Some(id), Some(title)) = (update["toolCallId"].as_str(), update["title"].as_str()) {
                     entry.tools.insert(id.to_owned(), title.to_owned());
                 }
+                false
+            }
+            "current_mode_update" => {
+                if let Some(mode) = update["currentModeId"].as_str()
+                    && entry.modes.is_object()
+                {
+                    entry.modes["currentModeId"] = json!(mode);
+                }
+                false
+            }
+            "config_option_update" => {
+                entry.remember_choices(update);
                 false
             }
             _ => false,
@@ -978,6 +1038,34 @@ mod tests {
         assert_eq!(attached["result"]["lastSeq"], 1);
         let replayed = json_of(c_rx.try_recv().unwrap());
         assert_eq!(replayed["params"]["update"]["content"]["text"], "hi");
+    }
+
+    #[test]
+    fn attach_gives_the_modes_and_options_as_they_are_now() {
+        let mut h = harness();
+        h.ready();
+        let (a, mut a_rx) = h.proxy.connect().unwrap();
+        h.proxy.on_client_line(a, r#"{"jsonrpc":"2.0","id":1,"method":"session/new","params":{}}"#);
+        let new = json_of(h.agent.try_recv().unwrap());
+        let modes = json!({ "currentModeId": "ask", "availableModes": [{ "id": "ask", "name": "Ask first" }, { "id": "auto", "name": "Auto" }, { "id": "plan", "name": "Plan" }] });
+        let model = json!([{ "id": "model", "category": "model", "currentValue": "a", "options": [{ "value": "a", "name": "A" }, { "value": "b", "name": "B" }] }]);
+        h.proxy.on_agent_line(&json!({ "jsonrpc": "2.0", "id": new["id"], "result": { "sessionId": "s", "modes": modes, "configOptions": model } }).to_string());
+        a_rx.try_recv().unwrap();
+
+        // The client sets one mode, the agent announces another; the model changes.
+        h.proxy.on_client_line(a, r#"{"jsonrpc":"2.0","id":2,"method":"session/set_mode","params":{"sessionId":"s","modeId":"auto"}}"#);
+        let update = |update: Value| json!({ "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "s", "update": update } }).to_string();
+        h.proxy.on_agent_line(&update(json!({ "sessionUpdate": "current_mode_update", "currentModeId": "plan" })));
+        let mut changed = model.clone();
+        changed[0]["currentValue"] = json!("b");
+        h.proxy.on_agent_line(&update(json!({ "sessionUpdate": "config_option_update", "configOptions": changed })));
+
+        let (b, mut b_rx) = h.proxy.connect().unwrap();
+        h.proxy.on_client_line(b, r#"{"jsonrpc":"2.0","id":5,"method":"_aiddiction/attach","params":{"sessionId":"s","afterSeq":0}}"#);
+        let attached = json_of(b_rx.try_recv().unwrap());
+        assert_eq!(attached["result"]["modes"]["currentModeId"], "plan");
+        assert_eq!(attached["result"]["modes"]["availableModes"].as_array().unwrap().len(), 3);
+        assert_eq!(attached["result"]["configOptions"][0]["currentValue"], "b");
     }
 
     #[test]

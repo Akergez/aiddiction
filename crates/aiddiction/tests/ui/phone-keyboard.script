@@ -7,7 +7,7 @@ until:page=inbox
 until:projects=1
 wait:1000
 shot:phone-keyboard-inbox
-click:286,376
+click:356,376
 until:dialog=open
 wait:800
 shot:phone-keyboard-dialog

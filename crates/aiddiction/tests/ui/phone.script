@@ -8,7 +8,7 @@ until:page=inbox
 until:projects=1
 wait:1000
 shot:phone-inbox-empty
-click:286,676
+click:356,676
 until:dialog=open
 wait:800
 # The agent: a sheet of the server's agents.
