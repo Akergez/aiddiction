@@ -104,6 +104,12 @@ for file in "${files[@]}"; do
   else
     echo "FAIL  $name (status $status)"
     grep -v -i -E "vulkan|objects:|setup_loader|drm dev|script.*step" "$home/app.log" | tail -n 30 | sed "s/^/      /"
+    # On GitHub, also as an annotation: those are readable without signing
+    # in, the job's log is not.
+    if [[ -n ${GITHUB_ACTIONS:-} ]]; then
+      why=$(grep -E "^script:" "$home/app.log" | tail -n 1)
+      echo "::error file=$file,title=UI scenario $name failed::${why:-status $status}"
+    fi
     failed+=("$name")
   fi
 done
