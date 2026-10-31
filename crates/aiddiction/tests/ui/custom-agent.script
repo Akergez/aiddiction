@@ -3,13 +3,13 @@
 # size: 1100x760
 until:page=inbox
 wait:1000
-click:28,730
+click:28,728
 until:page=settings
-click:220,174
+click:220,105
 until:page=agents
 until:agents=3
 wait:300
-click:1003,97
+click:1030,16
 until:dialog=open
 type:My fake
 key:tab

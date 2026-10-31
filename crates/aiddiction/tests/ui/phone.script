@@ -1,40 +1,44 @@
-# The phone: the inbox is the home page and the sections are tabs; a new
-# conversation from the round button; back returns to the inbox, where the
+# The phone, drawn for a finger: the inbox is the home page and the sections
+# are tabs; a new conversation from the round button, in a sheet whose agent
+# is picked from a sheet of its own; back returns to the inbox, where the
 # agent's question waits and is answered; the projects tab.
 # size: 400x800
+# env: AIDDICTION_INPUT=touch
 until:page=inbox
 until:projects=1
 wait:1000
 shot:phone-inbox-empty
-click:356,694
+click:286,676
 until:dialog=open
-click:200,233
-wait:400
-type:fake
-key:enter
-wait:300
-click:200,322
+wait:800
+# The agent: a sheet of the server's agents.
+click:200,643
+wait:800
+click:200,764
+wait:800
+click:200,730
 type:please make a file
-key:enter
+# Start.
+click:354,442
 until:page=chat
 until:permissions=1
 wait:500
 shot:phone-chat
 # Back.
-click:20,17
+click:24,57
 until:page=inbox
 until:waiting=1
 wait:500
 shot:phone-inbox
 # Allow, in the row.
-click:96,190
+click:115,323
 until:waiting=0
 wait:300
 # The projects tab, and the project.
 click:200,770
 until:page=projects
 wait:300
-click:200,100
+click:200,190
 until:page=project
 wait:500
 shot:phone-project

@@ -7,20 +7,22 @@
 //! conversations belong to the project's own server, whichever that is.
 //!
 //! Three sections — the inbox (every conversation on every server), the
-//! projects, the settings. On a desktop a rail picks the section, a column
-//! lists what is in it and the page is beside them; on a phone one page
-//! shows at a time, the sections are tabs along the bottom and back goes
-//! where the person came from.
+//! projects, the settings — and the pages under them, which are
+//! [`gpui_adaptive::Route`]s in a [`NavigatorState`]. The navigator puts a
+//! page beside the list it was opened from when there is room and over it
+//! when there is not; [`Destinations`] is the way between sections. No page
+//! here knows which of the two it gets.
 
 use std::collections::HashMap;
 
 use aiddiction_api::{Instance, Project, ProjectId};
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{ActiveTheme, IconName, h_flex, v_flex};
-use gpui_kit::component::{Sizable as _, StyledExt as _};
+use gpui_adaptive::{
+    AppFrame, Avatar, Command, Destination, Destinations, Empty, Navigator, NavigatorEvent, NavigatorState, Presence,
+    Route, Screen, Signal, Tone,
+};
+use gpui_adaptive::IconName;
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, Context, Entity, EntityId, Render, SharedString, Subscription, Window, div, px};
+use gpui_kit::{AnyElement, App, Context, Entity, EntityId, Render, Rems, SharedString, Subscription, Window, div, rems};
 
 use super::chat::ChatView;
 use crate::server::ServerConnection;
@@ -42,6 +44,9 @@ pub enum Page {
     Appearance,
     Agents,
     Servers,
+    /// What stands beside a section's list when nothing in it is open and
+    /// there is room: "Pick a conversation".
+    Pick(Section),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,22 +62,40 @@ impl Page {
             Page::Inbox | Page::Chat(_) => Section::Inbox,
             Page::Projects | Page::Project(_) | Page::Review(_) => Section::Projects,
             Page::Settings | Page::Appearance | Page::Agents | Page::Servers => Section::Settings,
+            Page::Pick(section) => section,
         }
-    }
-
-    /// A section's first page: a tab on a phone, with nothing to go back to.
-    pub fn is_root(self) -> bool {
-        matches!(self, Page::Inbox | Page::Projects | Page::Settings)
     }
 }
 
-impl Section {
-    pub fn root(self) -> Page {
+impl Route for Page {
+    /// A conversation is opened from the inbox, a project from the projects,
+    /// a settings page from their list: that list stands beside it.
+    fn companion(&self) -> Option<Self> {
         match self {
-            Section::Inbox => Page::Inbox,
-            Section::Projects => Page::Projects,
-            Section::Settings => Page::Settings,
+            Page::Chat(_) => Some(Page::Inbox),
+            Page::Project(_) => Some(Page::Projects),
+            Page::Appearance | Page::Agents | Page::Servers => Some(Page::Settings),
+            _ => None,
         }
+    }
+
+    fn wide_detail(&self) -> Option<Self> {
+        match self {
+            Page::Inbox => Some(Page::Pick(Section::Inbox)),
+            Page::Projects => Some(Page::Pick(Section::Projects)),
+            // With room, the settings open on how the window looks.
+            Page::Settings => Some(Page::Appearance),
+            _ => None,
+        }
+    }
+
+    fn column_width(&self) -> Rems {
+        rems(21.)
+    }
+
+    /// The task board and the diff go sideways.
+    fn scrolls_sideways(&self) -> bool {
+        matches!(self, Page::Project(_) | Page::Review(_))
     }
 }
 
@@ -81,9 +104,10 @@ pub struct Shell {
     pub(crate) servers: Vec<Entity<ServerConnection>>,
     /// The one in use: whose projects and agents are listed.
     pub(crate) server: Option<Entity<ServerConnection>>,
-    pub(crate) page: Page,
-    /// The pages before this one, for back.
-    history: Vec<Page>,
+    /// The pages: the one up now is its top.
+    pub(crate) navigator: Entity<NavigatorState<Page>>,
+    /// The page up when the navigator last changed: read when it leaves.
+    shown: Page,
     pub(crate) chats: Vec<Entity<ChatView>>,
     /// Made when the page is first opened.
     settings: Option<Entity<super::settings_page::SettingsPage>>,
@@ -94,9 +118,7 @@ pub struct Shell {
     pub(crate) review_from: HashMap<ProjectId, EntityId>,
     _server_subscriptions: Vec<Subscription>,
     _appearance: Vec<Subscription>,
-    /// The system's back, while there is somewhere to go back to; see
-    /// `render`.
-    back: Option<gpui_android_glue::back::Guard>,
+    _navigator: Subscription,
 }
 
 impl Shell {
@@ -118,19 +140,21 @@ impl Shell {
                 }
             }),
         ];
-        let page = if Settings::get(cx).servers.is_empty() { Page::Servers } else { Page::Inbox };
+        let first = if Settings::get(cx).servers.is_empty() { Page::Servers } else { Page::Inbox };
+        let navigator = cx.new(|_| NavigatorState::new(first));
+        let navigated = cx.subscribe(&navigator, |this, _, _: &NavigatorEvent, cx| this.navigated(cx));
         let mut this = Self {
             servers: Vec::new(),
             server: None,
-            page,
-            history: Vec::new(),
+            navigator,
+            shown: first,
             chats: Vec::new(),
             settings: None,
             reviews: HashMap::new(),
             review_from: HashMap::new(),
             _server_subscriptions: Vec::new(),
             _appearance: appearance,
-            back: None,
+            _navigator: navigated,
         };
         this.sync_servers(cx);
         this
@@ -154,16 +178,17 @@ impl Shell {
             self.chats.retain(|chat| !gone.contains(&chat.read(cx).project_id));
             self.reviews.retain(|project, _| !gone.contains(project));
             self.review_from.retain(|project, _| !gone.contains(project));
-            let open = |page: &Page, shell: &Self| match *page {
-                Page::Project(id) | Page::Review(id) => !gone.contains(&id),
-                Page::Chat(id) => shell.chat(id).is_some(),
-                _ => true,
-            };
-            let history = std::mem::take(&mut self.history);
-            self.history = history.into_iter().filter(|page| open(page, self)).collect();
-            if !open(&self.page, self) {
-                self.page = self.page.section().root();
-            }
+            let chats: Vec<EntityId> = self.chats.iter().map(|chat| chat.entity_id()).collect();
+            self.navigator.update(cx, |navigator, cx| {
+                navigator.retain(
+                    |page| match *page {
+                        Page::Project(id) | Page::Review(id) => !gone.contains(&id),
+                        Page::Chat(id) => chats.contains(&id),
+                        _ => true,
+                    },
+                    cx,
+                )
+            });
         }
         self._server_subscriptions = self.servers.iter().map(|server| cx.observe(server, |_, _, cx| cx.notify())).collect();
         self.server = settings
@@ -194,22 +219,27 @@ impl Shell {
         cx.notify();
     }
 
-    /// Goes to `page`; back returns here.
+    /// The page up now.
+    pub(crate) fn page(&self, cx: &App) -> Page {
+        *self.navigator.read(cx).top()
+    }
+
+    /// Opens `page` over this one; back returns here.
     pub(super) fn go(&mut self, page: Page, cx: &mut Context<Self>) {
-        if page != self.page {
-            self.history.push(self.page);
-        }
-        self.show(page, cx);
+        self.navigator.update(cx, |navigator, cx| navigator.push(page, cx));
     }
 
     /// Goes to a section's page from its tab: there is nothing to go back to.
     pub(super) fn go_root(&mut self, page: Page, cx: &mut Context<Self>) {
-        self.history.clear();
-        self.show(page, cx);
+        self.navigator.update(cx, |navigator, cx| navigator.replace_root(page, cx));
     }
 
-    fn show(&mut self, page: Page, cx: &mut Context<Self>) {
-        self.mark_seen(cx);
+    /// What a page needs as it comes up and as it goes.
+    fn navigated(&mut self, cx: &mut Context<Self>) {
+        let left = self.shown;
+        let page = self.page(cx);
+        self.shown = page;
+        self.mark_seen(left, cx);
         // The projects listed beside a project's page are its server's.
         if let Page::Project(id) | Page::Review(id) = page
             && let Some(server) = self.server_of(id, cx)
@@ -220,25 +250,13 @@ impl Shell {
                 server.update(cx, |server, cx| server.refresh_instances(id, cx));
             }
         }
-        self.page = page;
-        self.mark_seen(cx);
+        self.mark_seen(page, cx);
         cx.notify();
     }
 
-    pub(super) fn back(&mut self, cx: &mut Context<Self>) {
-        // Pages that are gone meanwhile (a closed chat) are passed over.
-        while let Some(page) = self.history.pop() {
-            if !matches!(page, Page::Chat(id) if self.chat(id).is_none()) {
-                self.show(page, cx);
-                return;
-            }
-        }
-        self.show(self.page.section().root(), cx);
-    }
-
-    /// Remembers how far the conversation on screen has been read.
-    fn mark_seen(&self, cx: &mut Context<Self>) {
-        let Page::Chat(id) = self.page else { return };
+    /// Remembers how far the conversation `page` shows has been read.
+    fn mark_seen(&self, page: Page, cx: &mut Context<Self>) {
+        let Page::Chat(id) = page else { return };
         let Some(chat) = self.chat(id) else { return };
         let Some(server) = self.server_of(chat.read(cx).project_id, cx) else { return };
         let session = chat.read(cx).session.read(cx);
@@ -258,13 +276,13 @@ impl Shell {
 
     /// The session of the conversation on screen, if one is.
     pub(super) fn showing_session(&self, cx: &gpui_kit::App) -> Option<String> {
-        let Page::Chat(id) = self.page else { return None };
+        let Page::Chat(id) = self.page(cx) else { return None };
         self.chat(id)?.read(cx).session.read(cx).session_id.clone()
     }
 
     /// The project the page on screen is about, for a new conversation.
     pub(super) fn current_project(&self, cx: &gpui_kit::App) -> Option<ProjectId> {
-        match self.page {
+        match self.page(cx) {
             Page::Project(id) | Page::Review(id) => Some(id),
             Page::Chat(id) => self.chat(id).map(|chat| chat.read(cx).project_id),
             _ => None,
@@ -348,79 +366,45 @@ impl Shell {
     }
 
     pub(super) fn close_chat(&mut self, id: EntityId, cx: &mut Context<Self>) {
-        self.mark_seen(cx);
+        self.mark_seen(Page::Chat(id), cx);
+        self.navigator.update(cx, |navigator, cx| navigator.retain(|page| *page != Page::Chat(id), cx));
         self.chats.retain(|chat| chat.entity_id() != id);
-        if self.page == Page::Chat(id) {
-            self.back(cx);
-        }
         cx.notify();
     }
 
-    fn render_page(&mut self, phone: bool, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        match self.page {
-            Page::Inbox if phone => self.render_inbox(false, cx),
-            Page::Projects if phone => self.render_projects(false, cx),
-            Page::Settings if phone => self.render_settings_menu(false, cx),
-            Page::Inbox => self.render_placeholder(IconName::Inbox, "Pick a conversation, or start a new one.", cx),
-            Page::Projects => self.render_placeholder(IconName::Folder, "Pick a project, or make a new one.", cx),
-            Page::Settings | Page::Appearance => self
-                .settings
-                .get_or_insert_with(|| cx.new(|cx| super::settings_page::SettingsPage::new(window, cx)))
-                .clone()
-                .into_any_element(),
-            Page::Agents => self.render_agents(window, cx),
-            Page::Servers => self.render_servers(window, cx),
+    /// Draws one page. The navigator calls it for the page up, the list
+    /// beside it, and the page a back gesture shows: it changes nothing.
+    fn render_route(&mut self, route: Page, page: gpui_adaptive::Page, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let screen = match route {
+            Page::Inbox => self.render_inbox(cx),
+            Page::Projects => self.render_projects(cx),
+            Page::Settings => self.render_settings_menu(cx),
+            Page::Pick(section) => self.render_pick(section, cx),
+            Page::Appearance => {
+                let settings = self
+                    .settings
+                    .get_or_insert_with(|| cx.new(|cx| super::settings_page::SettingsPage::new(window, cx)))
+                    .clone();
+                Screen::new("appearance", "Appearance").content(settings)
+            }
+            Page::Agents => self.render_agents(cx),
+            Page::Servers => self.render_servers(cx),
             Page::Project(id) => self.render_project(id, window, cx),
-            Page::Review(id) => self.render_review(id),
-            Page::Chat(id) => match self.chat(id) {
-                Some(chat) => chat.clone().into_any_element(),
-                None => self.render_placeholder(IconName::Inbox, "This conversation is closed.", cx),
-            },
-        }
+            Page::Review(id) => self.render_review(id, cx),
+            Page::Chat(id) => self.render_chat(id, cx),
+        };
+        screen.page(&page).in_title_bar(true).into_any_element()
     }
 
-    fn render_placeholder(&self, icon: IconName, text: &'static str, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme().clone();
-        let text = if self.servers.is_empty() { "Add a server to begin." } else { text };
-        v_flex()
-            .size_full()
-            .items_center()
-            .justify_center()
-            .gap_3()
-            .text_color(theme.muted_foreground)
-            .child(
-                div()
-                    .size_16()
-                    .rounded_full()
-                    .bg(theme.muted)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(gpui_kit::component::Icon::new(icon).large()),
-            )
-            .child(div().text_sm().child(text))
-            .when(!self.servers.is_empty() && self.page.section() == Section::Inbox, |column| {
-                column.child(
-                    Button::new("placeholder-new")
-                        .primary()
-                        .icon(IconName::Plus)
-                        .label("New conversation")
-                        .on_click(cx.listener(|this, _, window, cx| this.new_conversation(window, cx))),
-                )
-            })
-            .into_any_element()
-    }
-
-    /// What the bar across the top says about the page. A desktop's
-    /// section pages have their heading in the column: the bar names the
-    /// server instead, or every server for the inbox, which is theirs.
-    fn title(&self, phone: bool, cx: &Context<Self>) -> (SharedString, Option<SharedString>) {
-        if !phone && self.page == Page::Inbox && self.servers.len() > 1 {
+    /// What stands beside a section's list with nothing open. Its bar, the
+    /// window's title, names the server; for the inbox, which is every
+    /// server's, all of them.
+    fn render_pick(&self, section: Section, cx: &mut Context<Self>) -> Screen {
+        let (title, subtitle) = if section == Section::Inbox && self.servers.len() > 1 {
             let names = self.servers.iter().map(|server| server.read(cx).entry.name.clone()).collect::<Vec<_>>();
-            return ("All servers".into(), Some(names.join(" · ").into()));
-        }
-        if !phone && self.page.is_root() {
-            return match &self.server {
+            ("All servers".into(), Some(names.join(" · ")))
+        } else {
+            match &self.server {
                 Some(server) => {
                     let server = server.read(cx);
                     let status = match &server.status {
@@ -428,37 +412,58 @@ impl Shell {
                         crate::server::Status::Online => server.entry.url.clone(),
                         crate::server::Status::Offline(error) => error.clone(),
                     };
-                    (server.entry.name.clone().into(), Some(status.into()))
+                    (SharedString::from(server.entry.name.clone()), Some(status))
                 }
                 None => ("Aiddiction".into(), None),
-            };
-        }
-        let project_name = |id: ProjectId| {
-            self.server_of(id, cx).and_then(|server| server.read(cx).project(id).map(|project| project.name.clone())).unwrap_or_default()
+            }
         };
-        match self.page {
-            Page::Inbox => ("Inbox".into(), None),
-            Page::Projects => ("Projects".into(), None),
-            Page::Settings => ("Settings".into(), None),
-            Page::Appearance => ("Appearance".into(), None),
-            Page::Agents => ("Agents".into(), None),
-            Page::Servers => ("Servers".into(), None),
-            Page::Project(id) => (project_name(id).into(), None),
-            Page::Review(id) => ("Review".into(), Some(project_name(id).into())),
-            Page::Chat(id) => match self.chat(id) {
-                Some(chat) => {
-                    let session = chat.read(cx).session.read(cx);
-                    let title = self.session_title(session, cx);
-                    (title, Some(format!("{} · {}", session.project_name, session.agent_name).into()))
-                }
-                None => (SharedString::default(), None),
-            },
-        }
+        let empty = if self.servers.is_empty() {
+            Empty::new(IconName::HardDrive, "Add a server to begin.")
+        } else if section == Section::Inbox {
+            Empty::new(IconName::Inbox, "Pick a conversation, or start a new one.").action(self.new_conversation_command(cx))
+        } else {
+            Empty::new(IconName::Folder, "Pick a project, or make a new one.")
+        };
+        Screen::new(("pick", section as usize), title)
+            .when_some(subtitle, |screen, subtitle| screen.subtitle(subtitle))
+            .scrolls(false)
+            .content(empty)
+    }
+
+    fn render_chat(&self, id: EntityId, cx: &mut Context<Self>) -> Screen {
+        let Some(chat) = self.chat(id).cloned() else {
+            return Screen::new("chat-closed", "").scrolls(false).content(Empty::new(IconName::Inbox, "This conversation is closed."));
+        };
+        let session = chat.read(cx).session.read(cx);
+        let title = self.session_title(session, cx);
+        let subtitle = format!("{} · {}", session.project_name, session.agent_name);
+        let status = if !session.thread.permissions.is_empty() {
+            Some(("Needs you".into(), Signal::Waiting(Tone::Warning)))
+        } else if session.busy {
+            Some(("Working".into(), Signal::Busy))
+        } else {
+            None
+        };
+        let review = chat.clone();
+        let shell = cx.entity().downgrade();
+        Screen::new("chat", title)
+            .subtitle(subtitle)
+            .status(status)
+            .scrolls(false)
+            .command(
+                Command::new("bar-review", "Review")
+                    .icon(IconName::FileText)
+                    .on_trigger(move |_, cx| review.update(cx, |_, cx| cx.emit(super::chat::OpenReview))),
+            )
+            .command(Command::new("bar-close", "Close").icon(IconName::Close).on_trigger(move |_, cx| {
+                shell.update(cx, |shell, cx| shell.close_chat(id, cx)).ok();
+            }))
+            .content(chat)
     }
 
     /// A conversation's title: the server's (from its first prompt, or the
     /// agent's), else the agent's name.
-    fn session_title(&self, session: &AgentSession, cx: &Context<Self>) -> SharedString {
+    fn session_title(&self, session: &AgentSession, cx: &App) -> SharedString {
         let known = session.session_id.as_deref().and_then(|id| {
             self.servers.iter().find_map(|server| {
                 server
@@ -474,184 +479,78 @@ impl Shell {
         known.unwrap_or_else(|| "New conversation".into()).into()
     }
 
-    /// The page's own buttons at the end of the bar.
-    fn bar_actions(&self, phone: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let theme = cx.theme().clone();
-        match self.page {
-            Page::Chat(id) => {
-                let Some(chat) = self.chat(id).cloned() else { return Vec::new() };
-                let session = chat.read(cx).session.read(cx);
-                let mut actions = Vec::new();
-                if phone {
-                    // No room: the question's card and the stop button say as much.
-                } else if !session.thread.permissions.is_empty() {
-                    actions.push(super::inbox::status_tag("Needs you", theme.warning, None, cx));
-                } else if session.busy {
-                    actions.push(super::inbox::status_tag("Working", theme.primary, Some(Spinner::new().xsmall().into_any_element()), cx));
-                }
-                let review = Button::new("bar-review").ghost().small().icon(IconName::FileText).tooltip("Review the changes and annotate them for the agent");
-                let review_chat = chat.clone();
-                actions.push(
-                    (if phone { review } else { review.label("Review") })
-                        .on_click(move |_, _, cx| review_chat.update(cx, |_, cx| cx.emit(super::chat::OpenReview)))
-                        .into_any_element(),
-                );
-                actions.push(
-                    Button::new("bar-close")
-                        .ghost()
-                        .small()
-                        .icon(IconName::Close)
-                        .tooltip("Close the conversation (it goes on in the inbox)")
-                        .on_click(cx.listener(move |this, _, _, cx| this.close_chat(id, cx)))
-                        .into_any_element(),
-                );
-                actions
+    /// Starts a conversation: the inbox's primary command.
+    pub(super) fn new_conversation_command(&self, cx: &mut Context<Self>) -> Command {
+        let shell = cx.entity().downgrade();
+        Command::new("new-conversation", "New conversation")
+            .icon(IconName::Plus)
+            .primary()
+            .disabled(self.servers.is_empty())
+            .on_trigger(move |window, cx| {
+                shell.update(cx, |shell, cx| shell.new_conversation(window, cx)).ok();
+            })
+    }
+
+    /// The server in use, heading the rail: its letter and whether it
+    /// answers. Picking it opens the servers.
+    fn render_server_switch(&self, cx: &mut Context<Self>) -> AnyElement {
+        let (letter, presence, name) = match &self.server {
+            Some(server) => {
+                let server = server.read(cx);
+                let letter = server.entry.name.chars().next().unwrap_or('?').to_uppercase().collect::<String>();
+                let presence = match server.status {
+                    crate::server::Status::Connecting => Presence::Away,
+                    crate::server::Status::Online => Presence::Online,
+                    crate::server::Status::Offline(_) => Presence::Busy,
+                };
+                (letter, presence, SharedString::from(server.entry.name.clone()))
             }
-            _ => Vec::new(),
-        }
+            None => ("+".to_owned(), Presence::Offline, "No server".into()),
+        };
+        div()
+            .id("rail-server")
+            .cursor_pointer()
+            .child(Avatar::new("server-avatar", letter).square().presence(presence))
+            .tooltip(gpui_adaptive::prim::tooltip(name))
+            .on_click(cx.listener(|this, _, _, cx| this.go_root(Page::Servers, cx)))
+            .into_any_element()
     }
 }
 
 impl Render for Shell {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let phone = super::is_phone(window);
-        let can_go_back = phone && !self.page.is_root();
-        // The system's back does what the button does, while there is one;
-        // without it back leaves the application.
-        if can_go_back != self.back.is_some() {
-            self.back = can_go_back.then(|| {
-                let shell = cx.weak_entity();
-                gpui_android_glue::back::push(move |_, cx| shell.update(cx, |shell, cx| shell.back(cx)).is_ok())
-            });
-        }
-        // While a gesture of back is under way the page moves aside with the
-        // finger and shows the one back goes to; in a conversation a finger
-        // drawn to the right goes back too.
-        let gesture = self.back.as_ref().and_then(|back| back.gesture(window, cx));
-        let screen = self.render_screen(phone, window, cx);
-        let under = gesture.map(|_| {
-            let target = self.back_target();
-            let page = std::mem::replace(&mut self.page, target);
-            let under = self.render_screen(phone, window, cx);
-            self.page = page;
-            under
-        });
-        gpui_android_glue::back::preview(screen, gesture)
-            .under(under)
-            .swipe_back(phone && matches!(self.page, Page::Chat(_)))
-    }
-}
-
-impl Shell {
-    /// The page back goes to: what [`Self::back`] shows.
-    fn back_target(&self) -> Page {
-        let gone = |page: &&Page| matches!(**page, Page::Chat(id) if self.chat(id).is_none());
-        self.history.iter().rev().find(|page| !gone(page)).copied().unwrap_or(self.page.section().root())
-    }
-
-    /// The window's whole content for the page up now: its bar and the page.
-    fn render_screen(&mut self, phone: bool, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let (title, subtitle) = self.title(phone, cx);
-        let can_go_back = phone && !self.page.is_root();
-        let theme = cx.theme().clone();
-
-        // A phone has no room for the subtitle beside the title: it goes under it.
-        let title_text = div()
-            .min_w_0()
-            .truncate()
-            .font_semibold()
-            .text_size(if !phone { px(13.) } else if self.page.is_root() { px(22.) } else { px(14.) })
-            .line_height(gpui_kit::relative(1.2))
-            .child(title);
-        // Two lines fit a phone's bar, and a narrow desktop window's too.
-        let subtitle = subtitle.map(|subtitle| {
-            div()
-                .min_w_0()
-                .truncate()
-                .text_size(px(11.5))
-                .line_height(gpui_kit::relative(1.2))
-                .text_color(theme.muted_foreground)
-                .child(subtitle)
-        });
-        let heading = if phone {
-            v_flex().flex_1().min_w_0().child(title_text).children(subtitle).into_any_element()
-        } else {
-            h_flex()
-                .flex_1()
-                .min_w_0()
-                .gap_2()
-                .items_baseline()
-                .child(title_text.flex_none().max_w(gpui_kit::relative(0.7)))
-                .children(subtitle)
-                .into_any_element()
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (section, at_root) = {
+            let navigator = self.navigator.read(cx);
+            (navigator.top().section(), navigator.is_at_root())
         };
-        let bar = h_flex()
-            .w_full()
-            .gap_1()
-            .pr_2()
-            .when(phone, |bar| bar.min_h_12())
-            .when(can_go_back, |bar| {
-                bar.child(
-                    Button::new("back").ghost().icon(IconName::ArrowLeft).on_click(cx.listener(|this, _, _, cx| this.back(cx))),
-                )
-            })
-            .when(!can_go_back, |bar| bar.pl_3())
-            .child(heading)
-            .children(self.bar_actions(phone, cx));
-
-        let page = self.render_page(phone, window, cx);
-        let body = if phone {
-            let tabs = self.page.is_root().then(|| self.render_tabs(cx));
-            let fab = (self.page == Page::Inbox && !self.servers.is_empty()).then(|| self.render_fab(cx));
-            // Every page stands on the keyboard, frame by frame as it slides:
-            // what is typed into is never under it. The pages pad the bar
-            // under them themselves (the tabs, the composer); the keyboard
-            // covers that bar too.
-            let over_the_bar = (super::keyboard_inset(window) - super::insets().1).max(px(0.));
-            v_flex()
-                .flex_1()
-                .min_h_0()
-                .w_full()
-                .pb(over_the_bar)
-                .child(div().relative().flex_1().min_h_0().w_full().child(page).children(fab))
-                .children(tabs)
-                .into_any_element()
-        } else {
-            // The review wants every column it can get for the diff.
-            let column = match self.page {
-                Page::Review(_) => None,
-                _ => Some(match self.page.section() {
-                    Section::Inbox => self.render_inbox(true, cx),
-                    Section::Projects => self.render_projects(true, cx),
-                    Section::Settings => self.render_settings_menu(true, cx),
-                }),
-            };
-            h_flex()
-                .flex_1()
-                .min_h_0()
-                .w_full()
-                .items_start()
-                .child(self.render_rail(cx))
-                .children(column.map(|column| {
-                    div()
-                        .w(gpui_kit::rems(21.))
-                        .flex_none()
-                        .h_full()
-                        .border_r_1()
-                        .border_color(theme.sidebar_border)
-                        .bg(theme.sidebar)
-                        .child(column)
-                }))
-                .child(div().flex_1().min_w_0().h_full().child(page))
-                .into_any_element()
+        let selected = match section {
+            Section::Inbox => "inbox",
+            Section::Projects => "projects",
+            Section::Settings => "settings",
         };
-
-        v_flex()
-            .size_full()
-            .bg(theme.background)
-            .text_color(theme.foreground)
-            .child(super::title_frame(bar, cx))
-            .child(body)
-            .into_any_element()
+        let waiting = self.waiting(cx);
+        let shell = cx.entity();
+        let pages = Navigator::new("pages", &self.navigator, move |route, page, window, cx| {
+            shell.update(cx, |shell, cx| shell.render_route(*route, page, window, cx))
+        });
+        let shell = cx.entity().downgrade();
+        AppFrame::new("Aiddiction").title_bar(false).edge_to_edge(true).child(
+            Destinations::new("sections", selected)
+                .prefer_rail(true)
+                .header(self.render_server_switch(cx))
+                .destination(Destination::new("inbox", "Inbox", IconName::Inbox).count(waiting, true))
+                .destination(Destination::new("projects", "Projects", IconName::Folder))
+                .destination(Destination::new("settings", "Settings", IconName::Settings).pinned())
+                .on_select(move |key, _, cx| {
+                    let root = match key.as_ref() {
+                        "projects" => Page::Projects,
+                        "settings" => Page::Settings,
+                        _ => Page::Inbox,
+                    };
+                    shell.update(cx, |shell, cx| shell.go_root(root, cx)).ok();
+                })
+                .bar_visible(at_root)
+                .content(pages),
+        )
     }
 }

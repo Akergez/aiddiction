@@ -3,13 +3,13 @@
 # size: 1100x760
 until:page=inbox
 wait:1000
-click:28,730
+click:28,728
 until:page=settings
 wait:300
 shot:settings-light
 expect:theme=light
 # Dark.
-click:1059,118
+click:1059,73
 until:theme=dark
 wait:300
 shot:settings-dark

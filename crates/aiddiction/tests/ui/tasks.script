@@ -5,14 +5,14 @@
 until:page=inbox
 until:projects=1
 wait:500
-click:28,168
+click:28,140
 until:page=projects
-click:220,110
+click:220,60
 until:page=project
 wait:500
 shot:tasks-board
 # Todo's plus button.
-click:600,197
+click:605,118
 until:dialog=open
 type:Docs
 wait:300
@@ -22,14 +22,14 @@ until:tasks=1
 until:dialog=closed
 wait:500
 shot:tasks-created
-# Its right arrow: to In progress.
-click:575,270
+# Its right arrow, in the bar over the card: to In progress.
+click:568,155
 wait:800
 shot:tasks-moved
 expect:dialog=closed
 expect:tasks=1
 # A click on the card edits it; Enter in the title saves.
-click:730,243
+click:700,172
 until:dialog=open
 key:end
 type: now
@@ -37,8 +37,8 @@ key:enter
 until:dialog=closed
 wait:800
 shot:tasks-edited
-# Its delete button.
-click:819,270
+# Its delete button, in the bar.
+click:830,155
 until:tasks=0
 wait:300
 shot:tasks-deleted

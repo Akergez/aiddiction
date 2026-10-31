@@ -1,24 +1,25 @@
 # The phone with its keyboard up (GPUI_KEYBOARD pretends one): every page
-# stands on it (the inbox's round button with it), the new conversation
-# dialog moves above it, and the chat's composer sits on it.
+# stands on it (the inbox's round button with it), the new conversation's
+# sheet rises above it, and the chat's composer sits on it.
 # size: 400x800
-# env: GPUI_KEYBOARD=300
+# env: AIDDICTION_INPUT=touch GPUI_KEYBOARD=300
 until:page=inbox
 until:projects=1
 wait:1000
 shot:phone-keyboard-inbox
-click:356,394
+click:286,376
 until:dialog=open
-wait:400
+wait:800
 shot:phone-keyboard-dialog
-click:200,169
-wait:400
-type:fake
-key:enter
-wait:300
-click:200,258
+# The agent, from its own sheet.
+click:200,331
+wait:800
+click:200,464
+wait:800
+click:200,432
 type:please make a file
-key:enter
+# Start.
+click:354,142
 until:page=chat
 until:permissions=1
 wait:500

@@ -55,9 +55,21 @@ fn start(cx: &mut gpui_kit::App) {
     settings::Settings::install(cx);
     appearance::init(cx);
     appearance::apply_mode(None, cx);
+    gpui_adaptive::init(input_mode(), cx);
     #[cfg(all(unix, not(target_os = "android")))]
     demo::start_if_requested(cx);
     ui::open_window(cx);
+}
+
+/// How the person points: a finger on a phone, a pointer elsewhere.
+/// `AIDDICTION_INPUT=touch` draws a desktop window for a finger, which is
+/// how the UI scenarios see the phone.
+fn input_mode() -> gpui_adaptive::InputMode {
+    if cfg!(target_os = "android") || std::env::var("AIDDICTION_INPUT").as_deref() == Ok("touch") {
+        gpui_adaptive::InputMode::Touch
+    } else {
+        gpui_adaptive::InputMode::Pointer
+    }
 }
 
 /// The Android entry point, called by `android-activity` on a thread of its

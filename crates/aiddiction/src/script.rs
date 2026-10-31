@@ -97,12 +97,13 @@ pub fn play(window: AnyWindowHandle, shell: Entity<Shell>, cx: &mut App) {
 
 fn observe(what: &str, shell: &Entity<Shell>, window: &mut Window, cx: &mut App) -> Option<String> {
     let shell = shell.read(cx);
-    let chat = match shell.page {
+    let page = shell.page(cx);
+    let chat = match page {
         Page::Chat(id) => shell.chat(id).map(|chat| chat.read(cx).session.read(cx)),
         _ => None,
     };
     Some(match what {
-        "page" => match shell.page {
+        "page" => match page {
             Page::Inbox => "inbox",
             Page::Projects => "projects",
             Page::Project(_) => "project",
@@ -112,13 +113,14 @@ fn observe(what: &str, shell: &Entity<Shell>, window: &mut Window, cx: &mut App)
             Page::Appearance => "appearance",
             Page::Agents => "agents",
             Page::Servers => "servers",
+            Page::Pick(_) => "pick",
         }
         .to_owned(),
         "sessions" => shell.listed(cx).len().to_string(),
         "waiting" => shell.listed(cx).iter().filter(|listed| listed.group == crate::inbox::Group::NeedsYou).count().to_string(),
         "projects" => shell.server.as_ref().map_or(0, |server| server.read(cx).projects.len()).to_string(),
         "chats" => shell.chats.len().to_string(),
-        "annotations" => match shell.page {
+        "annotations" => match page {
             Page::Review(project) => shell.reviews.get(&project).map_or(0, |(view, _)| view.read(cx).annotations().count()),
             _ => 0,
         }
@@ -141,7 +143,11 @@ fn observe(what: &str, shell: &Entity<Shell>, window: &mut Window, cx: &mut App)
             }
             .to_owned()
         }
-        "dialog" => if window.has_active_dialog(cx) { "open" } else { "closed" }.to_owned(),
+        // A form is a dialog on a pointer and a sheet on a finger.
+        "dialog" => {
+            if window.has_active_dialog(cx) || gpui_adaptive::Sheet::is_open(window, cx) { "open" } else { "closed" }.to_owned()
+        }
+        #[allow(clippy::disallowed_methods, reason = "the scenario asks which mode the theme is in, not for a colour")]
         "theme" => if gpui_kit::component::ActiveTheme::theme(cx).mode.is_dark() { "dark" } else { "light" }.to_owned(),
         _ => return None,
     })

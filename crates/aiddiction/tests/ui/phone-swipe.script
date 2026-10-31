@@ -2,18 +2,19 @@
 # project's board moves the board, not the page under it, and a swipe up
 # moves the page.
 # size: 400x330
+# env: AIDDICTION_INPUT=touch
 until:page=inbox
 until:projects=1
 wait:1000
 click:200,305
 until:page=projects
 wait:300
-click:200,100
+click:200,180
 until:page=project
 wait:500
 shot:phone-swipe-before
 # Left over the board.
-swipe:300,245,-200,0
+swipe:300,190,-200,0
 wait:1500
 shot:phone-swipe-board
 # A touch stops the board's fling, as a finger does on a phone; a swipe

@@ -7,16 +7,16 @@ until:page=inbox
 until:projects=1
 wait:800
 expect:sessions=0
-click:748,452
+click:378,16
 until:dialog=open
 # The agent: its list is searchable.
-click:550,229
+click:550,217
 wait:400
 type:fake
 key:enter
 wait:300
 # The message; Enter starts.
-click:550,318
+click:550,300
 type:please make a file
 key:enter
 until:page=chat
@@ -27,7 +27,7 @@ until:waiting=1
 wait:300
 shot:first-chat-permission
 # Allow, in the inbox's row.
-click:156,228
+click:246,180
 until:busy=no
 expect:permissions=0
 expect:waiting=0

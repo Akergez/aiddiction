@@ -42,7 +42,9 @@ A server for experiments: `AIDDICTION_LISTEN`, `AIDDICTION_DATA_DIR`,
 
 `AIDDICTION_SCRIPT="until:page=inbox;click:748,452;type:hello;key:enter;shot:x;quit"`
 drives the window (`crates/aiddiction/src/script.rs`); `AIDDICTION_SIZE=WxH` sets
-its size (below 44 rem wide is the phone layout); `swipe:x,y,dx,dy` is a
+its size (below 44 rem wide is the phone layout); `AIDDICTION_INPUT=touch`
+draws the window for a finger (the phone's skin: the phone scenarios say it
+in their `# env:`); `swipe:x,y,dx,dy` is a
 finger's swipe, `hold:x,y,dx,dy` the same finger left down and `lift` lifts
 it. Scenarios with `expect:` /
 `until:` checks live in `crates/aiddiction/tests/ui/*.script`; run them
@@ -196,20 +198,39 @@ registry.
 - `session::AgentSession` (entity) is one conversation: its own JSON-RPC over
   the ACP socket, reconnection with `afterSeq`, and the `thread::Thread`
   (pure, tested) the chat draws.
-- `ui::shell::Shell` holds the page, a history for back, and the open chats;
-  pages are `impl Shell` blocks in `ui/*.rs`. Three sections: the inbox (every
-  conversation on every server, home), projects, settings (appearance, agents,
-  servers). A desktop has a rail (`ui/nav.rs`), the section's list in a
-  column and the page beside it (the review takes the column's room too); a
-  phone shows one page with the sections as tabs and back going where it
-  came from. `crate::inbox` (pure, tested) groups the conversations — needs
-  you, working, done unread, recent, stopped; in a group, a project's
-  together — from the servers' summaries and `Settings::seen` (the last
-  sequence number shown, per conversation); `ui/inbox.rs` draws the rows,
-  each with its project's name, which answer the agent's questions in place.
-  A new conversation is one dialog (`ui/new_session.rs`: searchable project
-  and agent lists, the first message, sent once the session is ready). Read
-  the gpui-kit skill's Coding Guides before changing structure.
+- The interface is written in gpui-adaptive's intents
+  (`../gpui-mobile-components`, `crates/gpui-adaptive`; its `docs/` has a
+  page per intent): each page is one `Screen`, lists are `Collection`s of
+  `ListRow`s, forms are `Form`s, and each draws itself for a pointer or for a
+  finger (`gpui_adaptive::init` in `lib.rs`: touch on Android). No page asks
+  whether it is on a phone: what changes with the width or the input belongs
+  in the intents, and a gap there is filled there.
+- `ui/` calls no gpui-kit component. What no intent is (an agent's steps,
+  plan and diff in `ui/work.rs`, the board in `ui/board.rs`) is built from
+  `gpui_adaptive::prim` (`row`, `column`, `surface`, `pressable`,
+  `scroll_x`, `Text`, `Markdown`, `Meter`), `cx.colors()` and `cx.scale()`.
+  `crates/aiddiction/clippy.toml` disallows gpui-kit's components with the
+  replacement for each; it lives in this crate because `diffreview-ui` is
+  built on gpui-kit.
+- `ui::shell::Shell` holds the pages in a `NavigatorState<Page>` (`Page` is a
+  `Route`: a conversation's companion is the inbox, a project's the
+  projects, a settings page's the settings list; with nothing open the
+  inbox and the projects have a `Pick` page beside them) and the open chats;
+  pages are `impl Shell` blocks in `ui/*.rs`, each returning its `Screen`.
+  Three sections in `Destinations` (a rail on a desktop, tabs on a phone):
+  the inbox (every conversation on every server, home), projects, settings
+  (appearance, agents, servers). The navigator puts a page beside its list
+  when there is room and over it when there is not; the review has no
+  companion and takes the whole width. `crate::inbox` (pure, tested) groups
+  the conversations — needs you, working, done unread, recent, stopped; in a
+  group, a project's together — from the servers' summaries and
+  `Settings::seen` (the last sequence number shown, per conversation);
+  `ui/inbox.rs` makes each group a `Collection::section` and each
+  conversation a `ListRow` with its project's name, which answers the
+  agent's questions in place (`Ask` in the row's body). A new conversation
+  is one form (`ui/new_session.rs`: searchable project and agent `Choice`s,
+  the first message, sent once the session is ready). Read the gpui-kit
+  skill's Coding Guides before changing structure.
 - The chat sums a run of tool calls up in one line (`thread::summarize`,
   `Thread::run_start`); its list redraws from a run's first entry. The plan
   and the agent's mode sit on the composer; the bar has the title, Review
@@ -219,13 +240,10 @@ registry.
   `style().restrict_scroll_to_axis`); without it a finger's sideways swipe
   scrolls it along its own axis too. gpui-kit's `overflow_*_scrollbar()`
   already locks. `phone-swipe.script` checks it with `swipe:`.
-- Back on a phone is gpui-android-glue's `back`: `Shell::render` keeps one
-  layer while there is somewhere to go back to, and lays the screen out with
-  `back::preview` — while predictive back's gesture (Android 14+) or a swipe
-  is under way the page moves with the finger over the page back goes to
-  (`Shell::back_target`, rendered by swapping `self.page` for a moment). A
-  finger drawn to the right goes back from a conversation only: other pages
-  scroll sideways (the board, the diff). Dialogs are opened with
-  `back::open_dialog` (`forms::open_form`), since with predictive back the
-  gesture over a dialog on a root page would otherwise leave the
-  application. `phone-swipe-back.script` checks it.
+- Back on a phone is the navigator's: while there is somewhere to go back
+  to it is a layer of gpui-android-glue's `back`, and while predictive
+  back's gesture (Android 14+) or a swipe is under way the page moves with
+  the finger over the page back goes to. A finger drawn to the right goes
+  back unless the page scrolls sideways (`Route::scrolls_sideways`: the
+  board, the diff). Forms and confirmations open as layers of back too.
+  `phone-swipe-back.script` checks it.

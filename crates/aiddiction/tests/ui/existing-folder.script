@@ -5,9 +5,9 @@
 until:page=inbox
 wait:1000
 # Projects, then its new project button.
-click:28,168
+click:28,140
 until:page=projects
-click:367,61
+click:378,16
 until:dialog=open
 click:620,133
 wait:800

@@ -145,7 +145,7 @@ dependencies = [
 
 [[package]]
 name = "aiddiction"
-version = "1.10.1"
+version = "1.11.0"
 dependencies = [
  "aiddiction-api",
  "aiddiction-client",
@@ -154,6 +154,7 @@ dependencies = [
  "diffreview",
  "diffreview-ui",
  "embed-resource",
+ "gpui-adaptive",
  "gpui-adaptive-colors",
  "gpui-android-glue",
  "gpui-kit",
@@ -169,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "aiddiction-api"
-version = "1.10.1"
+version = "1.11.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -178,7 +179,7 @@ dependencies = [
 
 [[package]]
 name = "aiddiction-client"
-version = "1.10.1"
+version = "1.11.0"
 dependencies = [
  "aiddiction-api",
  "diffreview",
@@ -196,21 +197,21 @@ dependencies = [
 
 [[package]]
 name = "aiddiction-fake-agent"
-version = "1.10.1"
+version = "1.11.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "aiddiction-paths"
-version = "1.10.1"
+version = "1.11.0"
 dependencies = [
  "dirs 6.0.0",
 ]
 
 [[package]]
 name = "aiddiction-server"
-version = "1.10.1"
+version = "1.11.0"
 dependencies = [
  "aiddiction-api",
  "aiddiction-client",
@@ -1605,7 +1606,7 @@ dependencies = [
 
 [[package]]
 name = "diffreview"
-version = "1.10.1"
+version = "1.11.0"
 dependencies = [
  "serde",
  "tempfile",
@@ -1613,7 +1614,7 @@ dependencies = [
 
 [[package]]
 name = "diffreview-ui"
-version = "1.10.1"
+version = "1.11.0"
 dependencies = [
  "diffreview",
  "gpui-android-glue",
@@ -2508,6 +2509,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fdf242682df893b86f33a73828fb09ca4b2d3bb6cc95249707fc684d27484b91"
 dependencies = [
  "bitflags 2.13.2",
+]
+
+[[package]]
+name = "gpui-adaptive"
+version = "0.1.0"
+source = "git+https://github.com/Akergez/gpui-mobile-components?tag=v0.1.0#fbdd5ab7025af1ff9b319591494d107874c6c971"
+dependencies = [
+ "chrono",
+ "gpui-adaptive-colors",
+ "gpui-android-glue",
+ "gpui-kit",
 ]
 
 [[package]]

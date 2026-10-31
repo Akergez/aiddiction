@@ -1,0 +1,19 @@
+# The window is drawn with the design system (gpui-adaptive): its intents,
+# its primitives (`gpui_adaptive::prim`), its colours (`cx.colors()`) and
+# scale (`cx.scale()`). gpui-kit's components are what the system is made
+# of, not what the application calls.
+disallowed-methods = [
+    { path = "gpui_kit::component::h_flex", reason = "use gpui_adaptive::prim::row" },
+    { path = "gpui_kit::component::v_flex", reason = "use gpui_adaptive::prim::column" },
+    { path = "gpui_kit::component::ActiveTheme::theme", reason = "use cx.colors() (gpui_adaptive::ActiveColors)" },
+]
+disallowed-types = [
+    { path = "gpui_kit::component::button::Button", reason = "use a gpui_adaptive::Command" },
+    { path = "gpui_kit::component::spinner::Spinner", reason = "use gpui_adaptive::Busy or prim::spinner" },
+    { path = "gpui_kit::component::text::TextView", reason = "use gpui_adaptive::Markdown or Message" },
+    { path = "gpui_kit::component::tooltip::Tooltip", reason = "use gpui_adaptive::prim::tooltip" },
+    { path = "gpui_kit::component::TitleBar", reason = "use gpui_adaptive::AppFrame" },
+    { path = "gpui_kit::component::input::Input", reason = "use gpui_adaptive::TextField" },
+    { path = "gpui_kit::component::select::Select", reason = "use gpui_adaptive::Choice" },
+    { path = "gpui_kit::component::list::ListItem", reason = "use gpui_adaptive::ListRow" },
+]

@@ -7,8 +7,8 @@ use std::rc::Rc;
 use aiddiction_api::ProjectId;
 use diffreview::DiffRequest;
 use diffreview_ui::{ReviewEvent, ReviewOptions, ReviewView};
-use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, AppContext, Context, Entity, Window, div};
+use gpui_adaptive::Screen;
+use gpui_kit::{App, AppContext, Context, Entity, Window};
 
 use super::shell::{Page, Shell};
 use crate::review::ServerBackend;
@@ -38,10 +38,15 @@ impl Shell {
         self.go(Page::Review(project), cx);
     }
 
-    pub(super) fn render_review(&self, project: ProjectId) -> AnyElement {
+    pub(super) fn render_review(&self, project: ProjectId, cx: &App) -> Screen {
+        let name = self
+            .server_of(project, cx)
+            .and_then(|server| server.read(cx).project(project).map(|project| project.name.clone()))
+            .unwrap_or_default();
+        let screen = Screen::new("review", "Review").subtitle(name).scrolls(false);
         match self.reviews.get(&project) {
-            Some((view, _)) => view.clone().into_any_element(),
-            None => div().into_any_element(),
+            Some((view, _)) => screen.content(view.clone()),
+            None => screen,
         }
     }
 

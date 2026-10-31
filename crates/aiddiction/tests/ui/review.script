@@ -7,25 +7,25 @@ until:page=inbox
 until:projects=1
 wait:500
 # Sample repo, then a conversation with the fake agent from its page.
-click:28,168
+click:28,140
 until:page=projects
-click:220,110
+click:220,60
 until:page=project
 wait:300
-click:950,85
+click:987,16
 until:dialog=open
-click:550,229
+click:550,217
 wait:400
 type:fake
 key:enter
 wait:300
-click:550,318
+click:550,300
 type:hello
 key:enter
 until:page=chat
 until:busy=no
 # "Review" in the bar.
-click:1023,17
+click:972,16
 until:page=review
 wait:1500
 expect:annotations=0
@@ -46,7 +46,7 @@ until:page=chat
 until:busy=no
 wait:500
 shot:review-sent
-click:1023,17
+click:972,16
 until:page=review
 expect:annotations=0
 quit

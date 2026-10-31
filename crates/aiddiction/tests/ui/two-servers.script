@@ -7,38 +7,38 @@ until:projects=1
 wait:1000
 shot:two-servers-empty
 # The inbox's new conversation: the second server's project, its fake agent.
-click:367,61
+click:378,16
 until:dialog=open
-click:550,162
+click:550,158
 wait:400
 shot:two-servers-projects
 type:Second
 key:enter
 wait:300
-click:550,229
+click:550,217
 wait:400
 type:fake
 key:enter
 wait:300
-click:550,318
+click:550,300
 type:hello from the second server
 key:enter
 until:page=chat
 until:busy=no
 # Then one on the first server's project.
-click:367,61
+click:378,16
 until:dialog=open
-click:550,162
+click:550,158
 wait:400
 type:Sample
 key:enter
 wait:300
-click:550,229
+click:550,217
 wait:400
 type:fake
 key:enter
 wait:300
-click:550,318
+click:550,300
 type:hello from the first server
 key:enter
 until:page=chat

@@ -7,28 +7,23 @@
 use std::collections::HashSet;
 
 use aiddiction_api::ProjectId;
+use gpui_adaptive::prim::{column, spinner};
+use gpui_adaptive::{
+    ActiveScale, Ask, Banner, Busy, Code, Command, Composer, ComposerEvent, ComposerState, Empty, Feed, FieldEvent, Fold,
+    IconName, Message, Note, Purpose, Suggestion, TextField, TextFieldState, Tone,
+};
 use gpui_kit::Focusable as _;
-use gpui_kit::base::InteractiveElementExt as _;
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
-use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::text::TextView;
-use gpui_kit::component::{ActiveTheme, Icon, IconName, h_flex, v_flex};
-use gpui_kit::component::{Disableable as _, Sizable as _, StyledExt as _};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, AppContext, Context, ElementId, Entity, EventEmitter, FollowMode,
-    ListAlignment, ListState, Render, SharedString, Subscription, Window, div, list, px, rems,
+    AnyElement, App, AppContext, Context, ElementId, Entity, EventEmitter, ListState, Render, SharedString, Subscription,
+    Window, div, px, rems,
 };
 
 use crate::login::MethodKind;
 use crate::session::{AgentSession, Phase};
 use crate::thread::{Entry, ToolCall, ToolContent, ToolStatus};
 
-/// How wide the conversation reads at most.
-const READING_WIDTH: f32 = 48.;
+use super::work::{Diff, Plan, Step, StepStatus};
 
 /// Asks the shell for the review of this conversation's project.
 pub struct OpenReview;
@@ -38,11 +33,11 @@ impl EventEmitter<OpenReview> for ChatView {}
 pub struct ChatView {
     pub session: Entity<AgentSession>,
     pub project_id: ProjectId,
-    composer: Entity<TextareaState>,
+    composer: Entity<ComposerState>,
     /// The API key a sign-in asks for.
-    key_input: Entity<InputState>,
+    key_input: Entity<TextFieldState>,
     /// The code a sign-in page gave.
-    code_input: Entity<InputState>,
+    code_input: Entity<TextFieldState>,
     list: ListState,
     /// Entries whose thoughts or tool output are unfolded (a run of tool
     /// calls by its first).
@@ -58,25 +53,18 @@ impl ChatView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let composer = cx.new(|cx| {
-            TextareaState::new(window, cx)
-                .auto_grow(1, 8)
-                // Enter sends; Shift+Enter inserts a newline.
-                .submit_on_enter(true)
-                .placeholder("Ask the agent…")
+        let composer = cx.new(|cx| ComposerState::new("Ask the agent…", window, cx));
+        let key_input = cx.new(|cx| {
+            let mut field = TextFieldState::new(Purpose::Password, window, cx);
+            field.set_placeholder("API key", window, cx);
+            field
         });
-        super::keyboard_for(&composer, gpui_android_glue::keyboard::Purpose::Message, cx);
-        let key_input = cx.new(|cx| InputState::new(window, cx).placeholder("API key"));
-        super::keyboard_for(
-            &key_input,
-            gpui_android_glue::keyboard::Purpose::Password,
-            cx,
-        );
-        let code_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("The code the page gives"));
-        super::keyboard_for(&code_input, gpui_android_glue::keyboard::Purpose::Plain, cx);
-        let list = ListState::new(0, ListAlignment::Bottom, px(400.));
-        list.set_follow_mode(FollowMode::Tail);
+        let code_input = cx.new(|cx| {
+            let mut field = TextFieldState::new(Purpose::Plain, window, cx);
+            field.set_placeholder("The code the page gives", window, cx);
+            field
+        });
+        let list = Feed::state();
 
         let subscriptions = vec![
             cx.observe(&session, |this, session, cx| {
@@ -91,33 +79,21 @@ impl ChatView {
                 }
                 cx.notify();
             }),
-            cx.subscribe_in(
-                &composer,
-                window,
-                |this, _, event: &InputEvent, window, cx| {
-                    if let InputEvent::PressEnter { shift: false, .. } = event {
-                        this.send(window, cx);
-                    }
-                },
-            ),
-            cx.subscribe_in(
-                &key_input,
-                window,
-                |this, _, event: &InputEvent, window, cx| {
-                    if let InputEvent::PressEnter { .. } = event {
-                        this.submit_sign_in(window, cx);
-                    }
-                },
-            ),
-            cx.subscribe_in(
-                &code_input,
-                window,
-                |this, _, event: &InputEvent, window, cx| {
-                    if let InputEvent::PressEnter { .. } = event {
-                        this.submit_sign_in(window, cx);
-                    }
-                },
-            ),
+            cx.subscribe_in(&composer, window, |this, _, event: &ComposerEvent, window, cx| match event {
+                ComposerEvent::Send => this.send(window, cx),
+                // The commands matching what is typed stand over the field.
+                ComposerEvent::Change => cx.notify(),
+            }),
+            cx.subscribe_in(&key_input, window, |this, _, event: &FieldEvent, window, cx| {
+                if *event == FieldEvent::Submit {
+                    this.submit_sign_in(window, cx);
+                }
+            }),
+            cx.subscribe_in(&code_input, window, |this, _, event: &FieldEvent, window, cx| {
+                if *event == FieldEvent::Submit {
+                    this.submit_sign_in(window, cx);
+                }
+            }),
         ];
         Self {
             session,
@@ -143,7 +119,7 @@ impl ChatView {
     }
 
     fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.composer.read(cx).value().to_string();
+        let text = self.composer.read(cx).text(cx);
         let (ready, busy) = {
             let session = self.session.read(cx);
             (session.is_ready(), session.busy)
@@ -153,8 +129,7 @@ impl ChatView {
         }
         self.session
             .update(cx, |session, cx| session.prompt(text, cx));
-        self.composer
-            .update(cx, |composer, cx| composer.set_value("", window, cx));
+        self.composer.update(cx, |composer, cx| composer.clear(window, cx));
         self.list.scroll_to_end();
     }
 
@@ -172,7 +147,7 @@ impl ChatView {
             Some(MethodKind::Terminal) => self.code_input.clone(),
             _ => return,
         };
-        let text = input.read(cx).value().to_string();
+        let text = input.read(cx).value(cx).to_string();
         if text.trim().is_empty() {
             return;
         }
@@ -193,63 +168,25 @@ impl ChatView {
     }
 
     fn render_entry(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme().clone();
         let entry = self.session.read(cx).thread.entries.get(index).cloned();
         let Some(entry) = entry else {
             return div().into_any_element();
         };
         let open = self.open.contains(&index);
-        let body = match entry {
-            Entry::User { text } => h_flex()
-                .justify_end()
-                .child(
-                    div()
-                        .max_w(gpui_kit::relative(0.85))
-                        .px_4()
-                        .py_2p5()
-                        .rounded(px(18.))
-                        .bg(theme.secondary)
-                        .text_color(theme.secondary_foreground)
-                        .child(text),
-                )
-                .into_any_element(),
+        let id = |kind: &str| SharedString::from(format!("{kind}-{index}"));
+        match entry {
+            Entry::User { text } => Message::mine(id("message"), text).into_any_element(),
             Entry::Assistant { text, thought } => {
-                let mut column = v_flex().gap_1();
-                if !thought.is_empty() {
-                    column = column.child(
-                        v_flex()
-                            .id(ElementId::Name(format!("thought-{index}").into()))
-                            .cursor_pointer()
-                            .text_sm()
-                            .text_color(theme.muted_foreground)
-                            .on_click(cx.listener(move |this, _, _, cx| this.toggle(index, cx)))
-                            .child(
-                                h_flex()
-                                    .gap_1()
-                                    .child(
-                                        Icon::new(if open {
-                                            IconName::ChevronDown
-                                        } else {
-                                            IconName::ChevronRight
-                                        })
-                                        .xsmall(),
-                                    )
-                                    .child("Thinking"),
-                            )
-                            .when(open, |this| this.child(div().pl_4().child(thought))),
-                    );
-                }
-                if !text.is_empty() {
-                    column = column.child(
-                        TextView::markdown(
-                            ElementId::Name(format!("message-{index}").into()),
-                            text,
-                        )
-                        .selectable(true)
-                        .on_link_click(|url, _, _, cx| super::open_url(url, cx)),
-                    );
-                }
-                column.into_any_element()
+                let thought = (!thought.is_empty()).then(|| {
+                    let this = cx.entity().downgrade();
+                    Fold::new(id("thought"), "Thinking").open(open).child(thought).on_toggle(move |_, cx| {
+                        this.update(cx, |this, cx| this.toggle(index, cx)).ok();
+                    })
+                });
+                Message::theirs(id("message"), text)
+                    .before(thought)
+                    .on_link(|url, _, cx| super::open_url(url, cx))
+                    .into_any_element()
             }
             Entry::Tool(_) => {
                 let thread = &self.session.read(cx).thread;
@@ -266,99 +203,42 @@ impl ChatView {
                     .collect();
                 self.render_run(index, run, open, cx)
             }
-            Entry::Notice { text, error } => div()
-                .w_full()
-                .text_sm()
-                .text_center()
-                .text_color(if error {
-                    theme.danger
-                } else {
-                    theme.muted_foreground
-                })
-                .child(text)
-                .into_any_element(),
-        };
-        h_flex()
-            .w_full()
-            .justify_center()
-            .child(
-                div()
-                    .w_full()
-                    .max_w(rems(READING_WIDTH))
-                    .px_4()
-                    .py_1p5()
-                    .child(body),
-            )
-            .into_any_element()
+            Entry::Notice { text, error } => {
+                let notice = Message::aside(id("notice"), text);
+                if error { notice.tone(Tone::Danger) } else { notice }.into_any_element()
+            }
+        }
+    }
+
+    /// What pressing a step does: opens or closes it.
+    fn toggler(&self, index: usize, cx: &mut Context<Self>) -> impl Fn(&mut Window, &mut App) + 'static {
+        let this = cx.entity().downgrade();
+        move |_, cx| {
+            this.update(cx, |this, cx| this.toggle(index, cx)).ok();
+        }
     }
 
     /// A run of tool calls: one line that sums them up and unfolds into
     /// them. A single call is drawn as itself.
-    fn render_run(
-        &self,
-        start: usize,
-        run: Vec<(usize, ToolCall)>,
-        open: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn render_run(&self, start: usize, run: Vec<(usize, ToolCall)>, open: bool, cx: &mut Context<Self>) -> AnyElement {
         if run.len() == 1 {
             let (index, call) = run.into_iter().next().unwrap();
-            return self.render_tool(index, call, open, cx);
+            return self.render_tool(index, call, open, cx).into_any_element();
         }
-        let theme = cx.theme().clone();
-        let summary =
-            crate::thread::summarize(&run.iter().map(|(_, call)| call).collect::<Vec<_>>());
-        let mut card = v_flex()
-            .border_1()
-            .border_color(theme.border)
-            .rounded(theme.radius * 1.5)
-            .child(
-                h_flex()
-                    .id(ElementId::Name(format!("run-{start}").into()))
-                    .gap_2()
-                    .px_3()
-                    .py_2()
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| this.toggle(start, cx)))
-                    .child(status_icon(summary.status, cx))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_sm()
-                            .child(summary.text),
-                    )
-                    .child(
-                        Icon::new(if open {
-                            IconName::ChevronUp
-                        } else {
-                            IconName::ChevronDown
-                        })
-                        .xsmall()
-                        .text_color(theme.muted_foreground),
-                    ),
-            );
+        let summary = crate::thread::summarize(&run.iter().map(|(_, call)| call).collect::<Vec<_>>());
+        let mut step = Step::new(SharedString::from(format!("run-{start}")), summary.text, step_status(summary.status))
+            .open(open)
+            .on_toggle(self.toggler(start, cx));
         if open {
-            let mut steps = v_flex().gap_1p5().px_2().pb_2();
             for (index, call) in run {
                 let unfolded = self.open.contains(&index);
-                steps = steps.child(self.render_tool(index, call, unfolded, cx));
+                step = step.child(self.render_tool(index, call, unfolded, cx));
             }
-            card = card.child(steps);
         }
-        card.into_any_element()
+        step.into_any_element()
     }
 
-    fn render_tool(
-        &self,
-        index: usize,
-        call: ToolCall,
-        open: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let theme = cx.theme().clone();
-        let status = status_icon(call.status, cx);
+    fn render_tool(&self, index: usize, call: ToolCall, open: bool, cx: &mut Context<Self>) -> Step {
         let icon = match call.kind.as_str() {
             "edit" | "delete" | "move" => IconName::FileText,
             "execute" => IconName::SquareTerminal,
@@ -367,466 +247,209 @@ impl ChatView {
             "think" => IconName::Bot,
             _ => IconName::Settings2,
         };
-        let title = if call.title.is_empty() {
-            call.kind.clone()
-        } else {
-            call.title.clone()
-        };
+        let title = if call.title.is_empty() { call.kind.clone() } else { call.title.clone() };
         let has_content = !call.content.is_empty() || !call.locations.is_empty();
-        let mut card = v_flex()
-            .border_1()
-            .border_color(theme.border)
-            .rounded(theme.radius * 1.5)
-            .child(
-                h_flex()
-                    .id(ElementId::Name(format!("tool-{index}").into()))
-                    .gap_2()
-                    .px_3()
-                    .py_2()
-                    .when(has_content, |row| {
-                        row.cursor_pointer()
-                            .on_click(cx.listener(move |this, _, _, cx| this.toggle(index, cx)))
-                    })
-                    .child(Icon::new(icon).small().text_color(theme.muted_foreground))
-                    .child(div().flex_1().min_w_0().text_sm().truncate().child(title))
-                    .child(status),
-            );
-        if open {
-            let mut content = v_flex().gap_2().px_3().pb_3();
-            for path in &call.locations {
-                content = content.child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .truncate()
-                        .child(path.clone()),
-                );
-            }
-            for item in call.content {
-                content = content.child(match item {
-                    ToolContent::Text(text) => div().text_sm().child(text).into_any_element(),
-                    ToolContent::Diff { path, old, new } => {
-                        diff_view(&path, old.as_deref(), &new, cx)
-                    }
-                    ToolContent::Terminal(id) => div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(format!("Terminal {id}"))
-                        .into_any_element(),
-                });
-            }
-            card = card.child(content);
+        let mut step = Step::new(SharedString::from(format!("tool-{index}")), title, step_status(call.status)).icon(icon).open(open);
+        if has_content {
+            step = step.on_toggle(self.toggler(index, cx));
         }
-        card.into_any_element()
+        if !open {
+            return step;
+        }
+        for path in &call.locations {
+            step = step.child(Note::new(path.clone()).truncate());
+        }
+        for item in call.content {
+            step = match item {
+                ToolContent::Text(text) => step.child(gpui_adaptive::Text::small(text)),
+                ToolContent::Diff { path, old, new } => step.child(Diff::new(path, old, new)),
+                ToolContent::Terminal(id) => step.child(Note::new(format!("Terminal {id}"))),
+            };
+        }
+        step
     }
 
     /// The plan on the composer: one line with how far along it is, the
     /// whole list when unfolded.
-    fn render_plan(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let theme = cx.theme().clone();
+    fn render_plan(&self, cx: &mut Context<Self>) -> Option<Plan> {
         let plan = self.session.read(cx).thread.plan.clone();
         if plan.is_empty() {
             return None;
         }
-        let done = plan
-            .iter()
-            .filter(|entry| entry.status == "completed")
-            .count();
-        let current = plan
-            .iter()
-            .find(|entry| entry.status == "in_progress")
-            .or_else(|| plan.iter().find(|entry| entry.status != "completed"));
-        let progress = done as f32 / plan.len() as f32;
-        let line =
-            h_flex()
-                .id("plan")
-                .gap_2()
-                .px_3()
-                .py_2()
-                .cursor_pointer()
-                .text_sm()
-                .border_b_1()
-                .border_color(theme.border)
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.plan_open = !this.plan_open;
-                    cx.notify();
-                }))
-                .child(Icon::new(IconName::CircleCheck).xsmall().text_color(
-                    if done == plan.len() {
-                        theme.success
-                    } else {
-                        theme.primary
-                    },
-                ))
-                .child(
-                    div()
-                        .flex_none()
-                        .font_semibold()
-                        .child(format!("Plan {done}/{}", plan.len())),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(theme.muted_foreground)
-                        .child(
-                            current
-                                .map(|entry| entry.content.clone())
-                                .unwrap_or_default(),
-                        ),
-                )
-                .child(
-                    div()
-                        .w_16()
-                        .h_1()
-                        .flex_none()
-                        .rounded_full()
-                        .bg(theme.muted)
-                        .child(
-                            div()
-                                .h_full()
-                                .rounded_full()
-                                .bg(theme.primary)
-                                .w(gpui_kit::relative(progress)),
-                        ),
-                )
-                .child(
-                    Icon::new(if self.plan_open {
-                        IconName::ChevronDown
-                    } else {
-                        IconName::ChevronUp
-                    })
-                    .xsmall()
-                    .text_color(theme.muted_foreground),
-                );
-        if !self.plan_open {
-            return Some(line.into_any_element());
-        }
-        let mut column = v_flex()
-            .gap_1()
-            .px_3()
-            .py_2()
-            .border_b_1()
-            .border_color(theme.border);
-        for entry in &plan {
-            let (icon, color) = match entry.status.as_str() {
-                "completed" => (IconName::CircleCheck, theme.success),
-                "in_progress" => (IconName::LoaderCircle, theme.primary),
-                _ => (IconName::Dash, theme.muted_foreground),
+        let this = cx.entity().downgrade();
+        let shown = Plan::new(self.plan_open, move |_, cx| {
+            this.update(cx, |this, cx| {
+                this.plan_open = !this.plan_open;
+                cx.notify();
+            })
+            .ok();
+        });
+        Some(plan.iter().fold(shown, |shown, entry| {
+            let status = match entry.status.as_str() {
+                "completed" => StepStatus::Done,
+                "in_progress" => StepStatus::Running,
+                _ => StepStatus::Pending,
             };
-            column = column.child(
-                h_flex()
-                    .gap_2()
-                    .text_sm()
-                    .child(Icon::new(icon).xsmall().text_color(color))
-                    .child(div().truncate().child(entry.content.clone())),
-            );
-        }
-        Some(v_flex().child(line).child(column).into_any_element())
+            shown.item(entry.content.clone(), status)
+        }))
     }
 
+    /// The agent's questions, each with its answers.
     fn render_permissions(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let theme = cx.theme().clone();
         let permissions = self.session.read(cx).thread.permissions.clone();
         if permissions.is_empty() {
             return None;
         }
-        let mut column = v_flex().gap_2();
+        let mut asks = Vec::new();
         for permission in permissions {
-            let mut buttons = h_flex().gap_2().flex_wrap().justify_end();
+            let mut ask = Ask::new(SharedString::from(format!("perm-{}", permission.request_id)), permission.title.clone());
             for option in permission.options {
-                let request = permission.request_id.clone();
-                let option_id = option.id.clone();
-                let button = Button::new(ElementId::Name(
-                    format!("perm-{}-{}", permission.request_id, option.id).into(),
-                ))
-                .label(option.name.clone())
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    let (request, option_id) = (request.clone(), option_id.clone());
-                    this.session.update(cx, |session, cx| {
-                        session.answer_permission(request, option_id, cx)
+                let (request, option_id, session) = (permission.request_id.clone(), option.id.clone(), self.session.clone());
+                let answer = Command::new(SharedString::from(format!("perm-{}-{}", permission.request_id, option.id)), option.name.clone())
+                    .on_trigger(move |_, cx| {
+                        let (request, option_id) = (request.clone(), option_id.clone());
+                        session.update(cx, |session, cx| session.answer_permission(request, option_id, cx));
                     });
-                }));
-                buttons = buttons.child(if option.kind.starts_with("allow") {
-                    button.primary()
-                } else {
-                    button.outline()
-                });
+                ask = ask.answer(if option.kind.starts_with("allow") { answer.primary() } else { answer });
             }
-            column = column.child(
-                v_flex()
-                    .gap_3()
-                    .p_3()
-                    .rounded(theme.radius * 2.)
-                    .border_1()
-                    .border_color(theme.warning)
-                    .bg(theme.warning.opacity(0.08))
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .font_semibold()
-                            .child(
-                                Icon::new(IconName::TriangleAlert)
-                                    .small()
-                                    .text_color(theme.warning),
-                            )
-                            .child(div().flex_1().min_w_0().child(permission.title.clone())),
-                    )
-                    .child(buttons),
-            );
+            asks.push(ask);
         }
-        Some(column.into_any_element())
+        Some(column().gap(cx.scale().space_s).children(asks).into_any_element())
     }
 
     /// Signing the agent in: its ways, then whatever the one picked needs —
     /// a key, a page to open, what the sign-in on the server says and the
     /// code it asks for.
     fn render_sign_in(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let theme = cx.theme().clone();
+        let space = cx.scale().space_s;
         let session = self.session.read(cx);
         let sign_in = &session.sign_in;
         if !sign_in.shown(&session.phase) {
             return None;
         }
-        let mut card = v_flex()
-            .gap_3()
-            .p_3()
-            .rounded(theme.radius * 2.)
-            .border_1()
-            .border_color(theme.primary)
-            .bg(theme.primary.opacity(0.06))
-            .child(
-                h_flex()
-                    .gap_2()
-                    .font_semibold()
-                    .child(Icon::new(IconName::User).small().text_color(theme.primary))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(format!("Sign in to {}", session.agent_name)),
-                    ),
-            );
-        if session.has_queued() {
-            card = card.child(
-                div()
-                    .text_sm()
-                    .text_color(theme.muted_foreground)
-                    .child("Your message goes once it is signed in."),
-            );
-        }
+        let mut ask = Ask::new("sign-in", format!("Sign in to {}", session.agent_name)).tone(Tone::Info);
+        // What the card says under its question: what went wrong, else
+        // that the message waits.
         if let Some(error) = &sign_in.error {
-            card = card.child(
-                div()
-                    .text_sm()
-                    .text_color(theme.danger)
-                    .child(error.clone()),
-            );
+            ask = ask.detail(error.clone());
+        } else if session.has_queued() {
+            ask = ask.detail("Your message goes once it is signed in.");
         }
-        let cancel = Button::new("sign-in-cancel")
-            .small()
-            .outline()
-            .label("Cancel")
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.session
-                    .update(cx, |session, cx| session.cancel_sign_in(cx))
-            }));
-        let input_row = |state: &Entity<InputState>, masked: bool, cx: &mut Context<Self>| {
-            let mut input = Input::new(state);
-            if masked {
-                input = input.mask_toggle();
+        let this = cx.entity().downgrade();
+        let cancel = Command::new("sign-in-cancel", "Cancel").on_trigger({
+            let this = this.clone();
+            move |_, cx| {
+                this.update(cx, |this, cx| this.session.update(cx, |session, cx| session.cancel_sign_in(cx))).ok();
             }
-            h_flex()
-                .gap_2()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(gpui_android_glue::keyboard::on_tap(input, state, cx)),
-                )
-                .child(
-                    Button::new("sign-in-submit")
-                        .small()
-                        .primary()
-                        .label("Send")
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.submit_sign_in(window, cx)),
-                        ),
-                )
-        };
+        });
+        let send = Command::new("sign-in-submit", "Send").primary().on_trigger({
+            let this = this.clone();
+            move |window, cx| {
+                this.update(cx, |this, cx| this.submit_sign_in(window, cx)).ok();
+            }
+        });
 
         let Some(method) = sign_in.method.clone() else {
             if sign_in.methods.is_empty() {
                 return Some(
-                    card.child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.muted_foreground)
-                            .child("The agent offers no way to sign in from here. Sign it in on the server, then retry."),
-                    )
-                    .into_any_element(),
+                    ask.detail("The agent offers no way to sign in from here. Sign it in on the server, then retry.")
+                        .into_any_element(),
                 );
             }
-            let mut buttons = h_flex().gap_2().flex_wrap();
             for (at, method) in sign_in.methods.iter().enumerate() {
-                let chosen = method.clone();
-                let mut button = Button::new(ElementId::Name(format!("sign-in-{at}").into()))
-                    .small()
-                    .label(method.name.clone())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let chosen = chosen.clone();
-                        this.session
-                            .update(cx, |session, cx| session.sign_in_with(chosen, cx));
-                    }));
-                button = if at == 0 {
-                    button.primary()
-                } else {
-                    button.outline()
-                };
-                if !method.description.is_empty() {
-                    button = button.tooltip(method.description.clone());
-                }
-                buttons = buttons.child(button);
+                let (chosen, session) = (method.clone(), self.session.clone());
+                let way = Command::new(SharedString::from(format!("sign-in-{at}")), method.name.clone())
+                    .on_trigger(move |_, cx| session.update(cx, |session, cx| session.sign_in_with(chosen.clone(), cx)));
+                ask = ask.answer(if at == 0 { way.primary() } else { way });
             }
-            return Some(card.child(buttons).into_any_element());
+            return Some(ask.into_any_element());
         };
 
-        let busy = sign_in.busy;
-        let page = sign_in.page.clone();
-        let terminal = sign_in.terminal.clone();
-        let waiting = |text: String| {
-            h_flex()
-                .gap_2()
-                .text_sm()
-                .text_color(theme.muted_foreground)
-                .child(Spinner::new().small())
-                .child(text)
-        };
-        card = match method.kind {
-            MethodKind::ApiKey => card
-                .child(input_row(&self.key_input, true, cx))
-                .when(busy, |card| card.child(waiting("Checking the key…".into()))),
-            MethodKind::Agent => match page {
-                Some(page) => card
-                    .child(div().text_sm().child(page.message.clone()))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .truncate()
-                            .child(page.url.clone()),
+        let waiting = |text: String| Busy::new("sign-in-busy").label(text);
+        let ask = match method.kind {
+            MethodKind::ApiKey => ask
+                .body(
+                    column()
+                        .gap(space)
+                        .child(TextField::new(&self.key_input))
+                        .when(sign_in.busy, |body| body.child(waiting("Checking the key…".into()))),
+                )
+                .answer(cancel)
+                .answer(send),
+            MethodKind::Agent => match sign_in.page.clone() {
+                Some(page) => {
+                    let session = self.session.clone();
+                    ask.body(
+                        column()
+                            .gap(space)
+                            .child(gpui_adaptive::Text::small(page.message.clone()))
+                            .child(Note::new(page.url.clone()).truncate()),
                     )
-                    .child(
-                        h_flex().gap_2().child(
-                            Button::new("sign-in-open")
-                                .small()
-                                .primary()
-                                .icon(IconName::ExternalLink)
-                                .label("Open the page")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if let Some(url) = this
-                                        .session
-                                        .update(cx, |session, _| session.open_sign_in_page())
-                                    {
-                                        super::open_url(&url, cx);
-                                    }
-                                })),
-                        ),
-                    ),
-                None => card.child(waiting(format!("Waiting for {}…", method.name))),
+                    .answer(cancel)
+                    .answer(Command::new("sign-in-open", "Open the page").icon(IconName::ExternalLink).primary().on_trigger(
+                        move |_, cx| {
+                            if let Some(url) = session.update(cx, |session, _| session.open_sign_in_page()) {
+                                super::open_url(&url, cx);
+                            }
+                        },
+                    ))
+                }
+                None => ask.body(waiting(format!("Waiting for {}…", method.name))).answer(cancel),
             },
-            MethodKind::Terminal => match terminal {
-                None => card.child(waiting("Starting the sign-in on the server…".into())),
+            MethodKind::Terminal => match sign_in.terminal.clone() {
+                None => ask.body(waiting("Starting the sign-in on the server…".into())).answer(cancel),
                 Some(login) => {
                     let url = crate::login::first_url(&login.output).map(str::to_owned);
-                    card.child(
-                        div()
-                            .id("sign-in-output")
-                            .max_h(rems(10.))
-                            .overflow_y_scroll()
-                            .lock_scroll_axis()
-                            .p_2()
-                            .rounded(theme.radius)
-                            .bg(theme.muted)
-                            .font_family(theme.mono_font_family.clone())
-                            .text_xs()
-                            .child(login.output.trim().to_owned()),
-                    )
-                    .when_some(url, |card, url| {
-                        card.child(
-                            h_flex().child(
-                                Button::new("sign-in-open")
-                                    .small()
-                                    .primary()
-                                    .icon(IconName::ExternalLink)
-                                    .label("Open the link")
-                                    .on_click(move |_, _, cx| super::open_url(&url, cx)),
-                            ),
-                        )
-                    })
-                    .child(input_row(&self.code_input, false, cx))
+                    let ask = ask.body(
+                        column()
+                            .gap(space)
+                            .child(Code::new("sign-in-output", login.output.trim().to_owned()).max_height(rems(10.)))
+                            .child(TextField::new(&self.code_input)),
+                    );
+                    let ask = ask.answer(cancel);
+                    let ask = match url {
+                        Some(url) => ask.answer(
+                            Command::new("sign-in-open", "Open the link")
+                                .icon(IconName::ExternalLink)
+                                .on_trigger(move |_, cx| super::open_url(&url, cx)),
+                        ),
+                        None => ask,
+                    };
+                    ask.answer(send)
                 }
             },
         };
-        Some(
-            card.child(h_flex().justify_end().child(cancel))
-                .into_any_element(),
-        )
+        Some(ask.into_any_element())
     }
 
+    /// The connection to the agent, while it is not simply there.
     fn render_status(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let theme = cx.theme().clone();
-        let (text, error, can_retry): (SharedString, bool, bool) =
-            match &self.session.read(cx).phase {
-                Phase::Ready => return None,
-                Phase::Connecting => ("Connecting to the agent…".into(), false, false),
-                Phase::Reconnecting(reason) => {
-                    (format!("{reason}; connecting again…").into(), false, true)
-                }
-                // The sign-in card says it.
-                Phase::SignIn => return None,
-                Phase::Closed(reason) => (reason.clone().into(), true, true),
-            };
-        Some(
-            h_flex()
-                .gap_2()
-                .px_4()
-                .py_2()
-                .text_sm()
-                .bg(if error {
-                    theme.danger.opacity(0.1)
-                } else {
-                    theme.muted
-                })
-                .child(if error {
-                    Icon::new(IconName::CircleAlert)
-                        .small()
-                        .text_color(theme.danger)
-                        .into_any_element()
-                } else {
-                    Spinner::new().small().into_any_element()
-                })
-                .child(div().flex_1().min_w_0().child(text))
-                .when(can_retry, |row| {
-                    row.child(
-                        Button::new("retry")
-                            .xsmall()
-                            .label("Retry")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.session.update(cx, |session, cx| session.retry(cx));
-                            })),
-                    )
-                })
-                .into_any_element(),
-        )
+        let (text, error, can_retry): (SharedString, bool, bool) = match &self.session.read(cx).phase {
+            Phase::Ready => return None,
+            Phase::Connecting => ("Connecting to the agent…".into(), false, false),
+            Phase::Reconnecting(reason) => (format!("{reason}; connecting again…").into(), false, true),
+            // The sign-in card says it.
+            Phase::SignIn => return None,
+            Phase::Closed(reason) => (reason.clone().into(), true, true),
+        };
+        let session = self.session.clone();
+        let banner = Banner::new("status", text)
+            .tone(if error { Tone::Danger } else { Tone::Info })
+            .when(error, |banner| banner.icon(IconName::CircleAlert))
+            .when(!error, |banner| banner.extra(spinner()))
+            .when(can_retry, |banner| {
+                banner.action(
+                    Command::new("retry", "Retry").on_trigger(move |_, cx| session.update(cx, |session, cx| session.retry(cx))),
+                )
+            });
+        Some(banner.into_any_element())
     }
 
     /// The agent's mode, picked from a menu on the composer.
-    fn render_mode(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn mode_menu(&self, composer: Composer, cx: &App) -> Composer {
         let thread = &self.session.read(cx).thread;
         if thread.modes.is_empty() {
-            return None;
+            return composer;
         }
         let current = thread.current_mode.clone();
         let name = thread
@@ -835,199 +458,89 @@ impl ChatView {
             .find(|mode| Some(&mode.id) == current.as_ref())
             .map(|mode| mode.name.clone())
             .unwrap_or_else(|| "Mode".into());
-        let modes = thread.modes.clone();
-        let session = self.session.clone();
-        Some(
-            Button::new("mode")
-                .ghost()
-                .xsmall()
-                .icon(IconName::Bot)
-                .label(name)
-                .dropdown_caret(true)
-                .dropdown_menu(move |mut menu, _, _| {
-                    for mode in &modes {
-                        let id = mode.id.clone();
-                        let session = session.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new(mode.name.clone())
-                                .checked(current.as_ref() == Some(&mode.id))
-                                .on_click(move |_, _, cx| {
-                                    session
-                                        .update(cx, |session, cx| session.set_mode(id.clone(), cx))
-                                }),
-                        );
-                    }
-                    menu
-                })
-                .into_any_element(),
-        )
+        let options = thread
+            .modes
+            .iter()
+            .map(|mode| {
+                let (id, session) = (mode.id.clone(), self.session.clone());
+                Command::new(SharedString::from(format!("mode-{}", mode.id)), mode.name.clone())
+                    .on_trigger(move |_, cx| session.update(cx, |session, cx| session.set_mode(id.clone(), cx)))
+            })
+            .collect();
+        let chosen = current.map(|id| ElementId::Name(format!("mode-{id}").into()));
+        composer.menu(Command::new("mode", name).icon(IconName::Bot), options, chosen)
     }
 
-    fn render_config_options(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// The model or how hard it thinks, picked from a menu on the composer.
+    fn config_menu(&self, composer: Composer, cx: &App) -> Composer {
         let options = self.session.read(cx).thread.config_options.clone();
-        let option = options.into_iter().find(|option| {
-            matches!(
-                option.category.as_str(),
-                "model" | "model_config" | "thought_level"
-            ) && !option.values.is_empty()
-        })?;
+        let Some(option) = options.into_iter().find(|option| {
+            matches!(option.category.as_str(), "model" | "model_config" | "thought_level") && !option.values.is_empty()
+        }) else {
+            return composer;
+        };
         let current = option
             .values
             .iter()
             .find(|(id, _)| id == &option.current)
             .map(|(_, name)| name.clone())
             .unwrap_or_else(|| option.current.clone());
-        let id = option.id.clone();
-        let session = self.session.clone();
-        Some(
-            Button::new(ElementId::Name(format!("config-{}", option.id).into()))
-                .ghost()
-                .xsmall()
-                .icon(IconName::Settings2)
-                .label(current)
-                .dropdown_caret(true)
-                .dropdown_menu(move |mut menu, _, _| {
-                    for (value, name) in &option.values {
-                        let value = value.clone();
-                        let session = session.clone();
-                        let id = id.clone();
-                        menu = menu.item(PopupMenuItem::new(name.clone()).on_click(
-                            move |_, _, cx| {
-                                session.update(cx, |session, cx| {
-                                    session.set_config_option(id.clone(), value.clone(), cx)
-                                })
-                            },
-                        ));
-                    }
-                    menu
+        let values = option
+            .values
+            .iter()
+            .map(|(value, name)| {
+                let (id, value, session) = (option.id.clone(), value.clone(), self.session.clone());
+                Command::new(SharedString::from(format!("config-{}-{value}", option.id)), name.clone()).on_trigger(move |_, cx| {
+                    session.update(cx, |session, cx| session.set_config_option(id.clone(), value.clone(), cx))
                 })
-                .into_any_element(),
+            })
+            .collect();
+        let chosen = Some(ElementId::Name(format!("config-{}-{}", option.id, option.current).into()));
+        composer.menu(
+            Command::new(SharedString::from(format!("config-{}", option.id)), current).icon(IconName::Settings2),
+            values,
+            chosen,
         )
     }
 
-    fn render_commands(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let typed = self.composer.read(cx).value();
-        let prefix = typed.strip_prefix('/')?;
+    /// The agent's commands matching what is typed after a slash.
+    fn suggestions(&self, cx: &mut Context<Self>) -> Vec<Suggestion> {
+        let typed = self.composer.read(cx).text(cx);
+        let Some(prefix) = typed.strip_prefix('/') else { return Vec::new() };
         if prefix.contains(char::is_whitespace) {
-            return None;
+            return Vec::new();
         }
-        let theme = cx.theme();
-        let commands: Vec<_> = self
-            .session
+        self.session
             .read(cx)
             .thread
             .commands
             .iter()
             .filter(|command| command.name.starts_with(prefix))
             .take(8)
-            .cloned()
-            .collect();
-        if commands.is_empty() {
-            return None;
-        }
-        let mut column = v_flex()
-            .px_3()
-            .py_2()
-            .gap_0p5()
-            .border_b_1()
-            .border_color(theme.border);
-        for command in commands {
-            let value = format!("/{} ", command.name);
-            let composer = self.composer.clone();
-            column = column.child(
-                h_flex()
-                    .id(ElementId::Name(format!("command-{}", command.name).into()))
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |_, _, window, cx| {
-                        composer.update(cx, |input, cx| input.set_value(value.clone(), window, cx));
-                        composer.read(cx).focus_handle(cx).focus(window, cx);
-                    }))
-                    .gap_2()
-                    .text_sm()
-                    .child(
-                        div()
-                            .font_family(theme.mono_font_family.clone())
-                            .child(format!("/{}", command.name)),
-                    )
-                    .child(
-                        div()
-                            .truncate()
-                            .text_color(theme.muted_foreground)
-                            .child(command.description),
-                    ),
-            );
-        }
-        Some(column.into_any_element())
+            .map(|command| {
+                let (value, composer) = (format!("/{} ", command.name), self.composer.clone());
+                Suggestion::new(SharedString::from(format!("command-{}", command.name)), format!("/{}", command.name), move |window, cx| {
+                    composer.update(cx, |composer, cx| composer.set_text(value.clone(), window, cx));
+                    composer.read(cx).focus_handle(cx).focus(window, cx);
+                })
+                .detail(command.description.clone())
+                .code()
+            })
+            .collect()
     }
 }
 
-/// The new text as added lines and the old as removed: enough to see what
-/// an edit did, without a diff algorithm of its own yet.
-fn diff_view(path: &str, old: Option<&str>, new: &str, cx: &App) -> AnyElement {
-    let theme = cx.theme();
-    let mut lines = v_flex()
-        .font_family(theme.mono_font_family.clone())
-        .text_xs();
-    if let Some(old) = old {
-        for line in old.lines().take(200) {
-            lines = lines.child(
-                div()
-                    .bg(theme.danger.opacity(0.12))
-                    .child(format!("- {line}")),
-            );
-        }
-    }
-    for line in new.lines().take(400) {
-        lines = lines.child(
-            div()
-                .bg(theme.success.opacity(0.12))
-                .child(format!("+ {line}")),
-        );
-    }
-    v_flex()
-        .gap_1()
-        .child(
-            div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .truncate()
-                .child(path.to_owned()),
-        )
-        .child(lines.p_2().rounded(theme.radius).bg(theme.muted))
-        .into_any_element()
-}
-
-fn status_icon(status: ToolStatus, cx: &App) -> AnyElement {
-    let theme = cx.theme();
+fn step_status(status: ToolStatus) -> StepStatus {
     match status {
-        ToolStatus::Pending => Icon::new(IconName::Ellipsis)
-            .small()
-            .text_color(theme.muted_foreground)
-            .into_any_element(),
-        ToolStatus::InProgress => Spinner::new().small().into_any_element(),
-        ToolStatus::Completed => Icon::new(IconName::CircleCheck)
-            .small()
-            .text_color(theme.success)
-            .into_any_element(),
-        ToolStatus::Failed => Icon::new(IconName::CircleX)
-            .small()
-            .text_color(theme.danger)
-            .into_any_element(),
+        ToolStatus::Pending => StepStatus::Pending,
+        ToolStatus::InProgress => StepStatus::Running,
+        ToolStatus::Completed => StepStatus::Done,
+        ToolStatus::Failed => StepStatus::Failed,
     }
 }
 
 impl Render for ChatView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let phone = super::is_phone(window);
-        let this = cx.entity().downgrade();
-        let rows = list(self.list.clone(), move |index, _, cx| {
-            this.update(cx, |view, cx| view.render_entry(index, cx))
-                .unwrap_or_else(|_| div().into_any_element())
-        })
-        .size_full()
-        .py_3();
-
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (busy, ready, empty, agent, project) = {
             let session = self.session.read(cx);
             (
@@ -1038,117 +551,39 @@ impl Render for ChatView {
                 session.project_name.clone(),
             )
         };
-        let action = if busy {
-            Button::new("stop")
-                .small()
-                .icon(IconName::Pause)
-                .tooltip("Stop the agent's turn")
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.session.update(cx, |session, cx| session.cancel(cx))
-                }))
-        } else {
-            Button::new("send")
-                .primary()
-                .small()
-                .icon(IconName::ArrowUp)
-                .tooltip("Send (Enter)")
-                .disabled(!ready)
-                .on_click(cx.listener(|this, _, window, cx| this.send(window, cx)))
-        };
-        // The shell lifts the page onto the keyboard; this is the bar's room.
-        let bottom = super::insets().1;
+        let this = cx.entity().downgrade();
+        let feed = Feed::new(&self.list, move |index, _, cx| {
+            this.update(cx, |view, cx| view.render_entry(index, cx)).unwrap_or_else(|_| div().into_any_element())
+        })
+        .empty((empty && ready).then(|| {
+            Empty::new(IconName::Bot, format!("{agent} in {project}")).body("Ask it to do something in this project.")
+        }));
 
-        let composer = v_flex()
-            .w_full()
-            .rounded(px(18.))
-            .border_1()
-            .border_color(theme.border)
-            .bg(theme.background)
-            .overflow_hidden()
-            .children(self.render_plan(cx))
-            .children(self.render_commands(cx))
-            .child(
-                div()
-                    .px_1()
-                    .pt_1()
-                    .child(gpui_android_glue::keyboard::on_tap(
-                        Textarea::new(&self.composer).appearance(false),
-                        &self.composer,
-                        cx,
-                    )),
-            )
-            .child(
-                h_flex()
-                    .gap_1()
-                    .px_2()
-                    .pb_2()
-                    .children(self.render_mode(cx))
-                    .children(self.render_config_options(cx))
-                    .when(!phone, |bar| {
-                        bar.child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child("/ for commands · Shift+Enter for a new line"),
-                        )
-                    })
-                    .child(div().flex_1())
-                    .child(action),
-            );
+        let session = self.session.clone();
+        let stop = busy.then(|| {
+            Command::new("stop", "Stop the agent's turn").on_trigger(move |_, cx| session.update(cx, |session, cx| session.cancel(cx)))
+        });
+        let mut composer = Composer::new(&self.composer).stop(stop).can_send(ready).hint("/ for commands · Shift+Enter for a new line");
+        if let Some(plan) = self.render_plan(cx) {
+            composer = composer.above(plan);
+        }
+        let composer = composer.suggestions(self.suggestions(cx));
+        let composer = self.config_menu(self.mode_menu(composer, cx), cx);
 
-        v_flex()
+        let scale = cx.scale();
+        column()
             .size_full()
             .children(self.render_status(cx))
+            .child(feed)
             .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
-                    .when(empty && ready, |area| {
-                        area.child(
-                            v_flex()
-                                .absolute()
-                                .inset_0()
-                                .items_center()
-                                .justify_center()
-                                .gap_3()
-                                .px_6()
-                                .text_center()
-                                .child(
-                                    div()
-                                        .size(gpui_kit::rems(3.5))
-                                        .rounded_full()
-                                        .bg(theme.muted)
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .child(
-                                            Icon::new(IconName::Bot)
-                                                .large()
-                                                .text_color(theme.muted_foreground),
-                                        ),
-                                )
-                                .child(div().font_semibold().child(format!("{agent} in {project}")))
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(theme.muted_foreground)
-                                        .child("Ask it to do something in this project."),
-                                ),
-                        )
-                    })
-                    .child(div().size_full().child(rows).vertical_scrollbar(&self.list)),
-            )
-            .child(
-                h_flex().w_full().justify_center().child(
-                    v_flex()
+                gpui_adaptive::prim::row().w_full().justify_center().child(
+                    column()
                         .w_full()
-                        .max_w(rems(READING_WIDTH))
-                        .gap_2()
-                        .px_3()
-                        .pt_1()
-                        .pb(px(10.) + bottom)
+                        .max_w(rems(gpui_adaptive::feed::READING_WIDTH))
+                        .gap(scale.space_s)
+                        .px(scale.space_m)
+                        .pt(scale.space_xs)
+                        .pb(px(10.))
                         .children(self.render_sign_in(cx))
                         .children(self.render_permissions(cx))
                         .child(composer),

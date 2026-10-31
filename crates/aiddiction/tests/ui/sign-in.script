@@ -6,14 +6,14 @@
 until:page=inbox
 until:projects=1
 wait:800
-click:748,452
+click:378,16
 until:dialog=open
-click:550,229
+click:550,217
 wait:400
 type:fake
 key:enter
 wait:300
-click:550,318
+click:550,300
 type:hello
 key:enter
 until:page=chat
@@ -21,12 +21,12 @@ until:sign-in=choose
 wait:300
 shot:sign-in-choose
 # In a terminal: the server runs it and the card shows what it says.
-click:468,643
+click:926,643
 until:sign-in=terminal
 wait:1500
 shot:sign-in-terminal
 # The code, then the conversation opens and the waiting message goes.
-click:700,603
+click:748,611
 type:1234
 key:enter
 until:sign-in=none

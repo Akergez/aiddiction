@@ -2,12 +2,10 @@
 //! in use (whose projects and agents are listed; the inbox has them all). Adding one checks it first, so a typo is found here and not later.
 
 use aiddiction_client::ServerClient;
-use gpui_kit::base::InteractiveElementExt as _;
-use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
-use gpui_kit::component::{ActiveTheme, IconName, WindowExt, h_flex, v_flex};
-use gpui_kit::component::{Sizable as _, StyledExt as _};
+use gpui_adaptive::{Collection, Command, Confirm, Empty, Form, ItemActions, ListRow, Screen};
+use gpui_adaptive::IconName;
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, AppContext, Context, ElementId, Window, div};
+use gpui_kit::{AppContext, Context, SharedString, Window};
 
 use super::forms::{ServerForm, open_form};
 use super::shell::{Page, Shell};
@@ -15,79 +13,59 @@ use crate::runtime;
 use crate::settings::{ServerEntry, Settings};
 
 impl Shell {
-    pub(super) fn render_servers(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme().clone();
+    pub(super) fn render_servers(&mut self, cx: &mut Context<Self>) -> Screen {
         let settings = Settings::get(cx).clone();
-        let mut list = v_flex().gap_2();
+        let shell = cx.entity().downgrade();
+        let screen = Screen::new("servers", "Servers").command(
+            Command::new("add-server", "Add server").icon(IconName::Plus).primary().on_trigger(move |window, cx| {
+                shell.update(cx, |shell, cx| shell.edit_server(None, window, cx)).ok();
+            }),
+        );
         if settings.servers.is_empty() {
-            list = list.child(
-                div()
-                    .text_sm()
-                    .text_color(theme.muted_foreground)
-                    .child("Run `aiddiction-server` on the machine your projects live on, then add it here with the token it prints."),
-            );
+            return screen.scrolls(false).content(Empty::new(IconName::HardDrive, "No server yet").body(
+                "Run `aiddiction-server` on the machine your projects live on, then add it here with the token it prints.",
+            ));
         }
-        for entry in settings.servers {
+        let rows = settings.servers.into_iter().map(|entry| {
             let active = settings.active.as_deref() == Some(entry.id.as_str());
             let id = entry.id.clone();
-            let use_entry = entry.clone();
-            let edit_entry = entry.clone();
-            list = list.child(
-                h_flex()
-                    .id(ElementId::Name(format!("server-{id}").into()))
-                    .gap_3()
-                    .p_3()
-                    .border_1()
-                    .rounded(theme.radius * 1.5)
-                    .border_color(if active { theme.primary } else { theme.border })
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .child(div().font_semibold().truncate().child(entry.name.clone()))
-                            .child(div().text_sm().text_color(theme.muted_foreground).truncate().child(entry.url.clone())),
-                    )
-                    .when(!active, |row| {
-                        row.child(Button::new("use").small().primary().label("Use").on_click(cx.listener(move |this, _, _, cx| {
-                            this.use_server(&use_entry.id, cx);
-                            this.go_root(Page::Projects, cx);
-                        })))
+            let shell = cx.entity().downgrade();
+            let (use_shell, use_id) = (shell.clone(), id.clone());
+            let use_server = move |_: &mut Window, cx: &mut gpui_kit::App| {
+                use_shell
+                    .update(cx, |shell, cx| {
+                        shell.use_server(&use_id, cx);
+                        shell.go_root(Page::Projects, cx);
                     })
-                    .when(active, |row| row.child(div().text_sm().text_color(theme.primary).child("In use")))
-                    .child(
-                        Button::new("edit")
-                            .small()
-                            .ghost()
-                            .icon(IconName::Settings2)
-                            .tooltip("Edit")
-                            .on_click(cx.listener(move |this, _, window, cx| this.edit_server(Some(edit_entry.clone()), window, cx))),
-                    )
-                    .child(Button::new("remove").small().ghost().icon(IconName::Delete).tooltip("Remove").on_click(
-                        cx.listener(move |this, _, window, cx| this.remove_server(id.clone(), window, cx)),
-                    )),
-            );
-        }
-        v_flex()
-            .id("servers")
-            .size_full()
-            .overflow_y_scroll()
-            .lock_scroll_axis()
-            .p_6()
-            .gap_4()
-            .child(
-                h_flex()
-                    .child(div().flex_1().text_xl().font_semibold().child("Servers"))
-                    .child(
-                        Button::new("add-server")
-                            .primary()
-                            .small()
-                            .icon(IconName::Plus)
-                            .label("Add server")
-                            .on_click(cx.listener(|this, _, window, cx| this.edit_server(None, window, cx))),
-                    ),
-            )
-            .child(list)
-            .into_any_element()
+                    .ok();
+            };
+            let (edit_shell, edited) = (shell.clone(), entry.clone());
+            let edit = move |window: &mut Window, cx: &mut gpui_kit::App| {
+                edit_shell.update(cx, |shell, cx| shell.edit_server(Some(edited.clone()), window, cx)).ok();
+            };
+            let removed = id.clone();
+            let mut actions = ItemActions::new().title(entry.name.clone());
+            if !active {
+                actions = actions.quick(Command::new(SharedString::from(format!("use-{id}")), "Use").icon(IconName::Check).on_trigger(use_server.clone()));
+            }
+            actions = actions
+                .quick(Command::new(SharedString::from(format!("edit-{id}")), "Edit").icon(IconName::Settings2).on_trigger(edit.clone()))
+                .command(
+                    Command::new(SharedString::from(format!("remove-{id}")), "Remove")
+                        .icon(IconName::Delete)
+                        .destructive()
+                        .on_trigger(move |window, cx| {
+                            shell.update(cx, |shell, cx| shell.remove_server(removed.clone(), window, cx)).ok();
+                        }),
+                );
+            ListRow::new(SharedString::from(format!("server-{id}")), entry.name.clone())
+                .subtitle(entry.url.clone())
+                .when(active, |row| row.trailing("In use"))
+                .selected(active)
+                .on_activate(move |window, cx| if active { edit(window, cx) } else { use_server(window, cx) })
+                .actions(actions)
+        });
+        screen.content(Collection::new("servers-list").children(rows))
     }
 
     fn edit_server(&mut self, entry: Option<ServerEntry>, window: &mut Window, cx: &mut Context<Self>) {
@@ -101,16 +79,9 @@ impl Shell {
             form,
             Some(first),
             move |form, window, cx| {
-                let entry = match form.entry(cx) {
-                    Ok(entry) => entry,
-                    Err(error) => {
-                        form.error = Some(error.into());
-                        cx.notify();
-                        return false;
-                    }
-                };
+                let Some(entry) = form.entry(cx) else { return false };
                 // Saved only once the server answers with this token.
-                form.error = Some("Checking…".into());
+                form.note = Some("Checking…".into());
                 cx.notify();
                 let form_entity = cx.entity().downgrade();
                 let shell = shell.clone();
@@ -139,13 +110,10 @@ impl Shell {
                                     shell.go_root(Page::Inbox, cx);
                                 }
                             });
-                            let _ = window_handle.update(cx, |_, window, cx| window.close_dialog(cx));
+                            let _ = window_handle.update(cx, |_, window, cx| Form::close(window, cx));
                         }
                         Err(error) => {
-                            let _ = form_entity.update(cx, |form, cx| {
-                                form.error = Some(format!("The server did not answer: {error}").into());
-                                cx.notify();
-                            });
+                            let _ = form_entity.update(cx, |form, cx| form.unanswered(error, cx));
                         }
                     },
                 );
@@ -158,26 +126,18 @@ impl Shell {
 
     fn remove_server(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
         let shell = cx.entity().downgrade();
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let id = id.clone();
-            let shell = shell.clone();
-            alert
-                .title("Remove this server?")
-                .description("Its projects stay on the server; only this device forgets it.")
-                .confirm()
-                .ok_text("Remove")
-                .ok_variant(ButtonVariant::Danger)
-                .on_ok(move |_, _, cx| {
-                    let was_active = Settings::get(cx).active.as_deref() == Some(id.as_str());
-                    Settings::update(cx, |settings| {
-                        settings.servers.retain(|server| server.id != id);
-                        if was_active {
-                            settings.active = settings.servers.first().map(|server| server.id.clone());
-                        }
-                    });
-                    let _ = shell.update(cx, |shell, cx| shell.sync_servers(cx));
-                    true
-                })
-        });
+        Confirm::new("remove-server-confirm", "Remove this server?")
+            .body("Its projects stay on the server; only this device forgets it.")
+            .confirm(Command::new("remove-server-yes", "Remove").destructive().on_trigger(move |_, cx| {
+                let was_active = Settings::get(cx).active.as_deref() == Some(id.as_str());
+                Settings::update(cx, |settings| {
+                    settings.servers.retain(|server| server.id != id);
+                    if was_active {
+                        settings.active = settings.servers.first().map(|server| server.id.clone());
+                    }
+                });
+                shell.update(cx, |shell, cx| shell.sync_servers(cx)).ok();
+            }))
+            .open(window, cx);
     }
 }

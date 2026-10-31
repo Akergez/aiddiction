@@ -1,37 +1,22 @@
-//! The forms dialogs hold: a server, a project, an agent.
+//! The forms: a server, a project, an agent, a task.
 //!
-//! Each is an entity with its fields; [`open_form`] puts one in a dialog and
-//! calls `submit` on OK, which answers whether the dialog may close.
+//! Each is an entity with its fields; [`open_form`] opens it as a
+//! [`Form`] and calls `submit` on its commitment, which answers whether it
+//! may close. What is wrong is said under the field it is about.
 
 use std::collections::BTreeMap;
-use std::rc::Rc;
 
 use aiddiction_api::{Agent, AgentCommand, AgentInput, DirListing, NewProject, ProjectSource, Task, TaskId, TaskInput, TaskStatus};
 use aiddiction_client::ServerClient;
-use gpui_kit::base::InteractiveElementExt as _;
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
-use gpui_kit::component::form::{field, v_form};
-use gpui_kit::component::input::{Input, InputState, Textarea, TextareaState};
-use gpui_kit::component::{ActiveTheme, Icon, IconName, h_flex, v_flex};
-use gpui_kit::component::{Selectable as _, Sizable as _};
+use gpui_adaptive::{Collection, Fields, Form, Icon, IconName, ListRow, Note, Purpose, Segments, TextField, TextFieldState};
 use gpui_kit::Focusable as _;
 use gpui_kit::prelude::*;
-use gpui_kit::{App, AppContext, Context, ElementId, Entity, FocusHandle, Render, SharedString, Window, div};
-
-use gpui_android_glue::keyboard::Purpose;
+use gpui_kit::{App, AppContext, Context, Entity, FocusHandle, Render, SharedString, Window, rems};
 
 use crate::settings::ServerEntry;
 
-/// Room around a dialog's form while the keyboard is up, in rems: above it,
-/// for its title and buttons, and the least its fields get.
-const DIALOG_GAP: f32 = 0.5;
-const DIALOG_CHROME: f32 = 9.5;
-const DIALOG_BODY_AT_LEAST: f32 = 6.0;
-/// How far the keyboard comes up, in rems, while the dialog rises from where
-/// the toolkit puts it to the top: it moves with the keyboard, never jumps.
-const DIALOG_RISES_OVER: f32 = 12.0;
-
+/// Opens `form` as a [`Form`]: a dialog on a pointer, a sheet on a finger.
+/// `submit` answers whether it may close.
 pub fn open_form<F: Render>(
     title: impl Into<SharedString>,
     commit: impl Into<SharedString>,
@@ -41,102 +26,68 @@ pub fn open_form<F: Render>(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let (title, commit): (SharedString, SharedString) = (title.into(), commit.into());
-    let submit = Rc::new(submit);
-    // A layer of back for as long as it is open: predictive back's gesture
-    // closes it even over a page with nowhere to go back to.
-    gpui_android_glue::back::open_dialog(window, cx, move |dialog, window, _| {
-        let (form, submit) = (form.clone(), submit.clone());
-        // With the on-screen keyboard up, the dialog moves to the top of what
-        // is left of the window and its fields scroll inside that, so what is
-        // being typed into is never under the keyboard (money-manager-ng's
-        // `open_form`).
-        // Read every frame while the keyboard slides, so the dialog slides
-        // with it.
-        let keyboard = super::keyboard_inset(window);
-        let rem = window.rem_size();
-        let height = window.viewport_size().height;
-        let resting = height / 10.;
-        let raised = super::insets().0 + rem * DIALOG_GAP;
-        let risen = (keyboard / (rem * DIALOG_RISES_OVER)).clamp(0., 1.);
-        let top = resting + (raised - resting) * risen;
-        let room = height - keyboard - top - rem * DIALOG_CHROME;
-        let body = div()
-            .id("form-body")
-            .max_h(room.max(rem * DIALOG_BODY_AT_LEAST))
-            .overflow_y_scroll()
-            .lock_scroll_axis()
-            .child(form.clone());
-        let (dialog, body) = (dialog.margin_top(top), body);
-        dialog
-            .title(title.clone())
-            .child(body)
-            .footer(
-                DialogFooter::new()
-                    .child(DialogClose::new().child(Button::new("cancel").label("Cancel")))
-                    .child(DialogAction::new().child(Button::new("ok").label(commit.clone()).primary())),
-            )
-            .on_ok(move |_, window, cx| form.update(cx, |form, cx| submit(form, window, cx)))
-    });
-    if let Some(first) = first {
-        first.focus(window, cx);
+    let fields = form.clone();
+    let open = Form::new(title, fields).commit(commit, move |window, cx| form.update(cx, |form, cx| submit(form, window, cx)));
+    match first {
+        Some(first) => open.focus(first).open(window, cx),
+        None => open.open(window, cx),
     }
 }
 
-fn input(placeholder: &'static str, value: &str, window: &mut Window, cx: &mut App) -> Entity<InputState> {
+/// A field for `purpose`, showing `placeholder` while empty, holding `value`.
+fn line(purpose: Purpose, placeholder: &'static str, value: &str, window: &mut Window, cx: &mut App) -> Entity<TextFieldState> {
     let value = value.to_owned();
-    cx.new(|cx| InputState::new(window, cx).placeholder(placeholder).default_value(value))
+    cx.new(|cx| {
+        let mut field = TextFieldState::new(purpose, window, cx);
+        field.set_placeholder(placeholder, window, cx);
+        field.set_value(value, window, cx);
+        field
+    })
 }
 
-/// [`input`], telling a phone's keyboard what it is for.
-fn input_for(
-    purpose: Purpose,
-    placeholder: &'static str,
-    value: &str,
-    window: &mut Window,
-    cx: &mut App,
-) -> Entity<InputState> {
-    let state = input(placeholder, value, window, cx);
-    super::keyboard_for(&state, purpose, cx);
-    state
+/// [`line`] of several lines, growing from `min` to `max`.
+fn lines(placeholder: &'static str, value: &str, (min, max): (usize, usize), window: &mut Window, cx: &mut App) -> Entity<TextFieldState> {
+    let value = value.to_owned();
+    cx.new(|cx| {
+        let mut field = TextFieldState::multiline(Purpose::Message, min, max, window, cx);
+        field.set_placeholder(placeholder, window, cx);
+        field.set_value(value, window, cx);
+        field
+    })
 }
 
-fn text(state: &Entity<InputState>, cx: &App) -> String {
-    state.read(cx).value().trim().to_owned()
+fn text(field: &Entity<TextFieldState>, cx: &App) -> String {
+    field.read(cx).value(cx).trim().to_owned()
 }
 
-fn error_line(error: &Option<SharedString>, cx: &App) -> impl IntoElement {
-    div().when_some(error.clone(), |div, error| div.text_sm().text_color(cx.theme().danger).child(error))
+/// Says what is wrong under `field`.
+fn wrong(field: &Entity<TextFieldState>, error: impl Into<SharedString>, cx: &mut App) {
+    let error = error.into();
+    field.update(cx, |field, cx| field.set_error(Some(error), cx));
+}
+
+/// What the form as a whole says under its fields: "Checking…".
+fn note(note: &Option<SharedString>) -> Option<Note> {
+    note.clone().map(Note::new)
 }
 
 pub struct ServerForm {
     pub id: Option<String>,
-    name: Entity<InputState>,
-    url: Entity<InputState>,
-    token: Entity<InputState>,
-    pub error: Option<SharedString>,
+    name: Entity<TextFieldState>,
+    url: Entity<TextFieldState>,
+    token: Entity<TextFieldState>,
+    /// What the form says while it checks the server.
+    pub note: Option<SharedString>,
 }
 
 impl ServerForm {
     pub fn new(entry: Option<&ServerEntry>, window: &mut Window, cx: &mut App) -> Self {
         Self {
             id: entry.map(|entry| entry.id.clone()),
-            name: input_for(Purpose::Message, "My workstation", entry.map_or("", |e| e.name.as_str()), window, cx),
-            url: input_for(
-                Purpose::Address,
-                "192.168.1.10:7878 or https://…",
-                entry.map_or("", |e| e.url.as_str()),
-                window,
-                cx,
-            ),
-            token: input_for(
-                Purpose::Password,
-                "From `aiddiction-server token`",
-                entry.map_or("", |e| e.token.as_str()),
-                window,
-                cx,
-            ),
-            error: None,
+            name: line(Purpose::Message, "My workstation", entry.map_or("", |e| e.name.as_str()), window, cx),
+            url: line(Purpose::Address, "192.168.1.10:7878 or https://…", entry.map_or("", |e| e.url.as_str()), window, cx),
+            token: line(Purpose::Password, "From `aiddiction-server token`", entry.map_or("", |e| e.token.as_str()), window, cx),
+            note: None,
         }
     }
 
@@ -144,34 +95,41 @@ impl ServerForm {
         self.name.read(cx).focus_handle(cx)
     }
 
-    /// The entry the fields describe, or why they do not describe one.
-    pub fn entry(&self, cx: &App) -> Result<ServerEntry, String> {
+    /// The entry the fields describe; or none, with what is wrong said under
+    /// its field.
+    pub fn entry(&self, cx: &mut App) -> Option<ServerEntry> {
         let url = text(&self.url, cx);
-        aiddiction_client::normalize_url(&url).map_err(|error| error.to_string())?;
+        if let Err(error) = aiddiction_client::normalize_url(&url) {
+            wrong(&self.url, error.to_string(), cx);
+            return None;
+        }
         let token = text(&self.token, cx);
         if token.is_empty() {
-            return Err("The server's token is needed.".into());
+            wrong(&self.token, "The server's token is needed.", cx);
+            return None;
         }
         let name = match text(&self.name, cx) {
             name if name.is_empty() => url.clone(),
             name => name,
         };
-        Ok(ServerEntry {
-            id: self.id.clone().unwrap_or_else(|| uuid::Uuid::now_v7().to_string()),
-            name,
-            url,
-            token,
-        })
+        Some(ServerEntry { id: self.id.clone().unwrap_or_else(|| uuid::Uuid::now_v7().to_string()), name, url, token })
+    }
+
+    /// The server at the address did not answer with the token.
+    pub fn unanswered(&mut self, error: impl std::fmt::Display, cx: &mut Context<Self>) {
+        self.note = None;
+        wrong(&self.url, format!("The server did not answer: {error}"), cx);
+        cx.notify();
     }
 }
 
 impl Render for ServerForm {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        v_form()
-            .child(field().label("Name").child(gpui_android_glue::keyboard::on_tap(Input::new(&self.name), &self.name, cx)))
-            .child(field().label("Address").child(gpui_android_glue::keyboard::on_tap(Input::new(&self.url), &self.url, cx)))
-            .child(field().label("Token").child(gpui_android_glue::keyboard::on_tap(Input::new(&self.token).mask_toggle(), &self.token, cx)))
-            .child(field().label_indent(false).child(error_line(&self.error, cx)))
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Fields::new()
+            .child(TextField::new(&self.name).label("Name"))
+            .child(TextField::new(&self.url).label("Address"))
+            .child(TextField::new(&self.token).label("Token"))
+            .children(note(&self.note))
     }
 }
 
@@ -183,17 +141,27 @@ enum Origin {
     Existing,
 }
 
+impl Origin {
+    const ALL: [(Origin, &'static str, &'static str); 3] =
+        [(Origin::Empty, "empty", "Empty folder"), (Origin::Git, "git", "Clone from git"), (Origin::Existing, "existing", "Existing folder")];
+
+    fn key(self) -> &'static str {
+        Self::ALL.iter().find(|(origin, ..)| *origin == self).map_or("empty", |(_, key, _)| key)
+    }
+}
+
 pub struct ProjectForm {
     origin: Origin,
     client: Option<ServerClient>,
-    name: Entity<InputState>,
-    url: Entity<InputState>,
-    branch: Entity<InputState>,
-    token: Entity<InputState>,
-    path: Entity<InputState>,
+    name: Entity<TextFieldState>,
+    url: Entity<TextFieldState>,
+    branch: Entity<TextFieldState>,
+    token: Entity<TextFieldState>,
+    path: Entity<TextFieldState>,
     /// The server's folders around the one being picked.
     listing: Option<DirListing>,
-    pub error: Option<SharedString>,
+    /// Why the folders could not be read.
+    pub note: Option<SharedString>,
 }
 
 impl ProjectForm {
@@ -201,13 +169,13 @@ impl ProjectForm {
         Self {
             origin: Origin::Empty,
             client,
-            name: input("my-project", "", window, cx),
-            url: input_for(Purpose::Address, "https://github.com/owner/repo.git", "", window, cx),
-            branch: input("Default branch", "", window, cx),
-            token: input_for(Purpose::Password, "Only for a private repository over HTTPS", "", window, cx),
-            path: input("/home/me/code/project", "", window, cx),
+            name: line(Purpose::Message, "my-project", "", window, cx),
+            url: line(Purpose::Address, "https://github.com/owner/repo.git", "", window, cx),
+            branch: line(Purpose::Message, "Default branch", "", window, cx),
+            token: line(Purpose::Password, "Only for a private repository over HTTPS", "", window, cx),
+            path: line(Purpose::Address, "/home/me/code/project", "", window, cx),
             listing: None,
-            error: None,
+            note: None,
         }
     }
 
@@ -227,7 +195,7 @@ impl ProjectForm {
     fn browse(&mut self, path: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(client) = self.client.clone() else { return };
         if let Some(path) = &path {
-            self.path.update(cx, |input, cx| input.set_value(path.clone(), window, cx));
+            self.path.update(cx, |field, cx| field.set_value(path.clone(), window, cx));
         }
         let this = cx.entity().downgrade();
         crate::runtime::spawn(async move { client.dirs(path.as_deref()).await }, move |result, cx| {
@@ -235,122 +203,107 @@ impl ProjectForm {
                 match result {
                     Ok(listing) => {
                         form.listing = Some(listing);
-                        form.error = None;
+                        form.note = None;
                     }
-                    Err(error) => form.error = Some(error.to_string().into()),
+                    Err(error) => form.note = Some(error.to_string().into()),
                 }
                 cx.notify();
             });
         });
     }
 
-    pub fn project(&self, cx: &App) -> Result<NewProject, String> {
+    /// The project the fields describe; or none, with what is wrong said
+    /// under its field.
+    pub fn project(&self, cx: &mut App) -> Option<NewProject> {
         let mut name = text(&self.name, cx);
         let source = match self.origin {
             Origin::Empty => ProjectSource::Empty,
             Origin::Git => {
                 let url = text(&self.url, cx);
                 if url.is_empty() {
-                    return Err("The repository's address is needed.".into());
+                    wrong(&self.url, "The repository's address is needed.", cx);
+                    return None;
                 }
                 if name.is_empty() {
                     // The repository's own name, as `git clone` would choose.
                     name = url.trim_end_matches('/').trim_end_matches(".git").rsplit(['/', ':']).next().unwrap_or_default().to_owned();
                 }
-                let optional = |state: &Entity<InputState>| Some(text(state, cx)).filter(|value| !value.is_empty());
+                let optional = |field: &Entity<TextFieldState>| Some(text(field, cx)).filter(|value| !value.is_empty());
                 ProjectSource::Git { url, branch: optional(&self.branch), token: optional(&self.token) }
             }
             Origin::Existing => {
                 let path = text(&self.path, cx);
                 if path.is_empty() {
-                    return Err("Pick a folder on the server.".into());
+                    wrong(&self.path, "Pick a folder on the server.", cx);
+                    return None;
                 }
                 // An empty name is the folder's own; the server knows it.
-                return Ok(NewProject { name, source: ProjectSource::Existing { path } });
+                return Some(NewProject { name, source: ProjectSource::Existing { path } });
             }
         };
         if name.is_empty() {
-            return Err("The project needs a name.".into());
+            wrong(&self.name, "The project needs a name.", cx);
+            return None;
         }
-        Ok(NewProject { name, source })
+        Some(NewProject { name, source })
     }
 
-    /// A fixed height, however many folders there are: the dialog must not
+    /// A fixed height, however many folders there are: the form must not
     /// change size (and move its buttons) as the listing changes.
-    fn render_folders(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let theme = cx.theme().clone();
-        let mut list = v_flex().id("folders").h_48().overflow_y_scroll().lock_scroll_axis().border_1().border_color(theme.border).rounded(theme.radius);
+    fn render_folders(&self, cx: &mut Context<Self>) -> Collection {
+        let folders = Collection::new("folders").boxed(rems(12.));
         let Some(listing) = &self.listing else {
-            return list.child(div().p_2().text_sm().text_color(theme.muted_foreground).child("Reading the server's folders…"));
+            return folders.child(Note::new("Reading the server's folders…"));
         };
-        let entry = |id: String, label: String, path: String, cx: &mut Context<Self>| {
-            h_flex()
-                .id(ElementId::Name(id.into()))
-                .gap_2()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .cursor_pointer()
-                .hover(|style| style.bg(theme.accent))
-                .child(Icon::new(IconName::Folder).xsmall().text_color(theme.muted_foreground))
-                .child(div().truncate().child(label))
-                .on_click(cx.listener(move |form, _, window, cx| form.browse(Some(path.clone()), window, cx)))
+        let form = cx.entity().downgrade();
+        let row = |id: String, label: String, path: String| {
+            let form = form.clone();
+            ListRow::new(SharedString::from(id), label).leading(Icon::new(IconName::Folder)).on_activate(move |window, cx| {
+                form.update(cx, |form, cx| form.browse(Some(path.clone()), window, cx)).ok();
+            })
         };
-        if let Some(parent) = listing.parent.clone() {
-            list = list.child(entry("folder-up".into(), "..".into(), parent, cx));
-        }
-        for dir in &listing.dirs {
-            list = list.child(entry(format!("folder-{}", dir.path), dir.name.clone(), dir.path.clone(), cx));
-        }
-        list
+        let up = listing.parent.clone().map(|parent| row("folder-up".into(), "..".into(), parent));
+        let dirs = listing.dirs.iter().map(|dir| row(format!("folder-{}", dir.path), dir.name.clone(), dir.path.clone()));
+        folders.children(up).children(dirs)
     }
 }
 
 impl Render for ProjectForm {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let choice = |origin: Origin, label: &'static str, cx: &mut Context<Self>| {
-            let selected = self.origin == origin;
-            Button::new(label)
-                .label(label)
-                .small()
-                .selected(selected)
-                .when(selected, |button| button.primary())
-                .on_click(cx.listener(move |this, _, window, cx| this.set_origin(origin, window, cx)))
-        };
-        let kind = h_flex()
-            .gap_2()
-            .flex_wrap()
-            .child(choice(Origin::Empty, "Empty folder", cx))
-            .child(choice(Origin::Git, "Clone from git", cx))
-            .child(choice(Origin::Existing, "Existing folder", cx));
+        let form = cx.entity().downgrade();
+        let kind = Origin::ALL
+            .iter()
+            .fold(Segments::new("origin", self.origin.key()), |segments, (_, key, label)| segments.segment(*key, *label))
+            .on_change(move |key, window, cx| {
+                let origin = Origin::ALL.iter().find(|(_, k, _)| *k == key.as_ref()).map_or(Origin::Empty, |(origin, ..)| *origin);
+                form.update(cx, |form, cx| form.set_origin(origin, window, cx)).ok();
+            });
         let folders = (self.origin == Origin::Existing).then(|| self.render_folders(cx));
-        v_form()
-            .child(field().label_indent(false).child(kind))
-            .child(field().label("Name").child(gpui_android_glue::keyboard::on_tap(Input::new(&self.name), &self.name, cx)))
-            .when(self.origin == Origin::Git, |form| {
-                form.child(field().label("Repository").child(gpui_android_glue::keyboard::on_tap(Input::new(&self.url), &self.url, cx)))
-                    .child(field().label("Branch").child(gpui_android_glue::keyboard::on_tap(Input::new(&self.branch), &self.branch, cx)))
-                    .child(field().label("Token").child(gpui_android_glue::keyboard::on_tap(Input::new(&self.token).mask_toggle(), &self.token, cx)))
+        Fields::new()
+            .child(kind)
+            .child(TextField::new(&self.name).label("Name"))
+            .when(self.origin == Origin::Git, |form: Fields| {
+                form.child(TextField::new(&self.url).label("Repository"))
+                    .child(TextField::new(&self.branch).label("Branch"))
+                    .child(TextField::new(&self.token).label("Token"))
             })
             .when_some(folders, |form, folders| {
                 form.child(
-                    field()
+                    TextField::new(&self.path)
                         .label("Folder on the server")
-                        .description("Taken as it is; deleting the project later leaves it in place.")
-                        .child(gpui_android_glue::keyboard::on_tap(Input::new(&self.path), &self.path, cx)),
+                        .help("Taken as it is; deleting the project later leaves it in place."),
                 )
-                .child(field().label_indent(false).child(folders))
+                .child(folders)
             })
-            .child(field().label_indent(false).child(error_line(&self.error, cx)))
+            .children(note(&self.note))
     }
 }
 
 pub struct AgentForm {
     pub id: Option<String>,
-    name: Entity<InputState>,
-    command: Entity<InputState>,
-    env: Entity<TextareaState>,
-    pub error: Option<SharedString>,
+    name: Entity<TextFieldState>,
+    command: Entity<TextFieldState>,
+    env: Entity<TextFieldState>,
 }
 
 impl AgentForm {
@@ -372,10 +325,9 @@ impl AgentForm {
             .unwrap_or_default();
         Self {
             id: agent.map(|agent| agent.id.clone()),
-            name: input_for(Purpose::Message, "My agent", agent.map_or("", |a| a.name.as_str()), window, cx),
-            command: input("npx -y @scope/some-acp --flag", &command, window, cx),
-            env: cx.new(|cx| TextareaState::new(window, cx).auto_grow(2, 6).placeholder("KEY=value, one a line").default_value(env)),
-            error: None,
+            name: line(Purpose::Message, "My agent", agent.map_or("", |a| a.name.as_str()), window, cx),
+            command: line(Purpose::Address, "npx -y @scope/some-acp --flag", &command, window, cx),
+            env: lines("KEY=value, one a line", &env, (2, 6), window, cx),
         }
     }
 
@@ -383,37 +335,46 @@ impl AgentForm {
         self.name.read(cx).focus_handle(cx)
     }
 
-    pub fn input(&self, cx: &App) -> Result<AgentInput, String> {
+    /// The agent the fields describe; or none, with what is wrong said under
+    /// its field.
+    pub fn input(&self, cx: &mut App) -> Option<AgentInput> {
         let name = text(&self.name, cx);
         let command = text(&self.command, cx);
+        if name.is_empty() {
+            wrong(&self.name, "The agent needs a name.", cx);
+        }
+        if command.is_empty() {
+            wrong(&self.command, "The agent needs a command.", cx);
+        }
         if name.is_empty() || command.is_empty() {
-            return Err("The agent needs a name and a command.".into());
+            return None;
         }
         let mut env = BTreeMap::new();
-        for line in self.env.read(cx).value().lines() {
+        for line in self.env.read(cx).value(cx).lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            let (key, value) = line.split_once('=').ok_or_else(|| format!("Not KEY=value: {line}"))?;
+            let Some((key, value)) = line.split_once('=') else {
+                wrong(&self.env, format!("Not KEY=value: {line}"), cx);
+                return None;
+            };
             env.insert(key.trim().to_owned(), value.trim().to_owned());
         }
-        Ok(AgentInput { name, command: AgentCommand { command, args: Vec::new(), env } })
+        Some(AgentInput { name, command: AgentCommand { command, args: Vec::new(), env } })
     }
 }
 
 impl Render for AgentForm {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        v_form()
-            .child(field().label("Name").child(gpui_android_glue::keyboard::on_tap(Input::new(&self.name), &self.name, cx)))
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Fields::new()
+            .child(TextField::new(&self.name).label("Name"))
             .child(
-                field()
+                TextField::new(&self.command)
                     .label("Command")
-                    .description("Run by bash in the project's folder on the server; it must speak ACP on stdio.")
-                    .child(gpui_android_glue::keyboard::on_tap(Input::new(&self.command), &self.command, cx)),
+                    .help("Run by bash in the project's folder on the server; it must speak ACP on stdio."),
             )
-            .child(field().label("Environment").child(gpui_android_glue::keyboard::on_tap(Textarea::new(&self.env), &self.env, cx)))
-            .child(field().label_indent(false).child(error_line(&self.error, cx)))
+            .child(TextField::new(&self.env).label("Environment"))
     }
 }
 
@@ -421,23 +382,19 @@ impl Render for AgentForm {
 pub struct TaskForm {
     pub id: Option<TaskId>,
     status: Option<TaskStatus>,
-    title: Entity<InputState>,
-    markdown: Entity<TextareaState>,
-    pub error: Option<SharedString>,
+    title: Entity<TextFieldState>,
+    markdown: Entity<TextFieldState>,
 }
 
 impl TaskForm {
     /// `status` is the column a new card goes to; an edited one stays where it is.
     pub fn new(task: Option<&Task>, status: TaskStatus, window: &mut Window, cx: &mut App) -> Self {
         let markdown = task.map(|task| task.markdown.clone()).unwrap_or_default();
-        let markdown = cx.new(|cx| TextareaState::new(window, cx).auto_grow(3, 10).placeholder("Details, in Markdown").default_value(markdown));
-        super::keyboard_for(&markdown, Purpose::Message, cx);
         Self {
             id: task.map(|task| task.id),
             status: Some(task.map_or(status, |task| task.status)),
-            title: input_for(Purpose::Message, "What needs doing", task.map_or("", |task| task.title.as_str()), window, cx),
-            markdown,
-            error: None,
+            title: line(Purpose::Message, "What needs doing", task.map_or("", |task| task.title.as_str()), window, cx),
+            markdown: lines("Details, in Markdown", &markdown, (3, 10), window, cx),
         }
     }
 
@@ -445,21 +402,21 @@ impl TaskForm {
         self.title.read(cx).focus_handle(cx)
     }
 
-    pub fn input(&self, cx: &App) -> Result<TaskInput, String> {
+    /// The task the fields describe; or none, with what is wrong said under
+    /// its field.
+    pub fn input(&self, cx: &mut App) -> Option<TaskInput> {
         let title = text(&self.title, cx);
         if title.is_empty() {
-            return Err("The task needs a title.".into());
+            wrong(&self.title, "The task needs a title.", cx);
+            return None;
         }
-        Ok(TaskInput { title, markdown: self.markdown.read(cx).value().trim_end().to_owned(), status: self.status })
+        Some(TaskInput { title, markdown: self.markdown.read(cx).value(cx).trim_end().to_owned(), status: self.status })
     }
 }
 
 impl Render for TaskForm {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        v_form()
-            .child(field().label("Title").child(gpui_android_glue::keyboard::on_tap(Input::new(&self.title), &self.title, cx)))
-            .child(field().label("Details").child(gpui_android_glue::keyboard::on_tap(Textarea::new(&self.markdown), &self.markdown, cx)))
-            .child(field().label_indent(false).child(error_line(&self.error, cx)))
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Fields::new().child(TextField::new(&self.title).label("Title")).child(TextField::new(&self.markdown).label("Details"))
     }
 }
 
