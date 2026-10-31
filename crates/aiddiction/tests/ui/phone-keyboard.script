@@ -24,4 +24,12 @@ until:page=chat
 until:permissions=1
 wait:500
 shot:phone-keyboard-chat
+click:200,425
+type:hello
+key:enter
+type:from phone
+wait:300
+shot:phone-keyboard-composer-draft
+expect:busy=yes
+expect:permissions=1
 quit

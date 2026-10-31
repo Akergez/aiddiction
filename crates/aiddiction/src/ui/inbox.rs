@@ -1,4 +1,4 @@
-//! The inbox — every conversation on every server, grouped by what it needs
+//! The inbox — every conversation on every server, grouped by project
 //! (`crate::inbox` decides) — and the list of projects. The conversations'
 //! rows and the projects' avatars are shared with the project page.
 
@@ -25,8 +25,7 @@ impl Shell {
         }))
     }
 
-    /// The inbox: every conversation, a section for each thing they may
-    /// need, in `crate::inbox`'s order.
+    /// The inbox: every conversation, a section for each project.
     pub(super) fn render_inbox(&mut self, cx: &mut Context<Self>) -> Screen {
         let listed = self.listed(cx);
         // A server that does not answer has its conversations missing here:
@@ -62,20 +61,21 @@ impl Shell {
         let mut list = Collection::new("inbox-list");
         let mut rest = listed.as_slice();
         while let Some(first) = rest.first() {
-            let group = first.group;
-            let count = rest.iter().take_while(|item| item.group == group).count();
+            let project = first.project.id;
+            let count = rest.iter().take_while(|item| item.project.id == project).count();
             let (run, after) = rest.split_at(count);
-            let header = SectionHeader::new(group.title());
-            let header = if group == Group::NeedsYou { header.tone(Tone::Warning) } else { header };
-            list = list.section(header, run.iter().map(|item| self.session_row(item, true, cx)));
+            list = list.section(
+                SectionHeader::new(first.project.name.clone()),
+                run.iter().map(|item| self.session_row(item, true, cx)),
+            );
             rest = after;
         }
         screen.content(list)
     }
 
-    /// One conversation: its project, its title, what it is doing, and the
+    /// One conversation: its agent, its title, what it is doing, and the
     /// agent's question with its answers when it asks one.
-    pub(super) fn session_row(&self, item: &Listed, show_project: bool, cx: &mut Context<Self>) -> ListRow {
+    pub(super) fn session_row(&self, item: &Listed, show_server: bool, cx: &mut Context<Self>) -> ListRow {
         let selected = self.showing_session(cx).as_deref() == Some(item.session.session_id.as_str());
         let signal = match item.group {
             Group::NeedsYou if item.session.permissions.is_empty() => Some(Signal::Waiting(Tone::Danger)),
@@ -85,13 +85,9 @@ impl Shell {
             Group::Recent | Group::Stopped => None,
         };
         let server = self.connection(&item.server, cx);
-        let mut meta = if show_project {
-            format!("{} · {}", item.project.name, item.instance.agent_name)
-        } else {
-            item.instance.agent_name.clone()
-        };
+        let mut meta = item.instance.agent_name.clone();
         // With more than one server, which one it is on.
-        if show_project && self.servers.len() > 1
+        if show_server && self.servers.len() > 1
             && let Some(server) = &server
         {
             meta = format!("{} · {meta}", server.read(cx).entry.name);

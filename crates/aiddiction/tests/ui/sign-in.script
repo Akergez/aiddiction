@@ -21,12 +21,12 @@ until:sign-in=choose
 wait:300
 shot:sign-in-choose
 # In a terminal: the server runs it and the card shows what it says.
-click:926,643
+click:926,661
 until:sign-in=terminal
 wait:1500
 shot:sign-in-terminal
 # The code, then the conversation opens and the waiting message goes.
-click:748,611
+click:748,629
 type:1234
 key:enter
 until:sign-in=none

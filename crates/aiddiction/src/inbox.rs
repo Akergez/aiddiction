@@ -1,14 +1,13 @@
-//! Every conversation on every server this device knows, in one list in the
-//! order a person wants to see them: the ones waiting on them first, then the
-//! ones at work, then what finished unread, then the rest; in each of these,
-//! a project's conversations together. Pure, so the rules are tested here;
-//! the inbox page (`ui/inbox.rs`) only draws the result.
+//! Every conversation on every server this device knows, in one list grouped
+//! by project. Projects and their conversations are newest first. Pure, so
+//! the rules are tested here; the inbox page (`ui/inbox.rs`) only draws the
+//! result.
 
 use std::collections::HashMap;
 
 use aiddiction_api::{Instance, InstanceState, Project, ProjectId, SessionSummary};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Group {
     /// The agent asks something, or its turn failed and nobody has looked.
     NeedsYou,
@@ -18,18 +17,6 @@ pub enum Group {
     Recent,
     /// The agent is no longer running.
     Stopped,
-}
-
-impl Group {
-    pub fn title(self) -> &'static str {
-        match self {
-            Group::NeedsYou => "Needs you",
-            Group::Working => "Working",
-            Group::Unread => "Done",
-            Group::Recent => "Recent",
-            Group::Stopped => "Stopped",
-        }
-    }
 }
 
 /// One conversation, with what a row needs to show it.
@@ -49,9 +36,9 @@ impl Listed {
     }
 }
 
-/// The conversations of one server's `instances`, grouped, a project's
-/// together in each group. `seen` says how far a conversation was read;
-/// `showing` is the one on screen, which is never unread.
+/// The conversations of one server's `instances`, grouped by project.
+/// `seen` says how far a conversation was read; `showing` is the one on
+/// screen, which is never unread.
 pub fn list(
     server: &str,
     projects: &[Project],
@@ -78,25 +65,23 @@ pub fn list(
     listed
 }
 
-/// Several servers' lists as one: what needs the person first, whichever
-/// server it is on.
+/// Several servers' lists as one, grouped by project across them.
 pub fn merge(lists: impl IntoIterator<Item = Vec<Listed>>) -> Vec<Listed> {
     let mut listed: Vec<_> = lists.into_iter().flatten().collect();
     sort(&mut listed);
     listed
 }
 
-/// By group; in a group, a project's conversations together, the project
-/// with the latest first, and newest first within it.
+/// The project with the latest conversation first, and newest first within it.
 fn sort(listed: &mut [Listed]) {
-    let mut latest: HashMap<(Group, ProjectId), u64> = HashMap::new();
+    let mut latest = HashMap::new();
     for item in listed.iter() {
-        let latest = latest.entry((item.group, item.project.id)).or_default();
+        let latest = latest.entry(item.project.id).or_insert(0);
         *latest = (*latest).max(item.session.updated_at_ms);
     }
     listed.sort_by(|a, b| {
-        a.group.cmp(&b.group)
-            .then(latest[&(b.group, b.project.id)].cmp(&latest[&(a.group, a.project.id)]))
+        latest[&b.project.id]
+            .cmp(&latest[&a.project.id])
             .then(a.project.id.cmp(&b.project.id))
             .then(b.session.updated_at_ms.cmp(&a.session.updated_at_ms))
     });
@@ -188,7 +173,7 @@ mod tests {
     }
 
     #[test]
-    fn conversations_from_every_project_come_in_one_list_by_what_they_need() {
+    fn conversations_from_every_project_come_in_one_list_by_project() {
         let (web, api) = (project("web"), project("api"));
         let mut asking = session("asking", 1, 5);
         asking.permissions.push(PendingPermission { request_id: json!(1), title: "Run tests".into(), options: Vec::new() });
@@ -211,12 +196,12 @@ mod tests {
         assert_eq!(
             order,
             [
-                ("asking".to_owned(), Group::NeedsYou),
                 ("working".to_owned(), Group::Working),
-                ("fresh".to_owned(), Group::Unread),
                 ("old".to_owned(), Group::Recent),
-                ("failed".to_owned(), Group::Recent),
+                ("asking".to_owned(), Group::NeedsYou),
+                ("fresh".to_owned(), Group::Unread),
                 ("gone".to_owned(), Group::Stopped),
+                ("failed".to_owned(), Group::Recent),
             ]
         );
     }
@@ -233,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    fn in_a_group_a_projects_conversations_come_together() {
+    fn a_projects_conversations_stay_together_newest_first() {
         let (web, api) = (project("web"), project("api"));
         let instances = HashMap::from([
             (web.id, vec![instance(&web, InstanceState::Ready, vec![session("web-old", 1, 5), session("web-new", 5, 5)])]),
@@ -244,7 +229,7 @@ mod tests {
     }
 
     #[test]
-    fn every_server_comes_in_one_list_by_what_it_needs() {
+    fn every_server_comes_in_one_project_grouped_list() {
         let (web, api) = (project("web"), project("api"));
         let mut asking = session("asking", 1, 5);
         asking.permissions.push(PendingPermission { request_id: json!(1), title: "Run tests".into(), options: Vec::new() });
@@ -258,7 +243,7 @@ mod tests {
         .map(|listed| (listed.server, listed.session.session_id))
         .collect();
         let pair = |server: &str, session: &str| (server.to_owned(), session.to_owned());
-        assert_eq!(order, [pair("work", "asking"), pair("work", "new"), pair("home", "old")]);
+        assert_eq!(order, [pair("work", "new"), pair("work", "asking"), pair("home", "old")]);
     }
 
     #[test]

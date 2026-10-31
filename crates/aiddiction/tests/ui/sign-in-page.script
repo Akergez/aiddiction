@@ -18,11 +18,11 @@ key:enter
 until:page=chat
 until:sign-in=choose
 wait:300
-click:1028,643
+click:1028,661
 until:sign-in=agent
 wait:800
 shot:sign-in-page
-click:928,643
+click:928,661
 until:sign-in=choose
 wait:500
 expect:sessions=0

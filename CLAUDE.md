@@ -222,19 +222,19 @@ registry.
   (appearance, agents, servers). The navigator puts a page beside its list
   when there is room and over it when there is not; the review has no
   companion and takes the whole width. `crate::inbox` (pure, tested) groups
-  the conversations — needs you, working, done unread, recent, stopped; in a
-  group, a project's together — from the servers' summaries and
+  the conversations by project, newest first, from the servers' summaries and
   `Settings::seen` (the last sequence number shown, per conversation);
-  `ui/inbox.rs` makes each group a `Collection::section` and each
-  conversation a `ListRow` with its project's name, which answers the
-  agent's questions in place (`Ask` in the row's body). A new conversation
+  `ui/inbox.rs` makes each project a `Collection::section` under its name and
+  each conversation a `ListRow` with its agent (and server, with several),
+  which answers the agent's questions in place (`Ask` in the row's body). A new conversation
   is one form (`ui/new_session.rs`: searchable project and agent `Choice`s,
   the first message, sent once the session is ready). Read the gpui-kit
   skill's Coding Guides before changing structure.
 - The chat sums a run of tool calls up in one line (`thread::summarize`,
   `Thread::run_start`); its list redraws from a run's first entry. The plan
-  and the agent's mode sit on the composer; the bar has the title, Review
-  and close.
+  and the agent's mode sit on the composer (`ui/composer.rs`, from `prim`:
+  the plan, the matching commands, the field, the mode and model as sheets
+  and the Send/Stop button); the bar has the title, Review and close.
 - A scroll area of one axis made with gpui's `overflow_y_scroll()` /
   `overflow_x_scroll()` also takes `.lock_scroll_axis()` (a `uniform_list`:
   `style().restrict_scroll_to_axis`); without it a finger's sideways swipe

@@ -9,20 +9,22 @@ use std::collections::HashSet;
 use aiddiction_api::ProjectId;
 use gpui_adaptive::prim::{column, spinner};
 use gpui_adaptive::{
-    ActiveScale, Ask, Banner, Busy, Code, Command, Composer, ComposerEvent, ComposerState, Empty, Feed, FieldEvent, Fold,
-    IconName, Message, Note, Purpose, Suggestion, TextField, TextFieldState, Tone,
+    ActiveScale, Ask, Banner, Busy, Code, Command, Empty, Feed, FieldEvent, Fold, IconName, Message, Note, Purpose, Sheet,
+    TextField, TextFieldState, Tone,
 };
 use gpui_kit::Focusable as _;
+use gpui_kit::base::input::MoveToEnd;
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, AppContext, Context, ElementId, Entity, EventEmitter, ListState, Render, SharedString, Subscription,
-    Window, div, px, rems,
+    AnyElement, App, AppContext, Context, Entity, EventEmitter, ListState, Render, SharedString, Subscription, Window, div,
+    rems,
 };
 
 use crate::login::MethodKind;
 use crate::session::{AgentSession, Phase};
 use crate::thread::{Entry, ToolCall, ToolContent, ToolStatus};
 
+use super::composer::{Completion, PromptComposer};
 use super::work::{Diff, Plan, Step, StepStatus};
 
 /// Asks the shell for the review of this conversation's project.
@@ -33,7 +35,7 @@ impl EventEmitter<OpenReview> for ChatView {}
 pub struct ChatView {
     pub session: Entity<AgentSession>,
     pub project_id: ProjectId,
-    composer: Entity<ComposerState>,
+    composer: Entity<TextFieldState>,
     /// The API key a sign-in asks for.
     key_input: Entity<TextFieldState>,
     /// The code a sign-in page gave.
@@ -53,7 +55,11 @@ impl ChatView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let composer = cx.new(|cx| ComposerState::new("Ask the agent…", window, cx));
+        let composer = cx.new(|cx| {
+            let mut field = TextFieldState::prompt(1, 8, window, cx);
+            field.set_placeholder("Ask the agent…", window, cx);
+            field
+        });
         let key_input = cx.new(|cx| {
             let mut field = TextFieldState::new(Purpose::Password, window, cx);
             field.set_placeholder("API key", window, cx);
@@ -79,10 +85,10 @@ impl ChatView {
                 }
                 cx.notify();
             }),
-            cx.subscribe_in(&composer, window, |this, _, event: &ComposerEvent, window, cx| match event {
-                ComposerEvent::Send => this.send(window, cx),
+            cx.subscribe_in(&composer, window, |this, _, event: &FieldEvent, window, cx| match event {
+                FieldEvent::Submit => this.send(window, cx),
                 // The commands matching what is typed stand over the field.
-                ComposerEvent::Change => cx.notify(),
+                FieldEvent::Change => cx.notify(),
             }),
             cx.subscribe_in(&key_input, window, |this, _, event: &FieldEvent, window, cx| {
                 if *event == FieldEvent::Submit {
@@ -119,7 +125,7 @@ impl ChatView {
     }
 
     fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.composer.read(cx).text(cx);
+        let text = self.composer.read(cx).value(cx).to_string();
         let (ready, busy) = {
             let session = self.session.read(cx);
             (session.is_ready(), session.busy)
@@ -129,7 +135,7 @@ impl ChatView {
         }
         self.session
             .update(cx, |session, cx| session.prompt(text, cx));
-        self.composer.update(cx, |composer, cx| composer.clear(window, cx));
+        self.composer.update(cx, |composer, cx| composer.set_value("", window, cx));
         self.list.scroll_to_end();
     }
 
@@ -445,11 +451,11 @@ impl ChatView {
         Some(banner.into_any_element())
     }
 
-    /// The agent's mode, picked from a menu on the composer.
-    fn mode_menu(&self, composer: Composer, cx: &App) -> Composer {
+    /// The agent's mode, picked from the composer.
+    fn mode_menu(&self, cx: &App) -> Option<Command> {
         let thread = &self.session.read(cx).thread;
         if thread.modes.is_empty() {
-            return composer;
+            return None;
         }
         let current = thread.current_mode.clone();
         let name = thread
@@ -458,7 +464,7 @@ impl ChatView {
             .find(|mode| Some(&mode.id) == current.as_ref())
             .map(|mode| mode.name.clone())
             .unwrap_or_else(|| "Mode".into());
-        let options = thread
+        let options: Vec<Command> = thread
             .modes
             .iter()
             .map(|mode| {
@@ -467,25 +473,24 @@ impl ChatView {
                     .on_trigger(move |_, cx| session.update(cx, |session, cx| session.set_mode(id.clone(), cx)))
             })
             .collect();
-        let chosen = current.map(|id| ElementId::Name(format!("mode-{id}").into()));
-        composer.menu(Command::new("mode", name).icon(IconName::Bot), options, chosen)
+        Some(Command::new("mode", format!("{name} ▾")).on_trigger(move |window, cx| {
+            Sheet::actions(Some("Agent mode".into()), options.clone(), window, cx)
+        }))
     }
 
-    /// The model or how hard it thinks, picked from a menu on the composer.
-    fn config_menu(&self, composer: Composer, cx: &App) -> Composer {
+    /// The model or how hard it thinks, picked from the composer.
+    fn config_menu(&self, cx: &App) -> Option<Command> {
         let options = self.session.read(cx).thread.config_options.clone();
-        let Some(option) = options.into_iter().find(|option| {
+        let option = options.into_iter().find(|option| {
             matches!(option.category.as_str(), "model" | "model_config" | "thought_level") && !option.values.is_empty()
-        }) else {
-            return composer;
-        };
+        })?;
         let current = option
             .values
             .iter()
             .find(|(id, _)| id == &option.current)
             .map(|(_, name)| name.clone())
             .unwrap_or_else(|| option.current.clone());
-        let values = option
+        let values: Vec<Command> = option
             .values
             .iter()
             .map(|(value, name)| {
@@ -495,17 +500,14 @@ impl ChatView {
                 })
             })
             .collect();
-        let chosen = Some(ElementId::Name(format!("config-{}-{}", option.id, option.current).into()));
-        composer.menu(
-            Command::new(SharedString::from(format!("config-{}", option.id)), current).icon(IconName::Settings2),
-            values,
-            chosen,
-        )
+        Some(Command::new(SharedString::from(format!("config-{}", option.id)), format!("{current} ▾")).on_trigger(
+            move |window, cx| Sheet::actions(Some("Model".into()), values.clone(), window, cx),
+        ))
     }
 
     /// The agent's commands matching what is typed after a slash.
-    fn suggestions(&self, cx: &mut Context<Self>) -> Vec<Suggestion> {
-        let typed = self.composer.read(cx).text(cx);
+    fn suggestions(&self, cx: &mut Context<Self>) -> Vec<Completion> {
+        let typed = self.composer.read(cx).value(cx);
         let Some(prefix) = typed.strip_prefix('/') else { return Vec::new() };
         if prefix.contains(char::is_whitespace) {
             return Vec::new();
@@ -519,12 +521,13 @@ impl ChatView {
             .take(8)
             .map(|command| {
                 let (value, composer) = (format!("/{} ", command.name), self.composer.clone());
-                Suggestion::new(SharedString::from(format!("command-{}", command.name)), format!("/{}", command.name), move |window, cx| {
-                    composer.update(cx, |composer, cx| composer.set_text(value.clone(), window, cx));
-                    composer.read(cx).focus_handle(cx).focus(window, cx);
-                })
-                .detail(command.description.clone())
-                .code()
+                let action = Command::new(SharedString::from(format!("command-{}", command.name)), format!("/{}", command.name))
+                    .on_trigger(move |window, cx| {
+                        composer.update(cx, |composer, cx| composer.set_value(value.clone(), window, cx));
+                        composer.read(cx).focus_handle(cx).focus(window, cx);
+                        window.dispatch_action(Box::new(MoveToEnd), cx);
+                    });
+                Completion::new(action, command.description.clone())
             })
             .collect()
     }
@@ -559,16 +562,29 @@ impl Render for ChatView {
             Empty::new(IconName::Bot, format!("{agent} in {project}")).body("Ask it to do something in this project.")
         }));
 
-        let session = self.session.clone();
-        let stop = busy.then(|| {
-            Command::new("stop", "Stop the agent's turn").on_trigger(move |_, cx| session.update(cx, |session, cx| session.cancel(cx)))
-        });
-        let mut composer = Composer::new(&self.composer).stop(stop).can_send(ready).hint("/ for commands · Shift+Enter for a new line");
-        if let Some(plan) = self.render_plan(cx) {
-            composer = composer.above(plan);
-        }
-        let composer = composer.suggestions(self.suggestions(cx));
-        let composer = self.config_menu(self.mode_menu(composer, cx), cx);
+        let send = if busy {
+            let session = self.session.clone();
+            Command::new(("composer-stop", self.composer.entity_id()), "Stop")
+                .icon(IconName::Pause)
+                .primary()
+                .on_trigger(move |_, cx| session.update(cx, |session, cx| session.cancel(cx)))
+        } else {
+            let this = cx.entity().downgrade();
+            let empty = self.composer.read(cx).value(cx).trim().is_empty();
+            Command::new(("composer-send", self.composer.entity_id()), "Send")
+                .icon(IconName::ArrowUp)
+                .primary()
+                .disabled(empty || !ready)
+                .on_trigger(move |window, cx| {
+                    this.update(cx, |this, cx| this.send(window, cx)).ok();
+                })
+        };
+        let completions = self.suggestions(cx);
+        let composer = PromptComposer::new(&self.composer, send)
+            .plan(self.render_plan(cx))
+            .completions(completions)
+            .tool(self.mode_menu(cx))
+            .tool(self.config_menu(cx));
 
         let scale = cx.scale();
         column()
@@ -583,7 +599,7 @@ impl Render for ChatView {
                         .gap(scale.space_s)
                         .px(scale.space_m)
                         .pt(scale.space_xs)
-                        .pb(px(10.))
+                        .pb(scale.space_m)
                         .children(self.render_sign_in(cx))
                         .children(self.render_permissions(cx))
                         .child(composer),

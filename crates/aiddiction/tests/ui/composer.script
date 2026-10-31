@@ -1,0 +1,54 @@
+# The composer: slash commands, a multiline draft, and sending with its button.
+# size: 1100x760
+until:page=inbox
+until:projects=1
+wait:800
+click:378,16
+until:dialog=open
+click:550,217
+wait:400
+type:fake
+key:enter
+wait:300
+click:550,300
+type:please make a file
+key:enter
+until:page=chat
+until:permissions=1
+click:246,180
+until:busy=no
+wait:500
+click:700,705
+type:/
+wait:300
+shot:composer-commands
+click:550,642
+wait:300
+shot:composer-command-picked
+type:look at this
+wait:300
+shot:composer-command-typed
+key:shift-enter
+type:second line
+wait:300
+shot:composer-draft
+click:1075,735
+until:busy=yes
+until:busy=no
+wait:500
+shot:composer-sent
+# The mode is a sheet on a pointer too, not a custom dropdown.
+click:440,735
+until:dialog=open
+wait:300
+shot:composer-mode
+click:378,162
+until:dialog=closed
+wait:300
+shot:composer-mode-auto
+# The overlay also dismisses with Escape.
+click:440,735
+until:dialog=open
+key:escape
+until:dialog=closed
+quit
