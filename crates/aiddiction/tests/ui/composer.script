@@ -32,8 +32,11 @@ key:shift-enter
 type:second line
 wait:300
 shot:composer-draft
+expect:entries=4
+# Sent: the message and the agent's answer come into the conversation.
+# Not busy=yes: the fake agent's turn may be over before a slow frame.
 click:1066,729
-until:busy=yes
+until:entries=6
 until:busy=no
 wait:500
 shot:composer-sent
