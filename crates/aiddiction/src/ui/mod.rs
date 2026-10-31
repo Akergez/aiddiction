@@ -4,7 +4,6 @@
 mod agents;
 mod board;
 mod chat;
-mod composer;
 mod forms;
 mod inbox;
 mod nav;

@@ -232,9 +232,8 @@ registry.
   skill's Coding Guides before changing structure.
 - The chat sums a run of tool calls up in one line (`thread::summarize`,
   `Thread::run_start`); its list redraws from a run's first entry. The plan
-  and the agent's mode sit on the composer (`ui/composer.rs`, from `prim`:
-  the plan, the matching commands, the field, the mode and model as sheets
-  and the Send/Stop button); the bar has the title, Review and close.
+  and the agent's mode sit on the composer (gpui-adaptive's `Composer`); the bar
+  has the title, Review and close.
 - A scroll area of one axis made with gpui's `overflow_y_scroll()` /
   `overflow_x_scroll()` also takes `.lock_scroll_axis()` (a `uniform_list`:
   `style().restrict_scroll_to_axis`); without it a finger's sideways swipe

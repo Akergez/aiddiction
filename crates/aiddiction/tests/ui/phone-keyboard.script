@@ -24,7 +24,7 @@ until:page=chat
 until:permissions=1
 wait:500
 shot:phone-keyboard-chat
-click:200,425
+click:200,458
 type:hello
 key:enter
 type:from phone
@@ -32,4 +32,8 @@ wait:300
 shot:phone-keyboard-composer-draft
 expect:busy=yes
 expect:permissions=1
+# The mode is on the card, and a finger opens it as a sheet.
+click:64,468
+wait:600
+shot:phone-keyboard-mode
 quit

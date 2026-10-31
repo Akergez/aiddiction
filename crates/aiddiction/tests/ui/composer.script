@@ -22,7 +22,7 @@ click:700,705
 type:/
 wait:300
 shot:composer-commands
-click:550,642
+click:550,629
 wait:300
 shot:composer-command-picked
 type:look at this
@@ -32,23 +32,16 @@ key:shift-enter
 type:second line
 wait:300
 shot:composer-draft
-click:1075,735
+click:1066,729
 until:busy=yes
 until:busy=no
 wait:500
 shot:composer-sent
-# The mode is a sheet on a pointer too, not a custom dropdown.
-click:440,735
-until:dialog=open
-wait:300
+# The mode is a menu under its button on a pointer.
+click:458,729
+wait:400
 shot:composer-mode
-click:378,162
-until:dialog=closed
-wait:300
+click:460,735
+wait:400
 shot:composer-mode-auto
-# The overlay also dismisses with Escape.
-click:440,735
-until:dialog=open
-key:escape
-until:dialog=closed
 quit
