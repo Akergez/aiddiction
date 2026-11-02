@@ -31,14 +31,15 @@ until:waiting=1
 wait:500
 shot:phone-inbox
 # Allow, in the row.
-click:115,323
+click:115,259
 until:waiting=0
 wait:300
 # The projects tab, and the project.
 click:200,770
 until:page=projects
 wait:300
-click:200,190
+shot:phone-projects
+click:200,125
 until:page=project
 wait:500
 shot:phone-project

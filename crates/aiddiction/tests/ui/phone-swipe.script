@@ -9,7 +9,7 @@ wait:1000
 click:200,305
 until:page=projects
 wait:300
-click:200,180
+click:200,125
 until:page=project
 wait:500
 shot:phone-swipe-before
