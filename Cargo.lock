@@ -145,7 +145,7 @@ dependencies = [
 
 [[package]]
 name = "aiddiction"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "aiddiction-api",
  "aiddiction-client",
@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "aiddiction-api"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -179,7 +179,7 @@ dependencies = [
 
 [[package]]
 name = "aiddiction-client"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "aiddiction-api",
  "diffreview",
@@ -197,21 +197,21 @@ dependencies = [
 
 [[package]]
 name = "aiddiction-fake-agent"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "aiddiction-paths"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "dirs 6.0.0",
 ]
 
 [[package]]
 name = "aiddiction-server"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "aiddiction-api",
  "aiddiction-client",
@@ -1606,7 +1606,7 @@ dependencies = [
 
 [[package]]
 name = "diffreview"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "serde",
  "tempfile",
@@ -1614,7 +1614,7 @@ dependencies = [
 
 [[package]]
 name = "diffreview-ui"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "diffreview",
  "gpui-android-glue",
@@ -2513,8 +2513,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-adaptive"
-version = "0.4.5"
-source = "git+https://github.com/Akergez/gpui-mobile-components?tag=v0.4.5#1a1663851d69f9b4000caf3ab687414502b370b1"
+version = "0.4.6"
+source = "git+https://github.com/Akergez/gpui-mobile-components?tag=v0.4.6#adaafec3f87f5a9b22acb9e9bae77920ee6dd36c"
 dependencies = [
  "chrono",
  "gpui-adaptive-colors",
