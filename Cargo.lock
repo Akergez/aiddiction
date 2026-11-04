@@ -145,7 +145,7 @@ dependencies = [
 
 [[package]]
 name = "aiddiction"
-version = "2.2.3"
+version = "2.2.4"
 dependencies = [
  "aiddiction-api",
  "aiddiction-client",
@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "aiddiction-api"
-version = "2.2.3"
+version = "2.2.4"
 dependencies = [
  "serde",
  "serde_json",
@@ -179,7 +179,7 @@ dependencies = [
 
 [[package]]
 name = "aiddiction-client"
-version = "2.2.3"
+version = "2.2.4"
 dependencies = [
  "aiddiction-api",
  "diffreview",
@@ -197,21 +197,21 @@ dependencies = [
 
 [[package]]
 name = "aiddiction-fake-agent"
-version = "2.2.3"
+version = "2.2.4"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "aiddiction-paths"
-version = "2.2.3"
+version = "2.2.4"
 dependencies = [
  "dirs 6.0.0",
 ]
 
 [[package]]
 name = "aiddiction-server"
-version = "2.2.3"
+version = "2.2.4"
 dependencies = [
  "aiddiction-api",
  "aiddiction-client",
@@ -1606,7 +1606,7 @@ dependencies = [
 
 [[package]]
 name = "diffreview"
-version = "2.2.3"
+version = "2.2.4"
 dependencies = [
  "serde",
  "tempfile",
@@ -1614,7 +1614,7 @@ dependencies = [
 
 [[package]]
 name = "diffreview-ui"
-version = "2.2.3"
+version = "2.2.4"
 dependencies = [
  "diffreview",
  "gpui-android-glue",
@@ -2513,8 +2513,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-adaptive"
-version = "0.4.6"
-source = "git+https://github.com/Akergez/gpui-mobile-components?tag=v0.4.6#adaafec3f87f5a9b22acb9e9bae77920ee6dd36c"
+version = "0.4.7"
+source = "git+https://github.com/Akergez/gpui-mobile-components?tag=v0.4.7#fa274d684fc99bb06f8c85f5c784020ca472e982"
 dependencies = [
  "chrono",
  "gpui-adaptive-colors",
@@ -2535,11 +2535,12 @@ dependencies = [
 
 [[package]]
 name = "gpui-android-glue"
-version = "0.4.4"
-source = "git+https://github.com/Akergez/gpui-android-glue?tag=v0.4.4#a58139dc28ae99206449056573798880039d1a3a"
+version = "0.4.5"
+source = "git+https://github.com/Akergez/gpui-android-glue?tag=v0.4.5#8f2a2747a23813843936468e5fc35bc7aa09c23b"
 dependencies = [
  "android-activity",
  "android_logger",
+ "ashpd",
  "async-channel",
  "gpui-kit",
  "gpui-pre-mobile",
