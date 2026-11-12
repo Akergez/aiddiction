@@ -518,11 +518,8 @@ impl Shell {
 }
 
 impl Render for Shell {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (section, at_root) = {
-            let navigator = self.navigator.read(cx);
-            (navigator.top().section(), navigator.is_at_root())
-        };
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let section = self.navigator.read(cx).top().section();
         let selected = match section {
             Section::Inbox => "inbox",
             Section::Projects => "projects",
@@ -530,27 +527,31 @@ impl Render for Shell {
         };
         let waiting = self.waiting(cx);
         let shell = cx.entity();
-        let pages = Navigator::new("pages", &self.navigator, move |route, page, window, cx| {
-            shell.update(cx, |shell, cx| shell.render_route(*route, page, window, cx))
-        });
-        let shell = cx.entity().downgrade();
-        AppFrame::new("Aiddiction").title_bar(false).edge_to_edge(true).child(
-            Destinations::new("sections", selected)
-                .prefer_rail(true)
-                .header(self.render_server_switch(cx))
-                .destination(Destination::new("inbox", "Inbox", IconName::Inbox).count(waiting, true))
-                .destination(Destination::new("projects", "Projects", IconName::Folder))
-                .destination(Destination::new("settings", "Settings", IconName::Settings).pinned())
-                .on_select(move |key, _, cx| {
+        let sections = Destinations::new("sections", selected)
+            .prefer_rail(true)
+            .header(self.render_server_switch(cx))
+            .destination(Destination::new("inbox", "Inbox", IconName::Inbox).count(waiting, true))
+            .destination(Destination::new("projects", "Projects", IconName::Folder))
+            .destination(Destination::new("settings", "Settings", IconName::Settings).pinned())
+            .on_select({
+                let shell = shell.downgrade();
+                move |key, _, cx| {
                     let root = match key.as_ref() {
                         "projects" => Page::Projects,
                         "settings" => Page::Settings,
                         _ => Page::Inbox,
                     };
                     shell.update(cx, |shell, cx| shell.go_root(root, cx)).ok();
-                })
-                .bar_visible(at_root)
-                .content(pages),
-        )
+                }
+            });
+        let bar = sections.bar(window, cx);
+        let pages = Navigator::new("pages", &self.navigator, move |route, page, window, cx| {
+            shell.update(cx, |shell, cx| shell.render_route(*route, page, window, cx))
+        })
+        .bar(bar);
+        AppFrame::new("Aiddiction")
+            .title_bar(false)
+            .edge_to_edge(true)
+            .child(sections.content(pages))
     }
 }
