@@ -145,7 +145,7 @@ dependencies = [
 
 [[package]]
 name = "aiddiction"
-version = "2.2.7"
+version = "2.2.8"
 dependencies = [
  "aiddiction-api",
  "aiddiction-client",
@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "aiddiction-api"
-version = "2.2.7"
+version = "2.2.8"
 dependencies = [
  "serde",
  "serde_json",
@@ -179,7 +179,7 @@ dependencies = [
 
 [[package]]
 name = "aiddiction-client"
-version = "2.2.7"
+version = "2.2.8"
 dependencies = [
  "aiddiction-api",
  "diffreview",
@@ -197,21 +197,21 @@ dependencies = [
 
 [[package]]
 name = "aiddiction-fake-agent"
-version = "2.2.7"
+version = "2.2.8"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "aiddiction-paths"
-version = "2.2.7"
+version = "2.2.8"
 dependencies = [
  "dirs 6.0.0",
 ]
 
 [[package]]
 name = "aiddiction-server"
-version = "2.2.7"
+version = "2.2.8"
 dependencies = [
  "aiddiction-api",
  "aiddiction-client",
@@ -1606,7 +1606,7 @@ dependencies = [
 
 [[package]]
 name = "diffreview"
-version = "2.2.7"
+version = "2.2.8"
 dependencies = [
  "serde",
  "tempfile",
@@ -1614,7 +1614,7 @@ dependencies = [
 
 [[package]]
 name = "diffreview-ui"
-version = "2.2.7"
+version = "2.2.8"
 dependencies = [
  "diffreview",
  "gpui-android-glue",
@@ -2513,8 +2513,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-adaptive"
-version = "0.5.1"
-source = "git+https://github.com/Akergez/gpui-mobile-components?tag=v0.5.1#0fa504a91f3d8e36245144a98a81ae347a660942"
+version = "0.5.3"
+source = "git+https://github.com/Akergez/gpui-mobile-components?tag=v0.5.3#c2e91a6fcacdd41730ba99fc39492ab493d176f2"
 dependencies = [
  "chrono",
  "gpui-adaptive-colors",
@@ -2535,8 +2535,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-android-glue"
-version = "0.4.7"
-source = "git+https://github.com/Akergez/gpui-android-glue?tag=v0.4.7#0b811fcb4530509334a767e9fb9abe34e6511b9c"
+version = "0.4.9"
+source = "git+https://github.com/Akergez/gpui-android-glue?tag=v0.4.9#7f7ac3d15bc07f1e7ecfb44d0793e7210e3512c8"
 dependencies = [
  "android-activity",
  "android_logger",
@@ -2954,7 +2954,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-mobile"
 version = "0.1.0"
-source = "git+https://github.com/Akergez/gpui-mobile?rev=d924245f173b80ebc8bcc4da5568fc97d3c64c43#d924245f173b80ebc8bcc4da5568fc97d3c64c43"
+source = "git+https://github.com/Akergez/gpui-mobile?rev=d69470c6f6de0cc005797f8db0553082066eb857#d69470c6f6de0cc005797f8db0553082066eb857"
 dependencies = [
  "android-activity",
  "android_logger",
