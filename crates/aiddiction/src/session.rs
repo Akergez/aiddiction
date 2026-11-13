@@ -587,8 +587,7 @@ impl AgentSession {
         let Some(session_id) = self.session_id.clone() else {
             return;
         };
-        let params =
-            json!({ "sessionId": session_id, "configId": config_id, "type": "id", "value": value });
+        let params = json!({ "sessionId": session_id, "configId": config_id, "value": value });
         self.request(
             "session/set_config_option",
             params,

@@ -48,6 +48,20 @@ click:460,735
 wait:400
 shot:composer-mode-auto
 expect:mode=auto
+# The model and how hard it thinks are menus of their own beside the mode:
+# the agent offers both, and neither hides the other.
+click:544,729
+wait:400
+shot:composer-model
+click:545,735
+wait:400
+expect:model=fake-two
+click:631,729
+wait:400
+shot:composer-effort
+click:633,723
+wait:400
+expect:thought=high
 # Opened again from the inbox, the conversation is attached to, not
 # created: the mode is still offered, as it was left.
 click:1056,16
@@ -55,6 +69,8 @@ until:chats=0
 click:228,110
 until:page=chat
 until:mode=auto
+expect:model=fake-two
+expect:thought=high
 wait:500
 shot:composer-reopened
 quit

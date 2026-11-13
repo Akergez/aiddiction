@@ -93,6 +93,14 @@ pub struct ConfigOption {
     pub values: Vec<(String, String)>,
 }
 
+impl ConfigOption {
+    /// Whether it is one of the choices the composer shows as a menu: the
+    /// model, how hard it thinks, a model's own setting.
+    pub fn is_choice(&self) -> bool {
+        matches!(self.category.as_str(), "model" | "model_config" | "thought_level") && !self.values.is_empty()
+    }
+}
+
 /// The agent waiting on a person: `session/request_permission`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Permission {
@@ -244,29 +252,20 @@ impl Thread {
     }
 
     pub fn set_config_options(&mut self, options: &Value) {
+        // A payload without options says nothing about them: an attach that
+        // carries none, a `session/load` that leaves them out, a
+        // `session/set_config_option` answer an agent sends without the
+        // list. The menus stay as they are instead of emptying.
+        let Some(options) = options.as_array() else {
+            return;
+        };
         self.config_options = options
-            .as_array()
-            .into_iter()
-            .flatten()
+            .iter()
             .filter_map(|option| {
                 let id = option["configId"]
                     .as_str()
                     .or_else(|| option["id"].as_str())?
                     .to_owned();
-                let values = option["options"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|value| {
-                        Some((
-                            value["value"].as_str()?.to_owned(),
-                            value["name"]
-                                .as_str()
-                                .unwrap_or(value["value"].as_str()?)
-                                .to_owned(),
-                        ))
-                    })
-                    .collect::<Vec<_>>();
                 Some(ConfigOption {
                     id,
                     name: str_of(option, "name"),
@@ -275,7 +274,7 @@ impl Thread {
                         .as_str()
                         .unwrap_or_default()
                         .to_owned(),
-                    values,
+                    values: select_values(&option["options"]),
                 })
             })
             .collect();
@@ -335,8 +334,13 @@ impl Thread {
     }
 
     /// Forgets everything, for a session that is replayed from its start.
+    /// What the agent offers to choose stays: it is the session's setting,
+    /// not part of the replay, and an agent that loads a conversation need
+    /// not say it again.
     pub fn clear(&mut self) {
+        let choices = std::mem::take(&mut self.config_options);
         *self = Thread {
+            config_options: choices,
             dirty_from: Some(0),
             ..Thread::default()
         };
@@ -492,6 +496,26 @@ fn str_of(value: &Value, key: &str) -> String {
     value[key].as_str().unwrap_or_default().to_owned()
 }
 
+/// The values a select offers. Agents may group them (models by provider,
+/// say); the menu is flat either way.
+fn select_values(options: &Value) -> Vec<(String, String)> {
+    let mut values = Vec::new();
+    for entry in options.as_array().into_iter().flatten() {
+        if let Some(group) = entry["options"].as_array() {
+            values.extend(group.iter().filter_map(select_value));
+        } else {
+            values.extend(select_value(entry));
+        }
+    }
+    values
+}
+
+fn select_value(value: &Value) -> Option<(String, String)> {
+    let id = value["value"].as_str()?;
+    let name = value["name"].as_str().unwrap_or(id);
+    Some((id.to_owned(), name.to_owned()))
+}
+
 /// The text of a content block; other kinds are named, not shown.
 fn content_text(content: &Value) -> String {
     match content["type"].as_str() {
@@ -630,5 +654,51 @@ mod tests {
         assert_eq!(thread.permissions[0].title, "Write a.txt");
         thread.remove_permission(&json!(7));
         assert!(thread.permissions.is_empty());
+    }
+
+    #[test]
+    fn every_config_option_with_values_is_a_choice() {
+        let mut thread = Thread::default();
+        thread.set_config_options(&json!([
+            { "id": "mode", "category": "mode", "currentValue": "ask", "options": [{ "value": "ask", "name": "Ask" }] },
+            { "id": "model", "category": "model", "currentValue": "a", "options": [{ "value": "a", "name": "A" }] },
+            { "id": "thought_level", "category": "thought_level", "currentValue": "high", "options": [{ "value": "high", "name": "High" }] },
+            { "id": "empty", "category": "model_config", "currentValue": "x", "options": [] },
+        ]));
+        let choices: Vec<_> = thread
+            .config_options
+            .iter()
+            .filter(|option| option.is_choice())
+            .map(|option| option.id.as_str())
+            .collect();
+        assert_eq!(choices, ["model", "thought_level"]);
+    }
+
+    #[test]
+    fn grouped_values_are_one_flat_list() {
+        let mut thread = Thread::default();
+        thread.set_config_options(&json!([{
+            "id": "model",
+            "category": "model",
+            "currentValue": "a",
+            "options": [
+                { "group": "one", "name": "One", "options": [{ "value": "a", "name": "A" }] },
+                { "group": "two", "name": "Two", "options": [{ "value": "b", "name": "B" }, { "value": "c", "name": "C" }] },
+            ],
+        }]));
+        assert_eq!(
+            thread.config_options[0].values,
+            vec![("a".into(), "A".into()), ("b".into(), "B".into()), ("c".into(), "C".into())]
+        );
+    }
+
+    #[test]
+    fn a_payload_without_options_keeps_the_ones_known() {
+        let mut thread = Thread::default();
+        thread.set_config_options(&json!([{ "id": "model", "category": "model", "currentValue": "a", "options": [{ "value": "a", "name": "A" }] }]));
+        thread.set_config_options(&Value::Null);
+        thread.apply(&json!({ "sessionUpdate": "config_option_update" }));
+        thread.clear();
+        assert_eq!(thread.config_options.len(), 1);
     }
 }

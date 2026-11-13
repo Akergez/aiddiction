@@ -134,6 +134,9 @@ fn observe(what: &str, shell: &Entity<Shell>, window: &mut Window, cx: &mut App)
             let thread = &chat?.thread;
             if thread.modes.is_empty() { "none".to_owned() } else { thread.current_mode.clone().unwrap_or_default() }
         }
+        // A configuration choice in use: "none" when the agent offers none.
+        "model" => choice(&chat?.thread, "model"),
+        "thought" => choice(&chat?.thread, "thought_level"),
         "permissions" => chat?.thread.permissions.len().to_string(),
         "sign-in" => {
             let chat = chat?;
@@ -156,6 +159,16 @@ fn observe(what: &str, shell: &Entity<Shell>, window: &mut Window, cx: &mut App)
         "theme" => if gpui_kit::component::ActiveTheme::theme(cx).mode.is_dark() { "dark" } else { "light" }.to_owned(),
         _ => return None,
     })
+}
+
+/// The value the agent's configuration option of `category` is set to.
+fn choice(thread: &crate::thread::Thread, category: &str) -> String {
+    thread
+        .config_options
+        .iter()
+        .find(|option| option.category == category)
+        .map(|option| option.current.clone())
+        .unwrap_or_else(|| "none".into())
 }
 
 fn next(handle: AnyWindowHandle, shell: Entity<Shell>, mut steps: VecDeque<Step>, cx: &mut App) {

@@ -10,7 +10,7 @@
 //! terminal (run with `--sign-in`, it shows an address and reads a code), or
 //! by `authenticate`, which shows a page through `elicitation/create`.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead as _, Write as _};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -26,6 +26,8 @@ struct Agent {
     cwd: String,
     delay: Duration,
     sign_in: Option<PathBuf>,
+    /// Each session's configuration options, the model and the effort.
+    config_options: HashMap<String, Value>,
 }
 
 fn main() {
@@ -42,6 +44,7 @@ fn main() {
         sessions: 0,
         cwd: String::new(),
         delay: Duration::from_millis(delay),
+        config_options: HashMap::new(),
     };
     while let Some(message) = agent.next_message() {
         agent.handle(message);
@@ -77,6 +80,35 @@ fn update(session: &str, update: Value) {
 
 fn text_chunk(kind: &str, text: &str) -> Value {
     json!({ "sessionUpdate": kind, "content": { "type": "text", "text": text } })
+}
+
+/// What a new session offers to choose: a model and how hard it thinks.
+fn config_options() -> Value {
+    json!([
+        {
+            "id": "model",
+            "name": "Model",
+            "category": "model",
+            "type": "select",
+            "currentValue": "fake-one",
+            "options": [
+                { "value": "fake-one", "name": "Fake One" },
+                { "value": "fake-two", "name": "Fake Two" },
+            ],
+        },
+        {
+            "id": "thought_level",
+            "name": "Thinking",
+            "category": "thought_level",
+            "type": "select",
+            "currentValue": "medium",
+            "options": [
+                { "value": "low", "name": "Low" },
+                { "value": "medium", "name": "Medium" },
+                { "value": "high", "name": "High" },
+            ],
+        },
+    ])
 }
 
 impl Agent {
@@ -166,6 +198,8 @@ impl Agent {
                 self.sessions += 1;
                 self.cwd = message["params"]["cwd"].as_str().unwrap_or_default().to_owned();
                 let session = format!("fake-session-{}-{}", std::process::id(), self.sessions);
+                let options = config_options();
+                self.config_options.insert(session.clone(), options.clone());
                 reply(json!({
                     "sessionId": session,
                     "modes": {
@@ -175,6 +209,7 @@ impl Agent {
                             { "id": "auto", "name": "Auto" },
                         ],
                     },
+                    "configOptions": options,
                 }));
                 update(&session, json!({
                     "sessionUpdate": "available_commands_update",
@@ -183,6 +218,18 @@ impl Agent {
                         { "name": "plan", "description": "Show a plan" },
                     ],
                 }));
+            }
+            Some("session/set_config_option") => {
+                let session = message["params"]["sessionId"].as_str().unwrap_or_default().to_owned();
+                let config = message["params"]["configId"].as_str().unwrap_or_default();
+                let value = message["params"]["value"].as_str().unwrap_or_default();
+                let options = self.config_options.entry(session).or_insert_with(config_options);
+                for option in options.as_array_mut().into_iter().flatten() {
+                    if option["id"] == config {
+                        option["currentValue"] = json!(value);
+                    }
+                }
+                reply(json!({ "configOptions": options.clone() }));
             }
             Some("session/set_mode") => {
                 let session = message["params"]["sessionId"].as_str().unwrap_or_default().to_owned();

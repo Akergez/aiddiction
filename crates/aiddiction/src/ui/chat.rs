@@ -471,36 +471,51 @@ impl ChatView {
         composer.menu(Command::new("mode", name).icon(IconName::Bot), options, chosen)
     }
 
-    /// The model or how hard it thinks, picked from a menu on the composer.
-    fn config_menu(&self, composer: Composer, cx: &App) -> Composer {
-        let options = self.session.read(cx).thread.config_options.clone();
-        let Some(option) = options.into_iter().find(|option| {
-            matches!(option.category.as_str(), "model" | "model_config" | "thought_level") && !option.values.is_empty()
-        }) else {
-            return composer;
-        };
-        let current = option
-            .values
+    /// The model and how hard it thinks, each picked from its own menu on the
+    /// composer. An agent may offer several at once (a model, a reasoning
+    /// level, a model setting); every one of them gets a menu, so none hides
+    /// another.
+    fn config_menus(&self, mut composer: Composer, cx: &App) -> Composer {
+        let options: Vec<_> = self
+            .session
+            .read(cx)
+            .thread
+            .config_options
             .iter()
-            .find(|(id, _)| id == &option.current)
-            .map(|(_, name)| name.clone())
-            .unwrap_or_else(|| option.current.clone());
-        let values = option
-            .values
-            .iter()
-            .map(|(value, name)| {
-                let (id, value, session) = (option.id.clone(), value.clone(), self.session.clone());
-                Command::new(SharedString::from(format!("config-{}-{value}", option.id)), name.clone()).on_trigger(move |_, cx| {
-                    session.update(cx, |session, cx| session.set_config_option(id.clone(), value.clone(), cx))
-                })
-            })
+            .filter(|option| option.is_choice())
+            .cloned()
             .collect();
-        let chosen = Some(ElementId::Name(format!("config-{}-{}", option.id, option.current).into()));
-        composer.menu(
-            Command::new(SharedString::from(format!("config-{}", option.id)), current).icon(IconName::Settings2),
-            values,
-            chosen,
-        )
+        for option in options {
+            let current = option
+                .values
+                .iter()
+                .find(|(id, _)| id == &option.current)
+                .map(|(_, name)| name.clone())
+                .unwrap_or_else(|| option.current.clone());
+            let values = option
+                .values
+                .iter()
+                .map(|(value, name)| {
+                    let (id, value, session) = (option.id.clone(), value.clone(), self.session.clone());
+                    Command::new(SharedString::from(format!("config-{}-{value}", option.id)), name.clone())
+                        .on_trigger(move |_, cx| {
+                            session.update(cx, |session, cx| session.set_config_option(id.clone(), value.clone(), cx))
+                        })
+                })
+                .collect();
+            let chosen = Some(ElementId::Name(format!("config-{}-{}", option.id, option.current).into()));
+            let icon = match option.category.as_str() {
+                "thought_level" => IconName::MemoryStick,
+                "model_config" => IconName::Settings2,
+                _ => IconName::Cpu,
+            };
+            composer = composer.menu(
+                Command::new(SharedString::from(format!("config-{}", option.id)), current).icon(icon),
+                values,
+                chosen,
+            );
+        }
+        composer
     }
 
     /// The agent's commands matching what is typed after a slash.
@@ -568,7 +583,7 @@ impl Render for ChatView {
             composer = composer.above(plan);
         }
         let composer = composer.suggestions(self.suggestions(cx));
-        let composer = self.config_menu(self.mode_menu(composer, cx), cx);
+        let composer = self.config_menus(self.mode_menu(composer, cx), cx);
 
         let scale = cx.scale();
         column()
