@@ -83,17 +83,21 @@ fn text_chunk(kind: &str, text: &str) -> Value {
 }
 
 /// What a new session offers to choose: a model and how hard it thinks.
+/// `FAKE_AGENT_LONG_MODEL` starts it on the long name, for the layout that
+/// must not push send off the composer.
 fn config_options() -> Value {
+    let current = if std::env::var_os("FAKE_AGENT_LONG_MODEL").is_some() { "fake-long" } else { "fake-one" };
     json!([
         {
             "id": "model",
             "name": "Model",
             "category": "model",
             "type": "select",
-            "currentValue": "fake-one",
+            "currentValue": current,
             "options": [
                 { "value": "fake-one", "name": "Fake One" },
                 { "value": "fake-two", "name": "Fake Two" },
+                { "value": "fake-long", "name": "Fake Model With An Absurdly Long Name That Takes The Whole Row" },
             ],
         },
         {

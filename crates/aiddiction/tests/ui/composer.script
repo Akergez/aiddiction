@@ -53,7 +53,7 @@ expect:mode=auto
 click:544,729
 wait:400
 shot:composer-model
-click:545,735
+click:545,700
 wait:400
 expect:model=fake-two
 click:631,729
@@ -62,6 +62,20 @@ shot:composer-effort
 click:633,723
 wait:400
 expect:thought=high
+# A long model name must not push send off the card.
+click:544,729
+wait:400
+click:545,723
+wait:400
+expect:model=fake-long
+wait:300
+shot:composer-long
+click:700,705
+type:still here
+wait:200
+shot:composer-long-typed
+click:1066,729
+until:entries=8
 # Opened again from the inbox, the conversation is attached to, not
 # created: the mode is still offered, as it was left.
 click:1056,16
@@ -69,7 +83,7 @@ until:chats=0
 click:228,110
 until:page=chat
 until:mode=auto
-expect:model=fake-two
+expect:model=fake-long
 expect:thought=high
 wait:500
 shot:composer-reopened
