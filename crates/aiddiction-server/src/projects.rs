@@ -5,7 +5,7 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use aiddiction_api::{DirEntry, DirListing, NewProject, Project, ProjectId, ProjectSource, ProjectState, ServerEvent, Task, TaskId, TaskInput, TaskStatus};
+use aiddiction_api::{DirEntry, DirListing, NewProject, Project, ProjectId, ProjectSource, ProjectState, ServerEvent, Task, TaskId, TaskInput, TaskSession, TaskStatus};
 use anyhow::Context as _;
 use tokio::io::AsyncReadExt as _;
 use tokio::process::Command;
@@ -76,7 +76,7 @@ impl Projects {
         let title = input.title.trim();
         if title.is_empty() { return Err(ProjectError::Invalid("the task needs a title".into())); }
         let now = now_ms();
-        let task = Task { id: uuid::Uuid::now_v7(), project_id: project, title: title.into(), markdown: input.markdown, status: input.status.unwrap_or(TaskStatus::Todo), created_at_ms: now, updated_at_ms: now };
+        let task = Task { id: uuid::Uuid::now_v7(), project_id: project, title: title.into(), markdown: input.markdown, status: input.status.unwrap_or(TaskStatus::Todo), session: None, created_at_ms: now, updated_at_ms: now };
         let mut tasks = self.store.tasks()?; tasks.push(task.clone()); self.store.save_tasks(&tasks)?;
         let _ = self.events.send(ServerEvent::TasksChanged { project_id: project });
         Ok(task)
@@ -95,6 +95,20 @@ impl Projects {
         self.get(project).ok_or(ProjectError::NotFound)?;
         let mut tasks = self.store.tasks()?; let before = tasks.len(); tasks.retain(|task| !(task.id == id && task.project_id == project));
         if tasks.len() == before { return Err(ProjectError::NotFound); } self.store.save_tasks(&tasks)?; let _ = self.events.send(ServerEvent::TasksChanged { project_id: project }); Ok(())
+    }
+
+    /// Remembers which conversation was started on a card.
+    pub fn link_session(&self, project: ProjectId, id: TaskId, session: TaskSession) -> Result<(), ProjectError> {
+        let mut tasks = self.store.tasks()?;
+        let task = tasks
+            .iter_mut()
+            .find(|task| task.id == id && task.project_id == project)
+            .ok_or(ProjectError::NotFound)?;
+        task.session = Some(session);
+        task.updated_at_ms = now_ms();
+        self.store.save_tasks(&tasks)?;
+        let _ = self.events.send(ServerEvent::TasksChanged { project_id: project });
+        Ok(())
     }
 
     pub fn dir(&self, project: &Project) -> PathBuf {

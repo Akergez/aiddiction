@@ -167,7 +167,7 @@ impl Agent {
                 };
                 reply(json!({
                     "protocolVersion": 1,
-                    "agentCapabilities": { "loadSession": false, "promptCapabilities": {} },
+                    "agentCapabilities": { "loadSession": false, "promptCapabilities": {}, "mcpCapabilities": { "http": true, "sse": false } },
                     "agentInfo": { "name": "fake-agent", "version": env!("CARGO_PKG_VERSION") },
                     "authMethods": methods,
                 }));
@@ -228,12 +228,21 @@ impl Agent {
                 let config = message["params"]["configId"].as_str().unwrap_or_default();
                 let value = message["params"]["value"].as_str().unwrap_or_default();
                 let options = self.config_options.entry(session).or_insert_with(config_options);
+                let mut known = false;
                 for option in options.as_array_mut().into_iter().flatten() {
                     if option["id"] == config {
                         option["currentValue"] = json!(value);
+                        known = true;
                     }
                 }
-                reply(json!({ "configOptions": options.clone() }));
+                if known {
+                    reply(json!({ "configOptions": options.clone() }));
+                } else {
+                    send(json!({
+                        "jsonrpc": "2.0", "id": id,
+                        "error": { "code": -32602, "message": format!("no such configuration option: {config}") },
+                    }));
+                }
             }
             Some("session/set_mode") => {
                 let session = message["params"]["sessionId"].as_str().unwrap_or_default().to_owned();

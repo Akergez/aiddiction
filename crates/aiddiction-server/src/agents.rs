@@ -36,12 +36,14 @@ pub fn builtin() -> Vec<Agent> {
             name: "Claude Code".into(),
             source: AgentSource::Builtin,
             command: npx("@agentclientprotocol/claude-agent-acp"),
+            profile: None,
         },
         Agent {
             id: "codex".into(),
             name: "Codex".into(),
             source: AgentSource::Builtin,
             command: npx("@agentclientprotocol/codex-acp"),
+            profile: None,
         },
     ]
 }
@@ -59,6 +61,7 @@ impl Catalog {
                     args: agent.args.clone(),
                     env: agent.env.clone(),
                 },
+                profile: None,
             };
             match fixed.iter_mut().find(|known| known.id == agent.id) {
                 Some(known) => *known = agent,
@@ -104,7 +107,7 @@ impl Catalog {
             id = format!("{base}-{n}");
             n += 1;
         }
-        let agent = Agent { id, name: input.name.trim().to_owned(), source: AgentSource::Custom, command: input.command };
+        let agent = Agent { id, name: input.name.trim().to_owned(), source: AgentSource::Custom, command: input.command, profile: None };
         custom.push(agent.clone());
         store.save_custom_agents(&custom).map_err(|error| CatalogError::Invalid(error.to_string()))?;
         Ok(agent)

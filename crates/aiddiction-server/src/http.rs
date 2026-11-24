@@ -7,7 +7,7 @@ use aiddiction_api::{
     PermissionAnswer, ProjectId, ProjectState, ServerEvent, ServerInfo, StartInstance, StartLogin, TaskId, TaskInput,
 };
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, Query, Request, State};
+use axum::extract::{Extension, Path, Query, Request, State};
 use axum::http::{StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -20,6 +20,7 @@ use tokio::sync::broadcast;
 
 use crate::agents::{Catalog, CatalogError};
 use crate::instances::Supervisor;
+use crate::orchestrate::{Caller, Orchestrator};
 use crate::projects::{ProjectError, Projects};
 use crate::store::Store;
 
@@ -33,6 +34,7 @@ pub struct AppState {
     pub catalog: Catalog,
     pub projects: Arc<Projects>,
     pub supervisor: Supervisor,
+    pub orchestration: Orchestrator,
     pub events: broadcast::Sender<ServerEvent>,
 }
 
@@ -100,7 +102,10 @@ type Result<T> = std::result::Result<T, Failure>;
 
 /// The bearer token on every route but `/health`. A socket may carry it as
 /// `?token=` as well, for clients that cannot set headers on an upgrade.
-async fn authorize(State(state): Shared, request: Request, next: Next) -> Response {
+///
+/// An agent the server started has a token of its own, good for `/mcp`
+/// alone: it cannot open another agent's socket or read the person's lists.
+async fn authorize(State(state): Shared, mut request: Request, next: Next) -> Response {
     let from_header = request
         .headers()
         .get(header::AUTHORIZATION)
@@ -111,10 +116,27 @@ async fn authorize(State(state): Shared, request: Request, next: Next) -> Respon
         query.split('&').find_map(|pair| pair.strip_prefix("token=").map(str::to_owned))
     });
     let given = from_header.or(from_query).unwrap_or_default();
-    if constant_time_eq(given.as_bytes(), state.token.as_bytes()) {
-        next.run(request).await
+    let caller = if constant_time_eq(given.as_bytes(), state.token.as_bytes()) {
+        Some(Caller::User)
+    } else if given.is_empty() {
+        None
     } else {
-        Failure(StatusCode::UNAUTHORIZED, "unauthorized", "a valid token is required".into()).into_response()
+        // An agent's token dies with the instance it was given to.
+        state
+            .orchestration
+            .scope(&given)
+            .filter(|scope| state.supervisor.get(scope.instance).is_some())
+            .map(Caller::Agent)
+    };
+    match caller {
+        Some(caller) => {
+            if !matches!(caller, Caller::User) && request.uri().path() != "/api/v1/mcp" {
+                return Failure(StatusCode::UNAUTHORIZED, "unauthorized", "an agent's token reaches the board only".into()).into_response();
+            }
+            request.extensions_mut().insert(caller);
+            next.run(request).await
+        }
+        None => Failure(StatusCode::UNAUTHORIZED, "unauthorized", "a valid token is required".into()).into_response(),
     }
 }
 
@@ -181,8 +203,8 @@ async fn delete_task(State(state): Shared, Path((id, task_id)): Path<(ProjectId,
 
 /// The MCP server agents use (`crate::mcp`): a notification is taken with
 /// 202 and no body, as Streamable HTTP wants.
-async fn mcp(State(state): Shared, Json(message): Json<Value>) -> Response {
-    match crate::mcp::handle(&state.projects, &message) {
+async fn mcp(State(state): Shared, Extension(caller): Extension<Caller>, Json(message): Json<Value>) -> Response {
+    match crate::mcp::handle(&state.projects, &state.catalog, &state.supervisor, &state.orchestration, &caller, &message).await {
         Some(answer) => Json(answer).into_response(),
         None => StatusCode::ACCEPTED.into_response(),
     }

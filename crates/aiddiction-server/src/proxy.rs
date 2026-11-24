@@ -23,11 +23,11 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use aiddiction_api::{AttachParams, AttachResult, PendingPermission, PermissionChoice, PromptFinished, SessionSummary, ext};
+use aiddiction_api::{AttachParams, AttachResult, PendingPermission, PermissionChoice, PromptFinished, SessionSummary, TaskId, ext};
 use serde_json::{Value, json};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 pub type ConnId = u64;
 
@@ -47,6 +47,9 @@ pub struct Proxy {
     root: PathBuf,
     to_agent: mpsc::UnboundedSender<String>,
     on_sessions_changed: Box<dyn Fn() + Send + Sync>,
+    /// Told whenever the server's own `initialize` settles, so a caller that
+    /// needs a ready agent (orchestration) can wait without polling.
+    ready: watch::Sender<()>,
     state: Mutex<State>,
 }
 
@@ -83,7 +86,8 @@ enum InitState {
 
 enum PendingClient {
     Client { conn: ConnId, id: Value, method: String, session: Option<String> },
-    Internal(oneshot::Sender<Result<Value, Value>>),
+    /// A request the server made on its own behalf: no socket, no client id.
+    Internal { tx: oneshot::Sender<Result<Value, Value>>, method: String, session: Option<String> },
 }
 
 struct PendingAgent {
@@ -117,6 +121,8 @@ struct Session {
     /// attaches instead of creating or loading the session.
     modes: Value,
     config_options: Value,
+    /// The card an orchestrated agent works on, when one was given.
+    task_id: Option<TaskId>,
 }
 
 impl Session {
@@ -138,6 +144,7 @@ impl Session {
             tools: HashMap::new(),
             modes: Value::Null,
             config_options: Value::Null,
+            task_id: None,
         }
     }
 
@@ -187,20 +194,134 @@ fn notification(method: &str, params: Value) -> Value {
     json!({ "jsonrpc": "2.0", "method": method, "params": params })
 }
 
+/// The agent's answer to one of the server's own requests.
+async fn reply(rx: oneshot::Receiver<Result<Value, Value>>) -> Result<Value, String> {
+    match rx.await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(error)) => Err(error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("the agent refused the request")
+            .to_owned()),
+        Err(_) => Err("the agent did not answer".to_owned()),
+    }
+}
+
 pub fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 impl Proxy {
+    /// Waits until the agent has answered the server's `initialize`, which
+    /// every session needs first.
+    pub async fn wait_initialized(&self, timeout: Duration) -> Result<Value, String> {
+        let mut changed = self.ready.subscribe();
+        let wait = async {
+            loop {
+                if let Some(result) = self.init_result() {
+                    return Ok(result);
+                }
+                if let Some(error) = self.init_failure() {
+                    return Err(error);
+                }
+                if changed.changed().await.is_err() {
+                    return Err("the agent is gone".to_owned());
+                }
+            }
+        };
+        tokio::time::timeout(timeout, wait)
+            .await
+            .map_err(|_| "the agent did not initialize in time".to_owned())?
+    }
+
+    /// Opens a session as the server itself, with no client behind it: the
+    /// session is in the common list and its updates go to everyone while
+    /// nobody owns it.
+    pub async fn open_session(&self, mcp_servers: Value) -> Result<String, String> {
+        let params = json!({
+            "cwd": self.root.to_string_lossy(),
+            "mcpServers": mcp_servers,
+        });
+        let result = reply(self.internal_request("session/new", params)).await?;
+        result
+            .pointer("/sessionId")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| "the agent made a session without an id".to_owned())
+    }
+
+    /// Sets one of the session's configuration options as a client would.
+    pub async fn set_config_option(&self, session: &str, config_id: &str, value: &Value) -> Result<Value, String> {
+        let params = json!({ "sessionId": session, "configId": config_id, "value": value });
+        reply(self.internal_request("session/set_config_option", params)).await
+    }
+
+    /// Starts a turn as the server itself and returns once it is sent: the
+    /// agent answers `session/prompt` when the whole turn is over, which the
+    /// journal and the list of conversations carry instead.
+    pub async fn prompt(&self, session: &str, text: &str, task_id: Option<TaskId>) {
+        {
+            let mut state = self.state.lock().unwrap();
+            state.sessions.entry(session.to_owned()).or_insert_with(Session::new).task_id = task_id;
+            state.begin_prompt(session, text);
+        }
+        (self.on_sessions_changed)();
+        let params = json!({ "sessionId": session, "prompt": [{ "type": "text", "text": text }] });
+        drop(self.internal_request("session/prompt", params));
+    }
+
+    /// Closes a session the server opened but can no longer use, when the
+    /// agent knows how; without that the agent is left as it is.
+    pub async fn close_session(&self, session: &str) {
+        let loaded = self
+            .init_result()
+            .and_then(|init| init.pointer("/agentCapabilities/sessionCapabilities/close").cloned())
+            .is_some_and(|close| !close.is_null());
+        if loaded {
+            let _ = tokio::time::timeout(
+                Duration::from_secs(5),
+                self.internal_request("session/close", json!({ "sessionId": session })),
+            )
+            .await;
+        }
+    }
+
+    /// The modes and configuration options of the most recently changed
+    /// session: what to offer before a new one is made.
+    pub fn latest_choices(&self) -> Option<(Value, Value, u64)> {
+        let state = self.state.lock().unwrap();
+        let session = state.sessions.values().filter(|session| session.listed).max_by_key(|session| session.updated_at_ms)?;
+        if session.modes.is_null() && session.config_options.is_null() {
+            return None;
+        }
+        Some((session.modes.clone(), session.config_options.clone(), session.updated_at_ms))
+    }
+
+    /// Sends a request to the agent in the server's own name and hands back
+    /// the agent's answer when it comes.
+    fn internal_request(&self, method: &str, params: Value) -> oneshot::Receiver<Result<Value, Value>> {
+        let (tx, rx) = oneshot::channel();
+        let mut state = self.state.lock().unwrap();
+        let id = state.next_upstream_id;
+        state.next_upstream_id += 1;
+        let session = params.get("sessionId").and_then(Value::as_str).map(str::to_owned);
+        state.pending_client.insert(id, PendingClient::Internal { tx, method: method.to_owned(), session });
+        drop(state);
+        let _ = self.to_agent.send(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }).to_string());
+        rx
+    }
+
     pub fn new(
         root: PathBuf,
         to_agent: mpsc::UnboundedSender<String>,
         on_sessions_changed: impl Fn() + Send + Sync + 'static,
     ) -> Self {
+        let (ready, _) = watch::channel(());
         Self {
             root,
             to_agent,
             on_sessions_changed: Box::new(on_sessions_changed),
+            ready,
             state: Mutex::new(State::default()),
         }
     }
@@ -225,7 +346,7 @@ impl Proxy {
         state.init = InitState::Waiting(Vec::new());
         let id = state.next_upstream_id;
         state.next_upstream_id += 1;
-        state.pending_client.insert(id, PendingClient::Internal(tx));
+        state.pending_client.insert(id, PendingClient::Internal { tx, method: "initialize".into(), session: None });
         drop(state);
         let _ = self.to_agent.send(json!({ "jsonrpc": "2.0", "id": id, "method": "initialize", "params": params }).to_string());
         rx
@@ -251,6 +372,8 @@ impl Proxy {
             Ok(result) => InitState::Done(result),
             Err(message) => InitState::Failed(message),
         };
+        // Every waiter re-reads the state; the value is only the signal.
+        let _ = self.ready.send(());
     }
 
     pub fn connect(&self) -> Option<(ConnId, mpsc::UnboundedReceiver<String>)> {
@@ -284,6 +407,14 @@ impl Proxy {
     pub fn init_result(&self) -> Option<Value> {
         match &self.state.lock().unwrap().init {
             InitState::Done(result) => Some(result.clone()),
+            _ => None,
+        }
+    }
+
+    /// Why the agent did not initialize, once that is known.
+    pub fn init_failure(&self) -> Option<String> {
+        match &self.state.lock().unwrap().init {
+            InitState::Failed(error) => Some(error.clone()),
             _ => None,
         }
     }
@@ -323,7 +454,7 @@ impl Proxy {
                     let line = error_response(&id, INTERNAL_ERROR, message);
                     state.send(conn, line);
                 }
-                PendingClient::Internal(tx) => {
+                PendingClient::Internal { tx, .. } => {
                     let _ = tx.send(Err(json!({ "message": message })));
                 }
             }
@@ -342,6 +473,8 @@ impl Proxy {
         }
         // Dropping the senders ends each socket's writer, which closes it.
         state.conns.clear();
+        drop(state);
+        let _ = self.ready.send(());
     }
 
     pub fn on_client_line(&self, conn: ConnId, line: &str) {
@@ -452,28 +585,7 @@ impl Proxy {
                 "session/prompt" => {
                     state.owners.insert(session.clone(), conn);
                     let text = prompt_text(&message["params"]["prompt"]);
-                    let entry = state.sessions.entry(session.clone()).or_insert_with(Session::new);
-                    entry.prompts_running += 1;
-                    entry.reply.clear();
-                    entry.activity.clear();
-                    entry.error = None;
-                    if entry.title.is_empty() && !text.trim().is_empty() {
-                        entry.title = title_from(&text);
-                    }
-                    // Agents do not echo the prompt back, so the journal gets
-                    // it from here: every client of the session, the sender
-                    // included, shows the user's message from this one place.
-                    let echo = notification(
-                        "session/update",
-                        json!({
-                            "sessionId": session,
-                            "update": {
-                                "sessionUpdate": "user_message_chunk",
-                                "content": { "type": "text", "text": text },
-                            },
-                        }),
-                    );
-                    state.publish(session, echo);
+                    state.begin_prompt(session, &text);
                     // The session is busy now, which a list shows.
                     drop(state);
                     (self.on_sessions_changed)();
@@ -570,73 +682,122 @@ impl Proxy {
         let Some(pending) = upstream.and_then(|id| state.pending_client.remove(&id)) else {
             return;
         };
+        let method = match &pending {
+            PendingClient::Client { method, .. } | PendingClient::Internal { method, .. } => method.clone(),
+        };
+        let session = match &pending {
+            PendingClient::Client { session, .. } | PendingClient::Internal { session, .. } => session.clone(),
+        };
+        let sessions_changed = state.settled(&method, session.as_deref(), &message);
         match pending {
-            PendingClient::Internal(tx) => {
+            PendingClient::Internal { tx, .. } => {
                 let outcome = match message.get("error") {
                     Some(error) => Err(error.clone()),
                     None => Ok(message.get("result").cloned().unwrap_or(Value::Null)),
                 };
                 let _ = tx.send(outcome);
             }
-            PendingClient::Client { conn, id, method, session } => {
-                let mut sessions_changed = false;
-                if message.get("error").is_none() && method == "session/new"
-                    && let Some(new) = message.pointer("/result/sessionId").and_then(Value::as_str) {
-                        let new = new.to_owned();
-                        state.sessions.entry(new.clone()).or_insert_with(Session::new);
-                        state.list_session(&new);
-                        state.owners.insert(new, conn);
-                        sessions_changed = true;
-                    }
-                if message.get("error").is_none()
-                    && matches!(method.as_str(), "session/new" | "session/load" | "session/resume" | "session/set_config_option")
+            PendingClient::Client { conn, id, .. } => {
+                if method == "session/new"
+                    && message.get("error").is_none()
+                    && let Some(new) = message.pointer("/result/sessionId").and_then(Value::as_str).map(str::to_owned)
                 {
-                    let id = match method.as_str() {
-                        "session/new" => message.pointer("/result/sessionId").and_then(Value::as_str).map(str::to_owned),
-                        _ => session.clone(),
-                    };
-                    if let Some(entry) = id.and_then(|id| state.sessions.get_mut(&id)) {
-                        entry.remember_choices(&message["result"]);
-                    }
+                    state.owners.insert(new, conn);
                 }
-                if method == "authenticate" && message.get("error").is_none() {
-                    state.auth_status = None;
-                }
-                if method == "session/prompt"
-                    && let Some(session) = &session {
-                        let finished = PromptFinished {
-                            session_id: session.clone(),
-                            stop_reason: message.pointer("/result/stopReason").and_then(Value::as_str).map(str::to_owned),
-                            error: message.pointer("/error/message").and_then(Value::as_str).map(str::to_owned),
-                        };
-                        if let Some(entry) = state.sessions.get_mut(session) {
-                            entry.prompts_running = entry.prompts_running.saturating_sub(1);
-                            entry.activity.clear();
-                            let preview = preview_of(&entry.reply);
-                            if !preview.is_empty() {
-                                entry.preview = preview;
-                            }
-                            entry.error = finished.error.clone();
-                        }
-                        sessions_changed = true;
-                        let note = notification(
-                            ext::PROMPT_FINISHED,
-                            json!({ "sessionId": session, "stopReason": finished.stop_reason, "error": finished.error }),
-                        );
-                        state.publish(session, note);
-                    }
                 message["id"] = id;
                 state.send(conn, message.to_string());
-                if sessions_changed {
-                    drop(state);
-                    (self.on_sessions_changed)();
-                }
             }
+        }
+        if sessions_changed {
+            drop(state);
+            (self.on_sessions_changed)();
         }
     }
 }
 
 impl State {
+    /// What an answer of the agent means for a session, whoever asked:
+    /// a new session is listed, its choices are kept, a finished turn is
+    /// summed up and announced. True when a list of conversations should be
+    /// read again.
+    fn settled(&mut self, method: &str, session: Option<&str>, message: &Value) -> bool {
+        if message.get("error").is_some() {
+            return false;
+        }
+        let mut changed = false;
+        if method == "session/new"
+            && let Some(new) = message.pointer("/result/sessionId").and_then(Value::as_str).map(str::to_owned)
+        {
+            self.sessions.entry(new.clone()).or_insert_with(Session::new);
+            self.list_session(&new);
+            changed = true;
+        }
+        if matches!(method, "session/new" | "session/load" | "session/resume" | "session/set_config_option") {
+            let id = if method == "session/new" {
+                message.pointer("/result/sessionId").and_then(Value::as_str).map(str::to_owned)
+            } else {
+                session.map(str::to_owned)
+            };
+            if let Some(entry) = id.and_then(|id| self.sessions.get_mut(&id)) {
+                entry.remember_choices(&message["result"]);
+            }
+        }
+        if method == "authenticate" {
+            self.auth_status = None;
+        }
+        if method == "session/prompt"
+            && let Some(session) = session
+        {
+            let finished = PromptFinished {
+                session_id: session.to_owned(),
+                stop_reason: message.pointer("/result/stopReason").and_then(Value::as_str).map(str::to_owned),
+                error: message.pointer("/error/message").and_then(Value::as_str).map(str::to_owned),
+            };
+            if let Some(entry) = self.sessions.get_mut(session) {
+                entry.prompts_running = entry.prompts_running.saturating_sub(1);
+                entry.activity.clear();
+                let preview = preview_of(&entry.reply);
+                if !preview.is_empty() {
+                    entry.preview = preview;
+                }
+                entry.error = finished.error.clone();
+            }
+            let note = notification(
+                ext::PROMPT_FINISHED,
+                json!({ "sessionId": session, "stopReason": finished.stop_reason, "error": finished.error }),
+            );
+            self.publish(session, note);
+            changed = true;
+        }
+        changed
+    }
+
+    /// Starts a turn: the session is busy, its title comes from the prompt,
+    /// and the prompt enters the journal, since agents do not echo it back.
+    /// Every client of the session, the sender included, shows the user's
+    /// message from that one place.
+    fn begin_prompt(&mut self, session: &str, text: &str) {
+        let entry = self.sessions.entry(session.to_owned()).or_insert_with(Session::new);
+        entry.prompts_running += 1;
+        entry.reply.clear();
+        entry.activity.clear();
+        entry.error = None;
+        if entry.title.is_empty() && !text.trim().is_empty() {
+            entry.title = title_from(text);
+        }
+        let echo = notification(
+            "session/update",
+            json!({
+                "sessionId": session,
+                "update": {
+                    "sessionUpdate": "user_message_chunk",
+                    "content": { "type": "text", "text": text },
+                },
+            }),
+        );
+        self.publish(session, echo);
+    }
+
     fn send(&mut self, conn: ConnId, line: String) {
         if let Some(tx) = self.conns.get(&conn)
             && tx.send(line).is_err() {
@@ -656,7 +817,7 @@ impl State {
         let upstream = message.pointer("/params/requestId")?.as_u64()?;
         match self.pending_client.get(&upstream)? {
             PendingClient::Client { conn, id, .. } => Some((*conn, id.clone())),
-            PendingClient::Internal(_) => None,
+            PendingClient::Internal { .. } => None,
         }
     }
 
@@ -821,6 +982,7 @@ impl State {
                     permissions,
                     preview: if busy && !session.activity.is_empty() { session.activity.clone() } else { session.preview.clone() },
                     error: session.error.clone(),
+                    task_id: session.task_id,
                 })
             })
             .collect()

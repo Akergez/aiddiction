@@ -1,19 +1,20 @@
 //! Agent processes: one per agent and project, each behind its own [`Proxy`].
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use aiddiction_api::{Agent, Instance as InstanceInfo, InstanceId, InstanceState, ProjectId, ServerEvent};
+use aiddiction_api::{Agent, AgentProfile, Instance as InstanceInfo, InstanceId, InstanceState, ProjectId, ServerEvent};
 use anyhow::Context as _;
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::process::Command;
 use tokio::sync::{broadcast, mpsc};
 
 use crate::login::TerminalLogin;
-use crate::proxy::Proxy;
+use crate::proxy::{Proxy, now_ms};
+use crate::store::Store;
 
 /// How many stderr lines an instance keeps to show when it fails.
 const STDERR_LINES: usize = 100;
@@ -23,6 +24,10 @@ const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(180);
 pub struct Supervisor {
     instances: Mutex<HashMap<InstanceId, Arc<Instance>>>,
     events: broadcast::Sender<ServerEvent>,
+    /// What each agent said about itself when it last initialized, kept
+    /// between runs so its capabilities are known before it is started.
+    profiles: Arc<Mutex<BTreeMap<String, AgentProfile>>>,
+    store: Arc<Store>,
 }
 
 pub struct Instance {
@@ -106,8 +111,18 @@ pub(crate) fn stop_group(pid: u32) {
 }
 
 impl Supervisor {
-    pub fn new(events: broadcast::Sender<ServerEvent>) -> Self {
-        Self { instances: Mutex::new(HashMap::new()), events }
+    pub fn new(events: broadcast::Sender<ServerEvent>, store: Arc<Store>) -> Self {
+        let profiles = store.agent_profiles().unwrap_or_else(|error| {
+            tracing::warn!("could not read the agents' profiles: {error:#}");
+            BTreeMap::new()
+        });
+        Self { instances: Mutex::new(HashMap::new()), events, profiles: Arc::new(Mutex::new(profiles)), store }
+    }
+
+    /// What the agent said of itself when it last initialized, whatever
+    /// project that was in.
+    pub fn profile(&self, agent_id: &str) -> Option<AgentProfile> {
+        self.profiles.lock().unwrap().get(agent_id).cloned()
     }
 
     pub fn get(&self, id: InstanceId) -> Option<Arc<Instance>> {
@@ -241,6 +256,9 @@ impl Supervisor {
         let initialize = proxy.initialize();
         let init_instance = instance.clone();
         let init_events = self.events.clone();
+        let learned_agent = agent.clone();
+        let learned_profiles = self.profiles.clone();
+        let learned_store = self.store.clone();
         tokio::spawn(async move {
             let outcome = match tokio::time::timeout(INITIALIZE_TIMEOUT, initialize).await {
                 Ok(Ok(Ok(result))) => Ok(result),
@@ -252,7 +270,10 @@ impl Supervisor {
                 Err(_) => Err("the agent did not initialize in time".to_owned()),
             };
             match &outcome {
-                Ok(_) => init_instance.set_state(InstanceState::Ready, None),
+                Ok(result) => {
+                    init_instance.set_state(InstanceState::Ready, None);
+                    remember_profile(&learned_profiles, &learned_store, &learned_agent, result);
+                }
                 Err(message) => {
                     if init_instance.running() {
                         init_instance.set_state(InstanceState::Failed, Some(message.clone()));
@@ -284,6 +305,31 @@ impl Supervisor {
 
         let _ = self.events.send(ServerEvent::InstancesChanged { project_id: project });
         Ok(instance)
+    }
+}
+
+/// Keeps the answer of an agent's `initialize` for later starts, so its
+/// capabilities can be known before an instance is made.
+fn remember_profile(
+    profiles: &Mutex<BTreeMap<String, AgentProfile>>,
+    store: &Store,
+    agent: &Agent,
+    init: &serde_json::Value,
+) {
+    let profile = AgentProfile {
+        command: agent.command.clone(),
+        agent_info: init.get("agentInfo").cloned().unwrap_or(serde_json::Value::Null),
+        capabilities: init.get("agentCapabilities").cloned().unwrap_or(serde_json::Value::Null),
+        auth_methods: init.get("authMethods").cloned().unwrap_or(serde_json::Value::Null),
+        learned_at_ms: now_ms(),
+    };
+    let all = {
+        let mut profiles = profiles.lock().unwrap();
+        profiles.insert(agent.id.clone(), profile);
+        profiles.clone()
+    };
+    if let Err(error) = store.save_agent_profiles(&all) {
+        tracing::warn!("could not keep the agents' profiles: {error:#}");
     }
 }
 

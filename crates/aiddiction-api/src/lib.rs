@@ -88,6 +88,36 @@ pub struct Agent {
     pub source: AgentSource,
     /// Shown to clients so a person can tell what will run on the server.
     pub command: AgentCommand,
+    /// What the agent said about itself the last time it initialized: its
+    /// capabilities and ways of signing in, so they can be known before it
+    /// is started again. Kept by the server, not stored with the agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<AgentProfile>,
+}
+
+/// An agent's answer to `initialize`, as it was last heard. The command is
+/// kept with it: a changed command means the profile is about something else.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProfile {
+    pub command: AgentCommand,
+    /// The agent's `agentInfo`: its own name and version.
+    #[serde(default)]
+    pub agent_info: serde_json::Value,
+    /// The agent's `agentCapabilities`, as it gave them.
+    #[serde(default)]
+    pub capabilities: serde_json::Value,
+    /// Its `authMethods`.
+    #[serde(default)]
+    pub auth_methods: serde_json::Value,
+    pub learned_at_ms: u64,
+}
+
+impl AgentProfile {
+    /// Whether it was learned for this command.
+    pub fn is_for(&self, command: &AgentCommand) -> bool {
+        &self.command == command
+    }
 }
 
 /// Body of `POST /agents` and `PUT /agents/{id}`.
@@ -190,8 +220,22 @@ pub struct Task {
     #[serde(default)]
     pub markdown: String,
     pub status: TaskStatus,
+    /// The agent conversation started on the card by `start_agent`, the last
+    /// one. Its instance and session are what a client opens to follow it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<TaskSession>,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
+}
+
+/// An agent started on a task card: which conversation works on it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskSession {
+    pub instance_id: InstanceId,
+    pub session_id: String,
+    pub agent_id: String,
+    pub started_at_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -239,6 +283,9 @@ pub struct SessionSummary {
     /// Why the last turn failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The card an orchestrated agent was started on, when it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<TaskId>,
 }
 
 /// A `session/request_permission` the agent is waiting on.

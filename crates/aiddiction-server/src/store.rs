@@ -2,9 +2,10 @@
 //! through the API, each a JSON file in the data directory, rewritten whole
 //! through a temporary file so a crash never leaves half of one.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use aiddiction_api::{Agent, Project, Task};
+use aiddiction_api::{Agent, AgentProfile, Project, Task};
 use anyhow::Context as _;
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -36,6 +37,15 @@ impl Store {
 
     pub fn tasks(&self) -> anyhow::Result<Vec<Task>> { self.read("tasks.json") }
     pub fn save_tasks(&self, tasks: &[Task]) -> anyhow::Result<()> { self.write("tasks.json", tasks) }
+
+    /// What each agent said about itself when it last initialized, by id.
+    pub fn agent_profiles(&self) -> anyhow::Result<BTreeMap<String, AgentProfile>> {
+        self.read("agent-profiles.json")
+    }
+
+    pub fn save_agent_profiles(&self, profiles: &BTreeMap<String, AgentProfile>) -> anyhow::Result<()> {
+        self.write("agent-profiles.json", profiles)
+    }
 
     /// The access token: the one stored here, or a new one stored now.
     pub fn token(&self) -> anyhow::Result<(String, bool)> {

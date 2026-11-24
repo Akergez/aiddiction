@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::time::Duration;
 
-use aiddiction_api::{AgentCommand, AgentInput, InstanceState, NewProject, ProjectSource, ext};
+use aiddiction_api::{AgentCommand, AgentInput, InstanceState, NewProject, ProjectSource, TaskInput, ext};
 use aiddiction_client::{ServerClient, Socket};
 use serde_json::{Value, json};
 
@@ -259,4 +259,144 @@ async fn an_agent_is_signed_in_in_a_terminal_and_with_a_page() {
     assert!(answer.get("error").is_none(), "{answer}");
     assert!(after.iter().any(|message| message["method"] == "elicitation/complete"));
     assert!(signed_in.exists());
+}
+
+/// One of the board's MCP tools, as the person's token calls it.
+async fn board(client: &ServerClient, name: &str, arguments: Value) -> Result<Value, String> {
+    let message = json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": name, "arguments": arguments } });
+    let answer = client.mcp(message).await.unwrap().expect("an answer, not a notification");
+    assert!(answer.get("error").is_none(), "{answer}");
+    let result = &answer["result"];
+    let text = result["content"][0]["text"].as_str().unwrap_or_default().to_owned();
+    if result["isError"] == true { Err(text) } else { Ok(serde_json::from_str::<Value>(&text).unwrap()) }
+}
+
+async fn fake_agent_on(client: &ServerClient, name: &str) -> aiddiction_api::Agent {
+    client
+        .add_agent(&AgentInput {
+            name: name.into(),
+            command: AgentCommand { command: fake_agent().display().to_string(), args: vec![], env: Default::default() },
+        })
+        .await
+        .unwrap()
+}
+
+/// MCP starts an agent on a card: the thread is in the common list, the
+/// card names it, the settings asked for are the ones it runs with, and a
+/// retry is the same start; a setting it refuses is no prompt at all.
+#[tokio::test(flavor = "multi_thread")]
+async fn start_agent_puts_a_child_thread_in_the_common_list_on_its_card() {
+    aiddiction_client::install_crypto_provider();
+    let server = start_server().await;
+    let client = ServerClient::new(&server.url, "secret").unwrap();
+    let _fake = fake_agent_on(&client, "Child agent").await;
+    let fake = client.agents().await.unwrap().into_iter().find(|agent| agent.name == "Child agent").unwrap();
+    let project = client.create_project(&NewProject { name: "Child work".into(), source: ProjectSource::Empty }).await.unwrap();
+    let task = client
+        .create_task(project.id, &TaskInput { title: "Fix the child".into(), markdown: "the card".into(), status: None })
+        .await
+        .unwrap();
+
+    // Until an agent has run once, nothing is known about what it can do.
+    let known = board(&client, "list_agents", json!({ "projectId": project.id })).await.unwrap();
+    let agent = known.as_array().unwrap().iter().find(|agent| agent["id"] == json!(fake.id)).unwrap();
+    assert!(agent.get("profile").is_none(), "{agent}");
+
+    let started = board(
+        &client,
+        "start_agent",
+        json!({
+            "projectId": project.id,
+            "agentId": fake.id,
+            "taskId": task.id,
+            "prompt": "Fix the child",
+            "requestId": "r1",
+            "settings": [
+                { "configId": "model", "value": "fake-two" },
+                { "configId": "thought_level", "value": "high" },
+            ],
+        }),
+    )
+    .await
+    .unwrap();
+    let session = started["sessionId"].as_str().unwrap().to_owned();
+    let instance = started["instanceId"].as_str().unwrap().parse().unwrap();
+    assert_eq!(started["taskId"], json!(task.id));
+    assert_eq!(started["projectId"], json!(project.id));
+    assert_eq!(started["agentId"], json!(fake.id));
+    assert_eq!(started["board"], true);
+
+    // The turn runs and ends; the list of conversations has it on the card.
+    let mut info = client.instance(instance).await.unwrap();
+    for _ in 0..100 {
+        if info.sessions.iter().any(|shown| shown.session_id == session && !shown.busy) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        info = client.instance(instance).await.unwrap();
+    }
+    let shown = info.sessions.iter().find(|shown| shown.session_id == session).expect("the session is listed");
+    assert_eq!(shown.task_id, Some(task.id));
+    assert_eq!(shown.title, "Fix the child");
+    assert!(!shown.busy, "{shown:?}");
+
+    // The card names the thread.
+    let linked = client.tasks(project.id).await.unwrap().into_iter().find(|card| card.id == task.id).unwrap().session.unwrap();
+    assert_eq!((linked.instance_id, linked.session_id.as_str()), (instance, session.as_str()));
+
+    // The settings asked for, in the order asked: the model, then the effort.
+    let mut acp = Acp { socket: client.acp(instance).await.unwrap(), next_id: 0 };
+    let attach = acp.request(ext::ATTACH, json!({ "sessionId": session, "afterSeq": 0 })).await;
+    let answer = acp.until_response(attach, &mut Vec::new()).await;
+    let options = answer["result"]["configOptions"].as_array().unwrap();
+    let current = |id: &str| options.iter().find(|option| option["id"] == id).unwrap()["currentValue"].clone();
+    assert_eq!(current("model"), json!("fake-two"));
+    assert_eq!(current("thought_level"), json!("high"));
+
+    // Retrying the call is the same start, not a second agent.
+    let again = board(
+        &client,
+        "start_agent",
+        json!({ "projectId": project.id, "agentId": fake.id, "taskId": task.id, "prompt": "Fix the child", "requestId": "r1" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(again["sessionId"], json!(session));
+    assert_eq!(client.instance(instance).await.unwrap().sessions.len(), 1);
+
+    // A setting the agent refuses is named, and no prompt is sent.
+    let before = client.instance(instance).await.unwrap().sessions.len();
+    let refused = board(
+        &client,
+        "start_agent",
+        json!({
+            "projectId": project.id,
+            "agentId": fake.id,
+            "taskId": task.id,
+            "prompt": "must not run",
+            "requestId": "r2",
+            "settings": [{ "configId": "no_such_option", "value": "x" }],
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert!(refused.contains("no_such_option"), "{refused}");
+    let after = client.instance(instance).await.unwrap();
+    assert_eq!(after.sessions.len(), before + 1, "the conversation was opened before the setting was refused");
+    let unused = after.sessions.iter().find(|shown| shown.session_id != session).unwrap();
+    assert!(!unused.busy, "nothing was sent: {unused:?}");
+    assert!(unused.title.is_empty(), "nothing was sent: {unused:?}");
+
+    // Following the card finds its thread, and only it.
+    let children = board(&client, "list_subagents", json!({ "projectId": project.id, "taskId": task.id })).await.unwrap();
+    assert_eq!(children[0]["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(children[0]["sessions"][0]["sessionId"], json!(session));
+
+    // What the agent said about itself is kept, and how it was last set up.
+    let known = board(&client, "list_agents", json!({ "projectId": project.id })).await.unwrap();
+    let agent = known.as_array().unwrap().iter().find(|agent| agent["id"] == json!(fake.id)).unwrap();
+    assert_eq!(agent["profile"]["capabilities"]["mcpCapabilities"]["http"], true);
+    assert_eq!(agent["profile"]["stale"], false);
+    assert_eq!(agent["profile"]["agentInfo"]["name"], "fake-agent");
+    assert!(agent["lastChoices"]["configOptions"].is_array());
 }

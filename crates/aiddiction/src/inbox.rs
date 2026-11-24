@@ -143,6 +143,7 @@ mod tests {
             permissions: Vec::new(),
             preview: String::new(),
             error: None,
+            task_id: None,
         }
     }
 

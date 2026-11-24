@@ -3,19 +3,35 @@
 //! same store the UI shows, so an agent can list, create, edit, move and
 //! delete cards.
 //!
+//! The person's token also starts agents (`start_agent`) and follows them
+//! (`list_subagents`). An agent started that way gets a token of its own,
+//! which reaches this server only: its project's board and nothing that
+//! starts further agents.
+//!
 //! [`handle`] answers one JSON-RPC message; `None` is a notification, which
 //! the route answers with 202 and no body. A tool that fails says so in its
 //! result (`isError`), as MCP wants, rather than as a protocol error.
 
-use aiddiction_api::{ProjectId, TaskId, TaskInput, TaskStatus};
+use aiddiction_api::{Agent, AgentProfile, ProjectId, TaskId, TaskInput, TaskStatus};
 use serde_json::{Value, json};
 
+use crate::agents::Catalog;
+use crate::instances::Supervisor;
+use crate::orchestrate::{Caller, Orchestrator, StartRequest};
 use crate::projects::{ProjectError, Projects};
 
 /// The protocol versions this server speaks, newest first.
 const VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
-pub fn handle(projects: &Projects, message: &Value) -> Option<Value> {
+#[allow(clippy::too_many_arguments)]
+pub async fn handle(
+    projects: &Projects,
+    catalog: &Catalog,
+    supervisor: &Supervisor,
+    orchestration: &Orchestrator,
+    caller: &Caller,
+    message: &Value,
+) -> Option<Value> {
     // A notification has no id and gets no answer.
     let id = message.get("id")?.clone();
     let method = message.get("method").and_then(Value::as_str).unwrap_or("");
@@ -23,14 +39,18 @@ pub fn handle(projects: &Projects, message: &Value) -> Option<Value> {
     let outcome = match method {
         "initialize" => Ok(initialize(&params)),
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": tools() })),
-        "tools/call" => call(projects, &params),
+        "tools/list" => Ok(json!({ "tools": tools(is_agent(caller)) })),
+        "tools/call" => call(projects, catalog, supervisor, orchestration, caller, &params).await,
         _ => Err((-32601, format!("method not found: {method}"))),
     };
     Some(match outcome {
         Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
         Err((code, message)) => json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }),
     })
+}
+
+fn is_agent(caller: &Caller) -> bool {
+    matches!(caller, Caller::Agent(_))
 }
 
 fn initialize(params: &Value) -> Value {
@@ -41,26 +61,27 @@ fn initialize(params: &Value) -> Value {
         "capabilities": { "tools": {} },
         "serverInfo": { "name": "aiddiction", "version": env!("CARGO_PKG_VERSION") },
         "instructions": "Aiddiction's projects and their kanban boards of task cards. \
-            list_projects gives the project ids the other tools take; a project's folder is its path.",
+            list_projects gives the project ids the other tools take; a project's folder is its path. \
+            start_agent gives an agent a card to work on; list_subagents follows it.",
     })
 }
 
-fn tools() -> Value {
+fn tools(for_agent: bool) -> Value {
     let status = json!({ "type": "string", "enum": ["todo", "inProgress", "done"], "description": "The board's column" });
     let project = json!({ "type": "string", "description": "A project id from list_projects" });
     let task = json!({ "type": "string", "description": "A task id from list_tasks" });
-    json!([
-        {
+    let mut tools = vec![
+        json!({
             "name": "list_projects",
             "description": "List the server's projects: id, name and folder.",
             "inputSchema": { "type": "object", "properties": {} },
-        },
-        {
+        }),
+        json!({
             "name": "list_tasks",
             "description": "List a project's task cards.",
             "inputSchema": { "type": "object", "required": ["projectId"], "properties": { "projectId": project } },
-        },
-        {
+        }),
+        json!({
             "name": "create_task",
             "description": "Create a task card; it goes to Todo unless a status is given.",
             "inputSchema": {
@@ -73,8 +94,8 @@ fn tools() -> Value {
                     "status": status,
                 },
             },
-        },
-        {
+        }),
+        json!({
             "name": "update_task",
             "description": "Edit a task card or move it to another column; what is left out stays as it is.",
             "inputSchema": {
@@ -88,30 +109,135 @@ fn tools() -> Value {
                     "status": status,
                 },
             },
-        },
-        {
+        }),
+        json!({
             "name": "delete_task",
             "description": "Delete a task card.",
             "inputSchema": { "type": "object", "required": ["projectId", "taskId"], "properties": { "projectId": project, "taskId": task } },
-        },
-    ])
+        }),
+    ];
+    if !for_agent {
+        tools.insert(1, json!({
+            "name": "list_agents",
+            "description": "List the ACP agents that can be started, with what each said about itself when it last \
+                initialized, and — for a project — the model and settings it last offered there.",
+            "inputSchema": { "type": "object", "properties": { "projectId": { "type": "string", "description": "A project id, for its last settings" } } },
+        }));
+        tools.insert(2, json!({
+            "name": "list_subagents",
+            "description": "See the agents running for a project and their conversations, including the threads \
+                started by start_agent (a thread's taskId says which card it works on).",
+            "inputSchema": { "type": "object", "properties": {
+                "projectId": { "type": "string" },
+                "taskId": { "type": "string", "description": "Only threads of this card" },
+            }},
+        }));
+        tools.insert(3, json!({
+            "name": "start_agent",
+            "description": "Start an ACP agent on a task card. The agent gets a token for the project's board, is \
+                prompted, and works in its own conversation, visible to the person in the common list. Answers \
+                once the prompt is sent, not when the turn ends: follow it with list_subagents, read the result on \
+                the card.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["projectId", "agentId", "prompt"],
+                "properties": {
+                    "projectId": { "type": "string" },
+                    "agentId": { "type": "string", "description": "An id from list_agents" },
+                    "taskId": { "type": "string", "description": "The card to work on; it is linked to the thread" },
+                    "prompt": { "type": "string", "description": "What to do, on top of the card" },
+                    "settings": {
+                        "type": "array",
+                        "description": "ACP configOptions, applied in this order (a model may change the effort offered)",
+                        "items": {
+                            "type": "object",
+                            "required": ["configId", "value"],
+                            "properties": { "configId": { "type": "string" }, "value": {} },
+                        },
+                    },
+                    "requestId": { "type": "string", "description": "Repeat this call with the same id and it is the same start" },
+                },
+            },
+        }));
+    }
+    json!(tools)
 }
 
 /// A tool's result: its output as text, or what went wrong, flagged.
-fn call(projects: &Projects, params: &Value) -> Result<Value, (i64, String)> {
+async fn call(
+    projects: &Projects,
+    catalog: &Catalog,
+    supervisor: &Supervisor,
+    orchestration: &Orchestrator,
+    caller: &Caller,
+    params: &Value,
+) -> Result<Value, (i64, String)> {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
     let arguments = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+    if is_agent(caller) && matches!(name, "list_agents" | "list_subagents" | "start_agent") {
+        return Err((-32602, format!("{name} is not open to an agent")));
+    }
     let output = match name {
         "list_projects" => Ok(json!(
             projects
                 .list()
                 .into_iter()
+                .filter(|project| match caller {
+                    Caller::User => true,
+                    Caller::Agent(scope) => project.id == scope.project,
+                })
                 .map(|project| json!({ "id": project.id, "name": project.name, "path": projects.dir(&project), "state": project.state }))
                 .collect::<Vec<_>>()
         )),
-        "list_tasks" => id(&arguments, "projectId").and_then(|project| Ok(json!(projects.tasks(project)?))),
+        "list_agents" => Ok(json!(
+            catalog
+                .public_list()
+                .into_iter()
+                .map(|agent| {
+                    let profile = supervisor.profile(&agent.id);
+                    let choices = arguments
+                        .get("projectId")
+                        .and_then(Value::as_str)
+                        .and_then(|project| project.parse::<ProjectId>().ok())
+                        .and_then(|project| {
+                            supervisor
+                                .for_project(project)
+                                .into_iter()
+                                .filter(|instance| instance.agent.id == agent.id)
+                                .filter_map(|instance| instance.proxy.latest_choices())
+                                .max_by_key(|(_, _, at)| *at)
+                        });
+                    agent_summary(agent, profile, choices)
+                })
+                .collect::<Vec<_>>()
+        )),
+        "list_subagents" => {
+            let project = match arguments.get("projectId").and_then(Value::as_str) {
+                Some(project) => Some(project.parse::<ProjectId>().map_err(|_| (-32602, "projectId is not an id".to_owned()))?),
+                None => None,
+            };
+            let task = match arguments.get("taskId").and_then(Value::as_str) {
+                Some(task) => Some(task.parse::<TaskId>().map_err(|_| (-32602, "taskId is not an id".to_owned()))?),
+                None => None,
+            };
+            let instances = project.map_or_else(|| supervisor.all(), |project| supervisor.for_project(project));
+            let infos = instances
+                .into_iter()
+                .map(|instance| {
+                    let mut info = instance.info();
+                    if let Some(task) = task {
+                        info.sessions.retain(|session| session.task_id == Some(task));
+                    }
+                    info
+                })
+                .filter(|info| task.is_none() || !info.sessions.is_empty())
+                .collect::<Vec<_>>();
+            Ok(json!(infos))
+        }
+        "start_agent" => start(projects, catalog, supervisor, orchestration, caller, &arguments).await,
+        "list_tasks" => project_of(&arguments, caller).and_then(|project| Ok(json!(projects.tasks(project)?))),
         "create_task" => (|| {
-            let project = id(&arguments, "projectId")?;
+            let project = project_of(&arguments, caller)?;
             let input = TaskInput {
                 title: text(&arguments, "title").unwrap_or_default(),
                 markdown: text(&arguments, "markdown").unwrap_or_default(),
@@ -120,7 +246,7 @@ fn call(projects: &Projects, params: &Value) -> Result<Value, (i64, String)> {
             Ok(json!(projects.create_task(project, input)?))
         })(),
         "update_task" => (|| {
-            let (project, task): (ProjectId, TaskId) = (id(&arguments, "projectId")?, id(&arguments, "taskId")?);
+            let (project, task): (ProjectId, TaskId) = (project_of(&arguments, caller)?, id(&arguments, "taskId")?);
             let known = projects.tasks(project)?.into_iter().find(|known| known.id == task).ok_or("no such task")?;
             let input = TaskInput {
                 title: text(&arguments, "title").unwrap_or(known.title),
@@ -130,7 +256,14 @@ fn call(projects: &Projects, params: &Value) -> Result<Value, (i64, String)> {
             Ok(json!(projects.update_task(project, task, input)?))
         })(),
         "delete_task" => (|| {
-            projects.delete_task(id(&arguments, "projectId")?, id(&arguments, "taskId")?)?;
+            let project = project_of(&arguments, caller)?;
+            let task = id(&arguments, "taskId")?;
+            if let Caller::Agent(scope) = caller
+                && scope.task == Some(task)
+            {
+                return Err(ToolError("the card this agent was started on is not its to delete".into()));
+            }
+            projects.delete_task(project, task)?;
             Ok(json!({ "deleted": true }))
         })(),
         _ => return Err((-32602, format!("unknown tool: {name}"))),
@@ -141,11 +274,69 @@ fn call(projects: &Projects, params: &Value) -> Result<Value, (i64, String)> {
     })
 }
 
+/// `start_agent`: a card, an agent and a prompt.
+async fn start(
+    projects: &Projects,
+    catalog: &Catalog,
+    supervisor: &Supervisor,
+    orchestration: &Orchestrator,
+    caller: &Caller,
+    arguments: &Value,
+) -> Result<Value, ToolError> {
+    let project = project_of(arguments, caller)?;
+    let agent_id = text(arguments, "agentId").ok_or_else(|| ToolError("agentId is required".into()))?;
+    let prompt = text(arguments, "prompt").unwrap_or_default();
+    if prompt.trim().is_empty() {
+        return Err(ToolError("prompt is required".into()));
+    }
+    let task_id = match arguments.get("taskId").and_then(Value::as_str) {
+        Some(task) => Some(task.parse().map_err(|_| ToolError("taskId is not an id".into()))?),
+        None => None,
+    };
+    let request = StartRequest {
+        project,
+        agent_id,
+        task_id,
+        prompt,
+        settings: settings(arguments)?,
+        request_id: text(arguments, "requestId"),
+    };
+    let caller_key = match caller {
+        Caller::User => "user".to_owned(),
+        Caller::Agent(scope) => scope.token.clone(),
+    };
+    orchestration.start(projects, catalog, supervisor, &caller_key, request).await.map_err(ToolError)
+}
+
+fn agent_summary(agent: Agent, profile: Option<AgentProfile>, choices: Option<(Value, Value, u64)>) -> Value {
+    let mut summary = json!({ "id": agent.id, "name": agent.name, "source": agent.source, "command": agent.command.command });
+    if let Some(profile) = profile {
+        summary["profile"] = json!({
+            "agentInfo": profile.agent_info,
+            "capabilities": profile.capabilities,
+            "authMethods": profile.auth_methods,
+            "learnedAtMs": profile.learned_at_ms,
+            // The agent now runs something else than when it was learned.
+            "stale": !profile.is_for(&agent.command),
+        });
+    }
+    if let Some((modes, config_options, at)) = choices {
+        summary["lastChoices"] = json!({ "modes": modes, "configOptions": config_options, "learnedAtMs": at });
+    }
+    summary
+}
+
 struct ToolError(String);
 
 impl From<&str> for ToolError {
     fn from(message: &str) -> Self {
         ToolError(message.into())
+    }
+}
+
+impl From<String> for ToolError {
+    fn from(message: String) -> Self {
+        ToolError(message)
     }
 }
 
@@ -164,6 +355,18 @@ fn id(arguments: &Value, key: &str) -> Result<uuid::Uuid, ToolError> {
     value.parse().map_err(|_| ToolError(format!("{key} is not an id: {value}")))
 }
 
+/// The project a tool works in: the one asked for, which for an agent's
+/// token must be its own.
+fn project_of(arguments: &Value, caller: &Caller) -> Result<ProjectId, ToolError> {
+    let project = id(arguments, "projectId")?;
+    if let Caller::Agent(scope) = caller
+        && scope.project != project
+    {
+        return Err(ToolError("this agent's token is for another project".into()));
+    }
+    Ok(project)
+}
+
 fn status(arguments: &Value) -> Result<Option<TaskStatus>, ToolError> {
     match arguments.get("status") {
         None | Some(Value::Null) => Ok(None),
@@ -173,67 +376,147 @@ fn status(arguments: &Value) -> Result<Option<TaskStatus>, ToolError> {
     }
 }
 
+/// Configuration options in the order they are applied: a list of
+/// `{ configId, value }`, or an object for a single call.
+fn settings(arguments: &Value) -> Result<Vec<(String, Value)>, ToolError> {
+    match arguments.get("settings") {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| {
+                let id = item
+                    .get("configId")
+                    .or_else(|| item.get("id"))
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| ToolError("each setting needs a configId".into()))?;
+                Ok((id.to_owned(), item.get("value").cloned().unwrap_or(Value::Null)))
+            })
+            .collect(),
+        Some(Value::Object(map)) => Ok(map.iter().map(|(id, value)| (id.clone(), value.clone())).collect()),
+        Some(_) => Err(ToolError("settings is a list of {configId, value}, or an object".into())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use aiddiction_api::{NewProject, ProjectSource};
+    use aiddiction_api::{NewProject, ProjectSource, TaskStatus};
     use tokio::sync::broadcast;
 
     use super::*;
+    use crate::orchestrate::{AgentScope, Caller, Orchestrator};
     use crate::store::Store;
 
-    fn projects() -> (Arc<Projects>, ProjectId, [tempfile::TempDir; 2]) {
+    fn projects() -> (Arc<Projects>, ProjectId, Arc<Store>, [tempfile::TempDir; 2]) {
         let (root, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let store = Arc::new(Store::open(data.path()).unwrap());
-        let projects = Arc::new(Projects::open(root.path(), data.path(), store, broadcast::channel(8).0).unwrap());
+        let projects = Arc::new(Projects::open(root.path(), data.path(), store.clone(), broadcast::channel(8).0).unwrap());
         let project = projects.create(NewProject { name: "web".into(), source: ProjectSource::Empty }).unwrap();
-        (projects, project.id, [root, data])
+        (projects, project.id, store, [root, data])
     }
 
-    fn request(projects: &Projects, method: &str, params: Value) -> Value {
-        handle(projects, &json!({ "jsonrpc": "2.0", "id": 7, "method": method, "params": params })).unwrap()
+    async fn request(projects: &Projects, caller: &Caller, method: &str, params: Value) -> Value {
+        let catalog = Catalog::new(&[], vec![]);
+        let data = tempfile::tempdir().unwrap().keep();
+        let store = Arc::new(Store::open(&data).unwrap());
+        let supervisor = Supervisor::new(broadcast::channel(1).0, store);
+        let orchestration = Orchestrator::new("http://127.0.0.1:1/api/v1/mcp".into());
+        handle(projects, &catalog, &supervisor, &orchestration, caller, &json!({ "jsonrpc": "2.0", "id": 7, "method": method, "params": params }))
+            .await
+            .unwrap()
     }
 
     /// A tool's output, parsed, or its error text.
-    fn tool(projects: &Projects, name: &str, arguments: Value) -> Result<Value, String> {
-        let result = request(projects, "tools/call", json!({ "name": name, "arguments": arguments }))["result"].clone();
+    async fn tool(projects: &Projects, name: &str, arguments: Value) -> Result<Value, String> {
+        let result = request(projects, &Caller::User, "tools/call", json!({ "name": name, "arguments": arguments })).await["result"].clone();
         let text = result["content"][0]["text"].as_str().unwrap().to_owned();
         if result["isError"] == true { Err(text) } else { Ok(serde_json::from_str(&text).unwrap()) }
     }
 
-    #[test]
-    fn a_notification_gets_no_answer_and_versions_are_agreed() {
-        let (projects, _, _dirs) = projects();
-        assert_eq!(handle(&projects, &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })), None);
-        let version = |asked: &str| request(&projects, "initialize", json!({ "protocolVersion": asked }))["result"]["protocolVersion"].clone();
-        assert_eq!(version("2025-03-26"), "2025-03-26");
-        assert_eq!(version("1999-01-01"), VERSIONS[0]);
-        assert_eq!(request(&projects, "ping", json!({}))["result"], json!({}));
-        assert_eq!(request(&projects, "resources/list", json!({}))["error"]["code"], -32601);
+    #[tokio::test]
+    async fn a_notification_gets_no_answer_and_versions_are_agreed() {
+        let (projects, _, _, _dirs) = projects();
+        let catalog = Catalog::new(&[], vec![]);
+        let data = tempfile::tempdir().unwrap().keep();
+        let store = Arc::new(Store::open(&data).unwrap());
+        let supervisor = Supervisor::new(broadcast::channel(1).0, store);
+        let orchestration = Orchestrator::new("http://127.0.0.1:1/api/v1/mcp".into());
+        assert_eq!(
+            handle(&projects, &catalog, &supervisor, &orchestration, &Caller::User, &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))
+                .await,
+            None
+        );
+        let version = |asked: &'static str| {
+            let projects = &projects;
+            async move { request(projects, &Caller::User, "initialize", json!({ "protocolVersion": asked })).await["result"]["protocolVersion"].clone() }
+        };
+        assert_eq!(version("2025-03-26").await, "2025-03-26");
+        assert_eq!(version("1999-01-01").await, VERSIONS[0]);
+        assert_eq!(request(&projects, &Caller::User, "ping", json!({})).await["result"], json!({}));
+        assert_eq!(request(&projects, &Caller::User, "resources/list", json!({})).await["error"]["code"], -32601);
     }
 
-    #[test]
-    fn an_agent_finds_the_project_and_works_its_board() {
-        let (projects, project, _dirs) = projects();
-        let listed = tool(&projects, "list_projects", json!({})).unwrap();
+    #[tokio::test]
+    async fn an_agent_finds_the_project_and_works_its_board() {
+        let (projects, project, _, _dirs) = projects();
+        let listed = tool(&projects, "list_projects", json!({})).await.unwrap();
         assert_eq!(listed[0]["id"], json!(project));
-        let card = tool(&projects, "create_task", json!({ "projectId": project, "title": "Docs", "markdown": "all of them" })).unwrap();
+        let card = tool(&projects, "create_task", json!({ "projectId": project, "title": "Docs", "markdown": "all of them" })).await.unwrap();
         assert_eq!(card["status"], "todo");
         // Moving a card is its status alone: the rest stays.
-        let moved = tool(&projects, "update_task", json!({ "projectId": project, "taskId": card["id"], "status": "inProgress" })).unwrap();
+        let moved = tool(&projects, "update_task", json!({ "projectId": project, "taskId": card["id"], "status": "inProgress" })).await.unwrap();
         assert_eq!((moved["title"].as_str(), moved["markdown"].as_str(), moved["status"].as_str()), (Some("Docs"), Some("all of them"), Some("inProgress")));
-        tool(&projects, "delete_task", json!({ "projectId": project, "taskId": card["id"] })).unwrap();
-        assert_eq!(tool(&projects, "list_tasks", json!({ "projectId": project })).unwrap(), json!([]));
+        tool(&projects, "delete_task", json!({ "projectId": project, "taskId": card["id"] })).await.unwrap();
+        assert_eq!(tool(&projects, "list_tasks", json!({ "projectId": project })).await.unwrap(), json!([]));
     }
 
-    #[test]
-    fn what_goes_wrong_in_a_tool_is_its_result_not_a_protocol_error() {
-        let (projects, project, _dirs) = projects();
-        assert!(tool(&projects, "list_tasks", json!({})).unwrap_err().contains("projectId is required"));
-        assert!(tool(&projects, "list_tasks", json!({ "projectId": uuid::Uuid::nil() })).unwrap_err().contains("no such project"));
-        assert!(tool(&projects, "create_task", json!({ "projectId": project, "title": " " })).unwrap_err().contains("title"));
-        assert!(tool(&projects, "create_task", json!({ "projectId": project, "title": "x", "status": "later" })).unwrap_err().contains("status"));
-        assert_eq!(request(&projects, "tools/call", json!({ "name": "nope" }))["error"]["code"], -32602);
+    #[tokio::test]
+    async fn what_goes_wrong_in_a_tool_is_its_result_not_a_protocol_error() {
+        let (projects, project, _, _dirs) = projects();
+        assert!(tool(&projects, "list_tasks", json!({})).await.unwrap_err().contains("projectId is required"));
+        assert!(tool(&projects, "list_tasks", json!({ "projectId": uuid::Uuid::nil() })).await.unwrap_err().contains("no such project"));
+        assert!(tool(&projects, "create_task", json!({ "projectId": project, "title": " " })).await.unwrap_err().contains("title"));
+        assert!(tool(&projects, "create_task", json!({ "projectId": project, "title": "x", "status": "later" })).await.unwrap_err().contains("status"));
+        assert_eq!(request(&projects, &Caller::User, "tools/call", json!({ "name": "nope" })).await["error"]["code"], -32602);
+    }
+
+    #[tokio::test]
+    async fn an_agents_token_reaches_its_own_board_and_no_further() {
+        let (projects, project, _, _dirs) = projects();
+        let other = projects.create(NewProject { name: "other".into(), source: ProjectSource::Empty }).unwrap();
+        let scope = AgentScope {
+            token: "t".into(),
+            project,
+            task: None,
+            instance: uuid::Uuid::now_v7(),
+            session: None,
+        };
+        let agent = Caller::Agent(scope);
+
+        let listed = request(&projects, &agent, "tools/list", json!({})).await;
+        let names: Vec<_> = listed["result"]["tools"].as_array().unwrap().iter().filter_map(|tool| tool["name"].as_str()).collect();
+        assert!(names.contains(&"list_tasks"));
+        assert!(!names.contains(&"start_agent"), "an agent cannot start further agents: {names:?}");
+        assert!(!names.contains(&"list_subagents"));
+
+        let seen = request(&projects, &agent, "tools/call", json!({ "name": "list_projects", "arguments": {} })).await;
+        let seen: Value = serde_json::from_str(seen["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(seen.as_array().unwrap().len(), 1);
+        assert_eq!(seen[0]["id"], json!(project));
+
+        let refused = request(&projects, &agent, "tools/call", json!({ "name": "list_tasks", "arguments": { "projectId": other.id } })).await;
+        assert_eq!(refused["result"]["isError"], true);
+        assert!(refused["result"]["content"][0]["text"].as_str().unwrap().contains("another project"));
+
+        // The card on its own board is open to it.
+        let card = json!({ "projectId": project, "title": "Child", "status": "inProgress" });
+        let made = request(&projects, &agent, "tools/call", json!({ "name": "create_task", "arguments": card })).await;
+        assert!(made["result"]["isError"].is_null(), "{made}");
+        assert_eq!(task_status(&projects, project).await, TaskStatus::InProgress);
+    }
+
+    async fn task_status(projects: &Projects, project: ProjectId) -> TaskStatus {
+        projects.tasks(project).unwrap()[0].status
     }
 }

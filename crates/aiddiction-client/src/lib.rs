@@ -221,6 +221,31 @@ impl ServerClient {
         self.call(Method::DELETE, &format!("/instances/{id}"), None).await
     }
 
+    /// One JSON-RPC message to the server's MCP endpoint, as an agent sends
+    /// it; `None` for a notification, which the server takes with 202.
+    pub async fn mcp(&self, message: serde_json::Value) -> Result<Option<serde_json::Value>> {
+        let response = self
+            .http
+            .post(format!("{}/api/v1/mcp", self.base))
+            .bearer_auth(&*self.token)
+            .json(&message)
+            .timeout(Duration::from_secs(300))
+            .send()
+            .await?;
+        let status = response.status();
+        if status == StatusCode::ACCEPTED {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(match serde_json::from_str::<ErrorBody>(&text) {
+                Ok(body) => Error::Api { status: status.as_u16(), code: body.error.code, message: body.error.message },
+                Err(_) => Error::Api { status: status.as_u16(), code: "http".into(), message: format!("the server answered {status}") },
+            });
+        }
+        Ok(Some(response.json().await?))
+    }
+
     async fn socket(&self, path: &str) -> Result<Socket> {
         let url = format!("{}/api/v1{path}", self.base.replacen("http", "ws", 1));
         let mut request = url.into_client_request().map_err(|error| Error::Network(error.to_string()))?;

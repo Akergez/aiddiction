@@ -99,8 +99,8 @@ and linker (host clang + the NDK's sysroot + rust-lld).
 | Crate | Role |
 |---|---|
 | `aiddiction-paths` | Where both programs keep files: an XDG variable if set, else the platform's standard directory. |
-| `aiddiction-api` | REST/event DTOs and the names of the proxy's ACP extensions (`_aiddiction/attach`, `_aiddiction/prompt_finished`, `_aiddiction/request_resolved`, `_meta.aiddictionSeq`) and of the adapters' `_auth/status_update`. No Tokio, no UI. `SessionSummary` carries what a list of conversations shows: busy, the agent's open questions, a preview, the last sequence number. |
-| `aiddiction-server` | The server: `config`, `store` (JSON files), `agents` (catalogue), `projects` (dirs, git clone), `instances` (agent processes), `login` (an agent's terminal sign-in), `proxy` (ACP), `http` (routes). |
+| `aiddiction-api` | REST/event DTOs and the names of the proxy's ACP extensions (`_aiddiction/attach`, `_aiddiction/prompt_finished`, `_aiddiction/request_resolved`, `_meta.aiddictionSeq`) and of the adapters' `_auth/status_update`. No Tokio, no UI. `SessionSummary` carries what a list of conversations shows: busy, the agent's open questions, a preview, the last sequence number (and the card an agent was started on); `Task::session` names the thread started on a card. |
+| `aiddiction-server` | The server: `config`, `store` (JSON files), `agents` (catalogue), `projects` (dirs, git clone), `instances` (agent processes), `login` (an agent's terminal sign-in), `proxy` (ACP), `orchestrate` (starting an agent from MCP), `http` (routes). |
 | `aiddiction-client` | REST + event socket + ACP socket on Tokio. No UI, and it must stay that way. |
 | `aiddiction` | The application: a library (Android loads it) and a thin `main.rs`. |
 | `aiddiction-fake-agent` | A scripted ACP agent (stdio) for tests and the demo. |
@@ -132,6 +132,34 @@ gives every project's instances with them, and `POST
 /instances/{id}/permission` answers an agent's question with no conversation
 open, settling it for every client like a client's answer would. Whatever a
 list shows that changes fires `InstancesChanged`.
+
+### Orchestration from MCP
+
+An agent already talking to the board (`/api/v1/mcp`) can start another one
+on a task card: `list_agents` (with `projectId` for the model and settings
+the agent last offered there), `start_agent`, `list_subagents`. The
+capabilities in `list_agents` come from the agent's last `initialize`,
+kept per agent id in `agent-profiles.json` (`Supervisor::profile`); a
+changed command makes the profile stale. The settings an agent last gave
+in `session/new` are read from the running instance, not stored.
+
+`start_agent` (`orchestrate.rs`) starts or reuses the project's instance,
+waits for its `initialize`, opens a session as the server itself
+(`Proxy::open_session`), applies `settings` in the order given, sends the
+prompt and returns the ids — not the turn. A setting the agent refuses is
+named and no prompt is sent. `requestId` makes a retry the same start.
+The prompt carries the card's id and title and says to write the result on
+it; the card's `session` names the thread. The thread is an ordinary
+session in the common list (`SessionSummary::task_id` says which card), so
+the person opens it from the inbox or from the card's "Open conversation",
+answers permissions and stops it as usual; the caller only gets metadata
+and reads the card for the result.
+
+An agent started this way gets a token of its own (`Orchestrator::scope`):
+it reaches `/mcp` only and only its project's board, without `list_agents`,
+`list_subagents` or `start_agent`, and cannot delete the card it works on.
+The person's own bearer still opens everything; a separate token per
+person's client is not there yet.
 
 ### Signing an agent in
 
@@ -235,6 +263,9 @@ registry.
   `Thread::run_start`); its list redraws from a run's first entry. The plan
   and the agent's mode sit on the composer (gpui-adaptive's `Composer`); the bar
   has the title, Review and close.
+- A board card whose `Task::session` is still running has "Open conversation"
+  among its actions (`ui/project.rs`): the way into the thread an MCP
+  `start_agent` made. Those threads are in the inbox like any other.
 - A scroll area of one axis made with gpui's `overflow_y_scroll()` /
   `overflow_x_scroll()` also takes `.lock_scroll_axis()` (a `uniform_list`:
   `style().restrict_scroll_to_axis`); without it a finger's sideways swipe

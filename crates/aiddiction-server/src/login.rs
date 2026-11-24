@@ -203,6 +203,7 @@ mod tests {
     async fn a_sign_in_reads_what_it_is_given() {
         let dir = tempfile::tempdir().unwrap();
         let agent = Agent {
+            profile: None,
             id: "a".into(),
             name: "A".into(),
             source: aiddiction_api::AgentSource::Custom,

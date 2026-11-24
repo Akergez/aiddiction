@@ -141,6 +141,7 @@ impl Shell {
     /// press for a finger).
     fn render_board(&mut self, server: &Entity<ServerConnection>, project: ProjectId, tasks: &[Task], cx: &mut Context<Self>) -> Board {
         let mut board = Board::new();
+        let project_info = server.read(cx).project(project).cloned();
         for (index, (status, label)) in COLUMNS.into_iter().enumerate() {
             let shell = cx.entity().downgrade();
             let adds = Command::new(SharedString::from(format!("new-task-{index}")), "New task").icon(IconName::Plus).on_trigger(
@@ -161,13 +162,38 @@ impl Shell {
                         );
                     }
                 }
-                let (deleted, server) = (task.id, server.clone());
+                let (deleted, delete_server) = (task.id, server.clone());
                 actions = actions.quick(
                     Command::new(SharedString::from(format!("task-{}-delete", task.id)), "Delete task")
                         .icon(IconName::Delete)
                         .destructive()
-                        .on_trigger(move |_, cx| server.update(cx, |server, cx| server.delete_task(project, deleted, cx))),
+                        .on_trigger(move |_, cx| delete_server.update(cx, |server, cx| server.delete_task(project, deleted, cx))),
                 );
+                // The thread an agent was started on for this card, while it
+                // is still running: the card is the way into it.
+                if let Some(link) = task.session.clone()
+                    && let Some(project_info) = project_info.clone()
+                    && let Some(instance) = server
+                        .read(cx)
+                        .instances
+                        .get(&project)
+                        .and_then(|instances| instances.iter().find(|instance| instance.id == link.instance_id))
+                        .filter(|instance| matches!(instance.state, InstanceState::Starting | InstanceState::Ready))
+                        .cloned()
+                {
+                    let shell = cx.entity().downgrade();
+                    actions = actions.quick(
+                        Command::new(SharedString::from(format!("task-{}-open", task.id)), "Open conversation")
+                            .icon(IconName::Bot)
+                            .on_trigger(move |window, cx| {
+                                shell
+                                    .update(cx, |shell, cx| {
+                                        shell.open_chat(&project_info, &instance, Some(link.session_id.clone()), None, window, cx)
+                                    })
+                                    .ok();
+                            }),
+                    );
+                }
                 let (edited, shell) = (task.clone(), cx.entity().downgrade());
                 let card = Card::new(SharedString::from(format!("task-{}", task.id)), task.title.clone(), task.markdown.clone(), move |window, cx| {
                     shell.update(cx, |shell, cx| shell.edit_task(project, Some(edited.clone()), edited.status, window, cx)).ok();

@@ -15,6 +15,7 @@ mod install;
 mod instances;
 mod login;
 mod mcp;
+mod orchestrate;
 mod projects;
 mod proxy;
 mod store;
@@ -91,19 +92,23 @@ async fn serve(config: Config, store: Arc<Store>, token: String, new_token: bool
     let (events, _) = broadcast::channel(256);
     let catalog = Catalog::new(&config.agents, store.custom_agents()?);
     let projects = Arc::new(Projects::open(&config.projects_root, &config.data_dir, store.clone(), events.clone())?);
-    let state = Arc::new(http::AppState {
-        token: token.clone(),
-        store,
-        catalog,
-        projects,
-        supervisor: Supervisor::new(events.clone()),
-        events,
-    });
 
     let listener = tokio::net::TcpListener::bind(config.listen)
         .await
         .with_context(|| format!("listening on {}", config.listen))?;
     let address = listener.local_addr()?;
+    // The agents the server starts reach it from this machine: the address
+    // it listens on, or the loopback one when it listens on all of them.
+    let mcp_url = format!("http://{}/api/v1/mcp", reachable_at(address));
+    let state = Arc::new(http::AppState {
+        token: token.clone(),
+        store: store.clone(),
+        catalog,
+        projects,
+        supervisor: Supervisor::new(events.clone(), store),
+        orchestration: crate::orchestrate::Orchestrator::new(mcp_url),
+        events,
+    });
     tracing::info!("listening on http://{address}, projects in {}", config.projects_root.display());
     if new_token {
         tracing::info!("a new access token was made: {token}");
@@ -138,4 +143,15 @@ async fn serve(config: Config, store: Arc<Store>, token: String, new_token: bool
     // Give the agents the moment `stop` promises them.
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     Ok(())
+}
+
+/// Where a process on this machine reaches the server: its listening address,
+/// the loopback one when it listens on every interface.
+fn reachable_at(address: std::net::SocketAddr) -> String {
+    match address {
+        std::net::SocketAddr::V4(v4) if v4.ip().is_unspecified() => format!("127.0.0.1:{}", v4.port()),
+        std::net::SocketAddr::V4(v4) => v4.to_string(),
+        std::net::SocketAddr::V6(v6) if v6.ip().is_unspecified() => format!("[::1]:{}", v6.port()),
+        std::net::SocketAddr::V6(v6) => format!("[{}]:{}", v6.ip(), v6.port()),
+    }
 }
