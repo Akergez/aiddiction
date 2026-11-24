@@ -136,14 +136,17 @@ async fn serve(
     let address = addresses[0];
     // The agents the server starts reach it from this machine: the address
     // it listens on, or the loopback one when it listens on all of them.
-    let mcp_url = format!("http://{}/api/v1/mcp", reachable_at(address));
+    let mcp_url = config
+        .mcp_url
+        .clone()
+        .unwrap_or_else(|| format!("http://{}/api/v1/mcp", reachable_at(address)));
     let state = Arc::new(http::AppState {
         token: token.clone(),
         store: store.clone(),
         catalog,
         projects,
         supervisor: Supervisor::new(events.clone(), store.clone()),
-        orchestration: crate::orchestrate::Orchestrator::new(mcp_url),
+            orchestration: crate::orchestrate::Orchestrator::new(mcp_url, config.mcp_urls.clone().into_iter().collect()),
         worktrees: crate::worktrees::Worktrees::open(&config.projects_root, store, events.clone())?,
         events,
     });

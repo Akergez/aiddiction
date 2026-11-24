@@ -11,7 +11,9 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use aiddiction_api::{InstanceId, Project, ProjectId, ProjectState, Task, TaskId, TaskSession, WorktreeId};
+use aiddiction_api::{
+    InstanceId, Project, ProjectId, ProjectState, Task, TaskId, TaskSession, WorktreeId,
+};
 use serde_json::{Value, json};
 
 use crate::agents::Catalog;
@@ -61,6 +63,7 @@ pub struct StartRequest {
 pub struct Orchestrator {
     /// Where the agents started here reach the board.
     mcp_url: String,
+    mcp_urls: HashMap<String, String>,
     /// Tokens of the agents started here, by token.
     tokens: Mutex<HashMap<String, AgentScope>>,
     /// What an already started call answered, by caller and request id.
@@ -68,8 +71,13 @@ pub struct Orchestrator {
 }
 
 impl Orchestrator {
-    pub fn new(mcp_url: String) -> Self {
-        Self { mcp_url, tokens: Mutex::new(HashMap::new()), started: Mutex::new(HashMap::new()) }
+    pub fn new(mcp_url: String, mcp_urls: HashMap<String, String>) -> Self {
+        Self {
+            mcp_url,
+            mcp_urls,
+            tokens: Mutex::new(HashMap::new()),
+            started: Mutex::new(HashMap::new()),
+        }
     }
 
     /// The scope of an agent's token, while that agent is one of ours.
@@ -89,8 +97,14 @@ impl Orchestrator {
         caller: &str,
         request: StartRequest,
     ) -> Result<Value, String> {
-        let repeat = request.request_id.as_ref().map(|id| format!("{caller}:{id}"));
-        if let Some(previous) = repeat.as_ref().and_then(|key| self.started.lock().unwrap().get(key).cloned()) {
+        let repeat = request
+            .request_id
+            .as_ref()
+            .map(|id| format!("{caller}:{id}"));
+        if let Some(previous) = repeat
+            .as_ref()
+            .and_then(|key| self.started.lock().unwrap().get(key).cloned())
+        {
             return Ok(previous);
         }
 
@@ -109,18 +123,32 @@ impl Orchestrator {
             ),
             None => None,
         };
-        let agent = catalog.get(&request.agent_id).ok_or_else(|| format!("unknown agent: {}", request.agent_id))?;
+        let agent = catalog
+            .get(&request.agent_id)
+            .ok_or_else(|| format!("unknown agent: {}", request.agent_id))?;
         let dir = projects.dir(&project);
         let worktree = match request.worktree_id {
-            Some(worktree) => worktrees.get(&project, &dir, worktree).await.map_err(|error| match error {
-                WorktreeError::NotFound => "no such worktree in the project".to_owned(),
-                error => format!("{error:#}"),
-            })?,
-            None => worktrees.get(&project, &dir, project.id).await.map_err(|error| format!("{error:#}"))?,
+            Some(worktree) => worktrees
+                .get(&project, &dir, worktree)
+                .await
+                .map_err(|error| match error {
+                    WorktreeError::NotFound => "no such worktree in the project".to_owned(),
+                    error => format!("{error:#}"),
+                })?,
+            None => worktrees
+                .get(&project, &dir, project.id)
+                .await
+                .map_err(|error| format!("{error:#}"))?,
         };
 
         let instance = supervisor
-            .start(project.id, worktree.id, worktree.name.clone(), std::path::PathBuf::from(&worktree.path), agent.clone())
+            .start(
+                project.id,
+                worktree.id,
+                worktree.name.clone(),
+                std::path::PathBuf::from(&worktree.path),
+                agent.clone(),
+            )
             .map_err(|error| format!("could not start the agent: {error:#}"))?;
         let init = instance.proxy.wait_initialized(READY_TIMEOUT).await?;
 
@@ -144,7 +172,7 @@ impl Orchestrator {
                 json!([{
                     "type": "http",
                     "name": "aiddiction",
-                    "url": self.mcp_url,
+                    "url": self.mcp_urls.get(&agent.id).unwrap_or(&self.mcp_url),
                     "headers": [{ "name": "Authorization", "value": format!("Bearer {token}") }],
                 }]),
                 true,
@@ -175,7 +203,10 @@ impl Orchestrator {
         }
 
         let text = prompt_text(&request, &project, task.as_ref(), scoped);
-        instance.proxy.prompt(&session, &text, request.task_id).await;
+        instance
+            .proxy
+            .prompt(&session, &text, request.task_id)
+            .await;
 
         if let Some(task) = &task
             && let Err(error) = projects.link_session(
@@ -216,7 +247,12 @@ impl Orchestrator {
 
 /// The prompt the child is given: the caller's words, then where the card
 /// is and what to do with it.
-fn prompt_text(request: &StartRequest, project: &Project, task: Option<&Task>, board: bool) -> String {
+fn prompt_text(
+    request: &StartRequest,
+    project: &Project,
+    task: Option<&Task>,
+    board: bool,
+) -> String {
     let mut text = request.prompt.trim().to_owned();
     let Some(task) = task else { return text };
     text.push_str(&format!(
@@ -231,11 +267,17 @@ fn prompt_text(request: &StartRequest, project: &Project, task: Option<&Task>, b
              finished and checked.",
         );
     } else {
-        text.push_str(" This agent was not given the board's tools; answer in the conversation instead.");
+        text.push_str(
+            " This agent was not given the board's tools; answer in the conversation instead.",
+        );
     }
     text
 }
 
 fn new_token() -> String {
-    format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple())
+    format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
 }

@@ -7,6 +7,15 @@
 # listen = ["127.0.0.1:7878", "[::1]:7878"]
 # AIDDICTION_LISTEN also accepts a comma-separated list of addresses.
 
+# URL that locally spawned agents use to reach this server. Set this to the
+# host address visible from an agent container, for example:
+# mcp_url = "http://host.docker.internal:7878/api/v1/mcp"
+# Per-agent URLs override `mcp_url`, which is useful when some agents run in
+# Docker and others run on the host:
+# [mcp_urls]
+# codex = "http://host.docker.internal:7878/api/v1/mcp"
+# claude = "http://127.0.0.1:7878/api/v1/mcp"
+
 # Where new projects are made. Existing folders can be projects wherever
 # they are.
 # projects_root = "~/aiddiction-projects"

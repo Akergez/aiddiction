@@ -5,6 +5,7 @@
 //!
 //! ```toml
 //! listen = ["127.0.0.1:7878", "[::1]:7878"]
+//! mcp_url = "http://host.docker.internal:7878/api/v1/mcp"
 //! projects_root = "~/aiddiction-projects"
 //! token = "…"                 # otherwise generated once into the data dir
 //!
@@ -28,6 +29,9 @@ use serde::Deserialize;
 struct File {
     #[serde(default, deserialize_with = "deserialize_listen")]
     listen: Vec<SocketAddr>,
+    mcp_url: Option<String>,
+    #[serde(default)]
+    mcp_urls: BTreeMap<String, String>,
     projects_root: Option<String>,
     token: Option<String>,
     #[serde(default)]
@@ -49,6 +53,8 @@ pub struct ConfigAgent {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub listen: Vec<SocketAddr>,
+    pub mcp_url: Option<String>,
+    pub mcp_urls: BTreeMap<String, String>,
     pub projects_root: PathBuf,
     pub data_dir: PathBuf,
     pub token: Option<String>,
@@ -90,6 +96,8 @@ impl Config {
 
         Ok(Self {
             listen,
+            mcp_url: env("AIDDICTION_MCP_URL").or(file.mcp_url),
+            mcp_urls: file.mcp_urls,
             projects_root,
             data_dir,
             token: env("AIDDICTION_TOKEN").or(file.token),
