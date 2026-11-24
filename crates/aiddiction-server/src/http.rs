@@ -299,10 +299,14 @@ async fn delete_project(
     let project = state.projects.get(id).ok_or(ProjectError::NotFound)?;
     let dir = state.projects.dir(&project);
     state.supervisor.stop_project(id);
-    // The checkouts the server made for the project go with it; the branch
-    // stays in the repository.
-    state.worktrees.remove_project(&project, &dir);
-    state.projects.delete(id, options.delete_files)?;
+    // Its record goes first: a store that cannot write leaves the project,
+    // its worktrees and its folder as they were. Then the checkouts the
+    // server made for it, then the folder itself.
+    let project = state.projects.forget(id)?;
+    state.worktrees.remove_project(&project, &dir).await;
+    if options.delete_files {
+        state.projects.remove_files(&project)?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

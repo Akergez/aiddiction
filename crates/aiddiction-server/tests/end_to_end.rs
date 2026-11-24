@@ -476,6 +476,17 @@ async fn agents_work_in_a_worktree_of_their_own_and_its_branch_outlives_it() {
     // The project's own checkout is not one to remove.
     let main = client.delete_worktree(project.id, project.id).await.unwrap_err();
     assert!(matches!(main, aiddiction_client::Error::Api { status: 400, .. }), "{main}");
+
+    // Deleting the project takes the server's worktrees with it, and leaves
+    // the adopted folder and the branch alone.
+    let extra = client
+        .create_worktree(project.id, &aiddiction_api::NewWorktree { name: Some("gone".into()), ..Default::default() })
+        .await
+        .unwrap();
+    client.delete_project(project.id, true).await.unwrap();
+    assert!(!std::path::Path::new(&extra.path).exists());
+    assert!(repo.path().join("a.txt").is_file(), "an adopted folder stays");
+    assert!(git_in(repo.path(), &["rev-parse", "--verify", "refs/heads/aiddiction/gone"]).status.success());
 }
 
 /// MCP starts an agent in a given checkout: the thread is in that worktree,

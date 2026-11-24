@@ -229,21 +229,42 @@ impl Projects {
         Ok(renamed)
     }
 
-    /// Forgets the project. Its directory goes too only when asked, and never
-    /// for a folder that was adopted rather than made.
-    pub fn delete(&self, id: ProjectId, delete_files: bool) -> Result<(), ProjectError> {
+    /// Forgets the project, keeping its folder. Answers the project as it was.
+    /// Nothing changes when its record cannot be written.
+    pub fn forget(&self, id: ProjectId) -> Result<Project, ProjectError> {
         let mut list = self.list.lock().unwrap();
         let index = list.iter().position(|project| project.id == id).ok_or(ProjectError::NotFound)?;
-        let project = list.remove(index);
-        self.store.save_projects(&list)?;
+        let project = list[index].clone();
+        let mut next = list.clone();
+        next.remove(index);
+        self.store.save_projects(&next)?;
+        *list = next;
         drop(list);
-        if delete_files && project.path.is_none() {
-            let dir = self.dir(&project);
-            if dir.starts_with(&self.root) && dir != self.root {
-                std::fs::remove_dir_all(&dir).with_context(|| format!("removing {}", dir.display()))?;
-            }
-        }
         let _ = self.events.send(ServerEvent::ProjectsChanged);
+        Ok(project)
+    }
+
+    /// Takes the project's folder away, when the server made it. A folder
+    /// that was adopted stays.
+    pub fn remove_files(&self, project: &Project) -> Result<(), ProjectError> {
+        if project.path.is_some() {
+            return Ok(());
+        }
+        let dir = self.dir(project);
+        if dir.starts_with(&self.root) && dir != self.root {
+            std::fs::remove_dir_all(&dir).with_context(|| format!("removing {}", dir.display()))?;
+        }
+        Ok(())
+    }
+
+    /// Forgets the project. Its directory goes too only when asked, and never
+    /// for a folder that was adopted rather than made.
+    #[cfg(test)]
+    pub fn delete(&self, id: ProjectId, delete_files: bool) -> Result<(), ProjectError> {
+        let project = self.forget(id)?;
+        if delete_files {
+            self.remove_files(&project)?;
+        }
         Ok(())
     }
 
@@ -429,8 +450,23 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_or_relative_folder_is_refused() {
+    fn a_project_whose_record_cannot_be_kept_stays() {
         let (root, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let projects = projects(root.path(), data.path());
+        let project = projects.create(NewProject { name: "kept".into(), source: ProjectSource::Empty }).unwrap();
+
+        // The store cannot write any more: its folder is a file now.
+        let data_path = data.path().to_path_buf();
+        std::fs::remove_dir_all(&data_path).unwrap();
+        std::fs::write(&data_path, b"not a folder").unwrap();
+
+        assert!(projects.forget(project.id).is_err());
+        assert!(projects.get(project.id).is_some(), "the project is still there");
+        assert!(projects.dir(&project).is_dir(), "and so is its folder");
+    }
+
+    #[test]
+    fn a_missing_or_relative_folder_is_refused() {        let (root, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let projects = projects(root.path(), data.path());
         for path in ["relative/path", "/no/such/folder"] {
             let source = ProjectSource::Existing { path: path.into() };

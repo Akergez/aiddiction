@@ -26,6 +26,9 @@ pub struct Worktrees {
     store: Arc<Store>,
     list: Mutex<Vec<Worktree>>,
     events: broadcast::Sender<ServerEvent>,
+    /// One at a time: a name and a branch are checked, a worktree is made and
+    /// its record is written, and two of those must not interleave.
+    changing: tokio::sync::Mutex<()>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -53,7 +56,7 @@ impl Worktrees {
         if list.len() != before {
             store.save_worktrees(&list)?;
         }
-        Ok(Self { root: root.join(".aiddiction-worktrees"), store, list: Mutex::new(list), events })
+        Ok(Self { root: root.join(".aiddiction-worktrees"), store, list: Mutex::new(list), events, changing: tokio::sync::Mutex::new(()) })
     }
 
     /// The checkouts of a project, its own first.
@@ -80,6 +83,7 @@ impl Worktrees {
 
     /// Makes a worktree on a new branch, outside the main checkout.
     pub async fn create(&self, project: &Project, dir: &Path, input: NewWorktree) -> Result<Worktree, WorktreeError> {
+        let _changing = self.changing.lock().await;
         let name = match (input.name.as_deref().map(str::trim).filter(|name| !name.is_empty()), input.branch.as_deref()) {
             (Some(name), _) => slug(name, "worktree"),
             (None, Some(branch)) => slug(branch, "worktree"),
@@ -136,16 +140,45 @@ impl Worktrees {
             path: path_text,
             created_at_ms: now_ms(),
         };
-        let mut list = self.list.lock().unwrap();
-        list.push(worktree.clone());
-        self.store.save_worktrees(&list)?;
-        drop(list);
+        // The record and the thing it describes go together: a worktree git
+        // made but the store could not keep would be unknown after a restart,
+        // so it is taken away again, with the branch it was made on.
+        let saved = {
+            let mut list = self.list.lock().unwrap();
+            let mut next = list.clone();
+            next.push(worktree.clone());
+            match self.store.save_worktrees(&next) {
+                Ok(()) => {
+                    *list = next;
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            }
+        };
+        if let Err(error) = saved {
+            tracing::warn!("the worktree {} was made but could not be kept; taking it away again: {error:#}", worktree.path);
+            match git(dir, &["worktree", "remove", "--force", &worktree.path]).await {
+                Ok(output) if output.status.success() => {}
+                Ok(output) => tracing::warn!("could not take the worktree away: {}", String::from_utf8_lossy(&output.stderr).trim()),
+                Err(error) => tracing::warn!("could not take the worktree away: {error}"),
+            }
+            let _ = git(dir, &["worktree", "prune"]).await;
+            if let Some(branch) = &worktree.branch {
+                match git(dir, &["branch", "-D", branch]).await {
+                    Ok(output) if output.status.success() => {}
+                    Ok(output) => tracing::warn!("could not delete the branch {branch}: {}", String::from_utf8_lossy(&output.stderr).trim()),
+                    Err(error) => tracing::warn!("could not delete the branch {branch}: {error}"),
+                }
+            }
+            return Err(WorktreeError::Io(error));
+        }
         let _ = self.events.send(ServerEvent::WorktreesChanged { project_id: project.id });
         Ok(worktree)
     }
 
     /// Removes a worktree the server made. Its branch stays.
     pub async fn remove(&self, project: &Project, dir: &Path, id: WorktreeId) -> Result<(), WorktreeError> {
+        let _changing = self.changing.lock().await;
         if id == project.id {
             return Err(WorktreeError::Main);
         }
@@ -176,7 +209,8 @@ impl Worktrees {
 
     /// Forgets a project's worktrees and takes their folders away: the
     /// project is being deleted, and these are the server's own.
-    pub fn remove_project(&self, project: &Project, dir: &Path) {
+    pub async fn remove_project(&self, project: &Project, dir: &Path) {
+        let _changing = self.changing.lock().await;
         let taken = self.known(project.id);
         for worktree in &taken {
             let path = PathBuf::from(&worktree.path);
@@ -369,5 +403,38 @@ mod tests {
             .await;
         assert!(matches!(again, Err(WorktreeError::Invalid(message)) if message.contains("already exists")));
         worktrees.remove(&project, &dir, made.id).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn two_makes_of_one_name_leave_one_worktree() {
+        let (root, _data, store, project, events) = setup().await;
+        let dir = root.path().join("demo");
+        let worktrees = Worktrees::open(root.path(), store, events).unwrap();
+        let make = || worktrees.create(&project, &dir, NewWorktree { name: Some("same".into()), ..NewWorktree::default() });
+        let (one, two) = tokio::join!(make(), make());
+        assert!(one.is_ok() ^ two.is_ok(), "{one:?} {two:?}");
+        assert_eq!(worktrees.known(project.id).len(), 1);
+        let made = one.or(two).unwrap();
+        assert_eq!(made.name, "same");
+        worktrees.remove(&project, &dir, made.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_worktree_whose_record_cannot_be_kept_is_taken_away_again() {        let (root, data, store, project, events) = setup().await;
+        let dir = root.path().join("demo");
+        let worktrees = Worktrees::open(root.path(), store, events).unwrap();
+
+        // The store cannot write any more: its folder is a file now.
+        let data_path = data.path().to_path_buf();
+        std::fs::remove_dir_all(&data_path).unwrap();
+        std::fs::write(&data_path, b"not a folder").unwrap();
+
+        let made = worktrees.create(&project, &dir, NewWorktree { name: Some("doomed".into()), ..NewWorktree::default() }).await;
+        assert!(made.is_err());
+        assert!(worktrees.known(project.id).is_empty(), "no record is left behind");
+        let path = root.path().join(".aiddiction-worktrees").join(project.id.to_string()).join("doomed");
+        assert!(!path.exists(), "the checkout is taken away");
+        let branch = git(&dir, &["rev-parse", "--verify", "refs/heads/aiddiction/doomed"]).await.unwrap();
+        assert!(!branch.status.success(), "the branch is taken away too");
     }
 }
