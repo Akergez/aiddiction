@@ -278,13 +278,14 @@ impl Worktrees {
         path: &str,
     ) -> Result<Worktree, WorktreeError> {
         let _changing = self.changing.lock().await;
-        let wanted = {
-            let given = Path::new(path.trim());
-            if given.is_absolute() {
-                given.to_path_buf()
-            } else {
-                dir.join(given)
-            }
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .filter(|home| !home.as_os_str().is_empty());
+        let given = expand_home(Path::new(path.trim()), home.as_deref());
+        let wanted = if given.is_absolute() {
+            given
+        } else {
+            dir.join(given)
         };
         let wanted = std::fs::canonicalize(&wanted)
             .map_err(|error| WorktreeError::Invalid(format!("{}: {error}", wanted.display())))?;
@@ -501,6 +502,25 @@ fn checkout_branch(branch: &str) -> Result<(), WorktreeError> {
     }
 }
 
+/// `~` and `~/…` are the home of whoever runs the server, as a shell would
+/// read them; any other path is left as it is.
+fn expand_home(path: &Path, home: Option<&Path>) -> PathBuf {
+    let Some(rest) = path.to_str().and_then(|text| text.strip_prefix('~')) else {
+        return path.to_path_buf();
+    };
+    if !(rest.is_empty() || rest.starts_with('/')) {
+        return path.to_path_buf();
+    }
+    let Some(home) = home else {
+        return path.to_path_buf();
+    };
+    let mut expanded = home.to_path_buf();
+    if !rest.is_empty() {
+        expanded.push(rest.trim_start_matches('/'));
+    }
+    expanded
+}
+
 /// The folder a checkout's repository tops out at, as git sees it: a
 /// subfolder of a checkout is not a checkout of its own.
 async fn top_level(dir: &Path) -> Result<PathBuf, WorktreeError> {
@@ -708,6 +728,37 @@ mod tests {
             matches!(again, Err(WorktreeError::Invalid(message)) if message.contains("already exists"))
         );
         worktrees.remove(&project, &dir, made.id).await.unwrap();
+    }
+
+    #[test]
+    fn a_tilde_is_the_home_of_whoever_runs_the_server() {
+        let home = Path::new("/home/dev");
+        assert_eq!(
+            expand_home(Path::new("~/worktrees/edi"), Some(home)),
+            PathBuf::from("/home/dev/worktrees/edi")
+        );
+        assert_eq!(
+            expand_home(Path::new("~"), Some(home)),
+            PathBuf::from("/home/dev")
+        );
+        // Another user's home, an absolute path and a relative one are left
+        // as they are; so is a tilde with no home to put in its place.
+        assert_eq!(
+            expand_home(Path::new("~dev/edi"), Some(home)),
+            PathBuf::from("~dev/edi")
+        );
+        assert_eq!(
+            expand_home(Path::new("/srv/edi"), Some(home)),
+            PathBuf::from("/srv/edi")
+        );
+        assert_eq!(
+            expand_home(Path::new("edi/wt"), Some(home)),
+            PathBuf::from("edi/wt")
+        );
+        assert_eq!(
+            expand_home(Path::new("~/edi"), None),
+            PathBuf::from("~/edi")
+        );
     }
 
     #[tokio::test]

@@ -286,6 +286,15 @@ impl Proxy {
     /// agent answers `session/prompt` when the whole turn is over, which the
     /// journal and the list of conversations carry instead.
     pub async fn prompt(&self, session: &str, text: &str, task_id: Option<TaskId>) {
+        self.begin(session, text, task_id);
+        let params = json!({ "sessionId": session, "prompt": [{ "type": "text", "text": text }] });
+        drop(self.internal_request("session/prompt", params));
+    }
+
+    /// Records a turn the person should see, without sending one: an agent
+    /// given a goal works on it as a turn of its own, and the goal enters the
+    /// journal the same way a prompt does.
+    pub fn begin(&self, session: &str, text: &str, task_id: Option<TaskId>) {
         {
             let mut state = self.state.lock().unwrap();
             state
@@ -296,8 +305,26 @@ impl Proxy {
             state.begin_prompt(session, text);
         }
         (self.on_sessions_changed)();
-        let params = json!({ "sessionId": session, "prompt": [{ "type": "text", "text": text }] });
-        drop(self.internal_request("session/prompt", params));
+    }
+
+    /// Sets the session's goal, the `_session/goal` extension Claude Code and
+    /// Codex ACP have: the agent starts pursuing it. An adapter without the
+    /// extension refuses at once; one that is already working on the goal may
+    /// not answer until its turn is over, so only `wait` is waited for.
+    pub async fn set_goal(
+        &self,
+        session: &str,
+        objective: &str,
+        wait: Duration,
+    ) -> Result<(), String> {
+        let params = json!({ "sessionId": session, "action": "set", "objective": objective });
+        match tokio::time::timeout(wait, reply(self.internal_request("_session/goal", params)))
+            .await
+        {
+            Ok(answer) => answer.map(|_| ()),
+            // Taken: the agent is working on it already.
+            Err(_) => Ok(()),
+        }
     }
 
     /// Closes a session the server opened but can no longer use, when the
@@ -875,7 +902,7 @@ impl State {
         if method == "authenticate" {
             self.auth_status = None;
         }
-        if method == "session/prompt"
+        if matches!(method, "session/prompt" | "_session/goal")
             && let Some(session) = session
         {
             let finished = PromptFinished {

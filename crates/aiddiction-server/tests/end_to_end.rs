@@ -1010,3 +1010,128 @@ async fn start_agent_adopts_a_worktree_the_person_made() {
             .success()
     );
 }
+
+/// An agent can be given a goal instead of a prompt: the adapter's
+/// `_session/goal` takes it, the caller's words and the card go into the
+/// objective, and the thread is in the common list like any other turn.
+#[tokio::test]
+async fn start_agent_sets_a_goal_when_asked() {
+    aiddiction_client::install_crypto_provider();
+    let server = start_server().await;
+    let client = ServerClient::new(&server.url, "secret").unwrap();
+    let fake = fake_agent_on(&client, "Goal agent").await;
+    let repo = tempfile::tempdir().unwrap();
+    assert!(
+        git_in(repo.path(), &["init", "-q", "-b", "main"])
+            .status
+            .success()
+    );
+    std::fs::write(repo.path().join("a.txt"), "one\n").unwrap();
+    assert!(git_in(repo.path(), &["add", "."]).status.success());
+    assert!(
+        git_in(repo.path(), &["commit", "-q", "-m", "first"])
+            .status
+            .success()
+    );
+    let project = client
+        .create_project(&NewProject {
+            name: "Goals".into(),
+            source: ProjectSource::Existing {
+                path: repo.path().display().to_string(),
+            },
+        })
+        .await
+        .unwrap();
+    let task = client
+        .create_task(
+            project.id,
+            &TaskInput {
+                title: "A goal card".into(),
+                markdown: String::new(),
+                status: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let started = board(
+        &client,
+        "start_agent",
+        json!({
+            "projectId": project.id,
+            "agentId": fake.id,
+            "taskId": task.id,
+            "goal": "Make MIG-08-079 green",
+            "prompt": "Read the card first",
+        }),
+    )
+    .await
+    .unwrap();
+    let session = started["sessionId"].as_str().unwrap().to_owned();
+
+    // The fake agent writes the objective it was handed into the checkout.
+    let goal_file = repo.path().join("goal.txt");
+    for _ in 0..50 {
+        if goal_file.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let objective = std::fs::read_to_string(&goal_file).unwrap();
+    assert!(
+        objective.starts_with("Make MIG-08-079 green\n\nRead the card first"),
+        "{objective}"
+    );
+    assert!(objective.contains(&task.id.to_string()), "{objective}");
+
+    // The goal's turn is in the common list, on the card.
+    let children = board(
+        &client,
+        "list_subagents",
+        json!({ "projectId": project.id, "taskId": task.id }),
+    )
+    .await
+    .unwrap();
+    assert!(
+        children[0]["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|one| one["sessionId"] == json!(session))
+    );
+}
+
+/// A start with neither a prompt nor a goal is refused before an agent runs.
+#[tokio::test]
+async fn start_agent_needs_a_prompt_or_a_goal() {
+    aiddiction_client::install_crypto_provider();
+    let server = start_server().await;
+    let client = ServerClient::new(&server.url, "secret").unwrap();
+    let fake = fake_agent_on(&client, "Nothing to do").await;
+    let repo = tempfile::tempdir().unwrap();
+    assert!(
+        git_in(repo.path(), &["init", "-q", "-b", "main"])
+            .status
+            .success()
+    );
+    let project = client
+        .create_project(&NewProject {
+            name: "Nothing to do".into(),
+            source: ProjectSource::Existing {
+                path: repo.path().display().to_string(),
+            },
+        })
+        .await
+        .unwrap();
+    let refused = board(
+        &client,
+        "start_agent",
+        json!({ "projectId": project.id, "agentId": fake.id }),
+    )
+    .await;
+    assert!(
+        matches!(&refused, Err(message) if message.contains("prompt or goal")),
+        "{refused:?}"
+    );
+    assert!(client.instances(project.id).await.unwrap().is_empty());
+}

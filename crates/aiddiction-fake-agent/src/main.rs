@@ -296,6 +296,19 @@ impl Agent {
                     json!({ "sessionUpdate": "current_mode_update", "currentModeId": message["params"]["modeId"] }),
                 );
             }
+            Some("_session/goal") => {
+                let objective = message["params"]["objective"].as_str().unwrap_or_default();
+                if self.cwd.is_empty() {
+                    send(json!({
+                        "jsonrpc": "2.0", "id": id,
+                        "error": { "code": -32602, "message": "no session" },
+                    }));
+                } else {
+                    let _ =
+                        std::fs::write(std::path::Path::new(&self.cwd).join("goal.txt"), objective);
+                    reply(json!({}));
+                }
+            }
             Some("session/prompt") => {
                 let stop = self.prompt(&message["params"]);
                 send(json!({ "jsonrpc": "2.0", "id": id, "result": { "stopReason": stop } }));

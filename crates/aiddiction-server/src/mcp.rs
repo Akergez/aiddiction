@@ -164,14 +164,15 @@ fn tools(for_agent: bool) -> Value {
                 under an id of its own.",
             "inputSchema": {
                 "type": "object",
-                "required": ["projectId", "agentId", "prompt"],
+                "required": ["projectId", "agentId"],
                 "properties": {
                     "projectId": { "type": "string" },
                     "agentId": { "type": "string", "description": "An id from list_agents" },
                     "taskId": { "type": "string", "description": "The card to work on; it is linked to the thread" },
                     "worktreeId": { "type": "string", "description": "A checkout the server made, by id; the project's main one when neither is given" },
-                    "worktreePath": { "type": "string", "description": "A git worktree of this project you made yourself, by folder (absolute, or relative to the project); it is adopted and the answer gives its id" },
-                    "prompt": { "type": "string", "description": "What to do, on top of the card" },
+                    "worktreePath": { "type": "string", "description": "A git worktree of this project you made yourself, by folder (absolute, relative to the project, or ~/…); it is adopted and the answer gives its id" },
+                    "prompt": { "type": "string", "description": "What to do, on top of the card; not needed when a goal is given" },
+                    "goal": { "type": "string", "description": "An objective to pursue instead of a single prompt (Claude Code and Codex ACP have it); the agent works on it as a turn of its own, and the prompt, when given, opens it" },
                     "settings": {
                         "type": "array",
                         "description": "ACP configOptions, applied in this order (a model may change the effort offered)",
@@ -329,8 +330,9 @@ async fn start(
     let agent_id =
         text(arguments, "agentId").ok_or_else(|| ToolError("agentId is required".into()))?;
     let prompt = text(arguments, "prompt").unwrap_or_default();
-    if prompt.trim().is_empty() {
-        return Err(ToolError("prompt is required".into()));
+    let goal = text(arguments, "goal").filter(|goal| !goal.trim().is_empty());
+    if prompt.trim().is_empty() && goal.is_none() {
+        return Err(ToolError("prompt or goal is required".into()));
     }
     let task_id = match arguments.get("taskId").and_then(Value::as_str) {
         Some(task) => Some(
@@ -360,6 +362,7 @@ async fn start(
         worktree_id,
         worktree_path,
         prompt,
+        goal,
         settings: settings(arguments)?,
         request_id: text(arguments, "requestId"),
     };

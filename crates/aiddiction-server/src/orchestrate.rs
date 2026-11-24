@@ -25,6 +25,11 @@ use crate::worktrees::{WorktreeError, Worktrees};
 /// `npx` may fetch an adapter on first use, as when a client starts one.
 const READY_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// How long an agent is waited for to take a goal: an adapter without the
+/// extension refuses at once, one that takes it may answer only when its
+/// turn is over, and that is no reason to keep the caller waiting.
+const GOAL_ANSWER_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// Who is asking: the person (the server's own token) or an agent the
 /// server started, whose token is bound to one project.
 #[derive(Debug, Clone)]
@@ -56,6 +61,10 @@ pub struct StartRequest {
     /// and the answer names the id it got.
     pub worktree_path: Option<String>,
     pub prompt: String,
+    /// An objective for the agent to pursue, when its adapter has the goal
+    /// extension (`_session/goal`); it is the turn, and the prompt, when
+    /// there is one, is the first part of it.
+    pub goal: Option<String>,
     /// ACP configuration option ids and values, applied in this order.
     pub settings: Vec<(String, Value)>,
     /// Ties a retry to the call it repeats, so a lost answer does not start
@@ -224,11 +233,44 @@ impl Orchestrator {
             }
         }
 
-        let text = prompt_text(&request, &project, task.as_ref(), scoped);
-        instance
-            .proxy
-            .prompt(&session, &text, request.task_id)
-            .await;
+        // What the child is given: a goal, when asked for, is the turn itself;
+        // otherwise the prompt is.
+        let base = match request
+            .goal
+            .as_deref()
+            .map(str::trim)
+            .filter(|goal| !goal.is_empty())
+        {
+            Some(goal) if request.prompt.trim().is_empty() => goal.to_owned(),
+            Some(goal) => format!("{goal}\n\n{}", request.prompt.trim()),
+            None => request.prompt.trim().to_owned(),
+        };
+        let text = prompt_text(&base, &project, task.as_ref(), scoped);
+        match request
+            .goal
+            .as_deref()
+            .map(str::trim)
+            .filter(|goal| !goal.is_empty())
+        {
+            Some(_) => {
+                instance.proxy.begin(&session, &text, request.task_id);
+                if let Err(error) = instance
+                    .proxy
+                    .set_goal(&session, &text, GOAL_ANSWER_TIMEOUT)
+                    .await
+                {
+                    instance.proxy.close_session(&session).await;
+                    self.tokens.lock().unwrap().remove(&token);
+                    return Err(format!("the agent did not take a goal: {error}"));
+                }
+            }
+            None => {
+                instance
+                    .proxy
+                    .prompt(&session, &text, request.task_id)
+                    .await;
+            }
+        }
 
         if let Some(task) = &task
             && let Err(error) = projects.link_session(
@@ -267,15 +309,10 @@ impl Orchestrator {
     }
 }
 
-/// The prompt the child is given: the caller's words, then where the card
-/// is and what to do with it.
-fn prompt_text(
-    request: &StartRequest,
-    project: &Project,
-    task: Option<&Task>,
-    board: bool,
-) -> String {
-    let mut text = request.prompt.trim().to_owned();
+/// The text the child is given: the caller's words, then where the card is
+/// and what to do with it.
+fn prompt_text(text: &str, project: &Project, task: Option<&Task>, board: bool) -> String {
+    let mut text = text.trim().to_owned();
     let Some(task) = task else { return text };
     text.push_str(&format!(
         "\n\n---\nYou are working on task card {} (\"{}\") of project \"{}\" in Aiddiction.",

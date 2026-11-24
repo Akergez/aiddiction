@@ -155,13 +155,24 @@ the person opens it from the inbox or from the card's "Open conversation",
 answers permissions and stops it as usual; the caller only gets metadata
 and reads the card for the result.
 
-A checkout the caller made itself is passed as `worktreePath` (absolute, or
-relative to the project): `Worktrees::adopt` checks that the folder is a git
+A checkout the caller made itself is passed as `worktreePath` (absolute,
+relative to the project, or `~/…`, read as the server's home): `Worktrees::adopt`
+checks that the folder is a git
 worktree of this project's repository (same `--git-common-dir`, not a
 subfolder, not another repository), keeps it under an id of its own with
 `managed: false` and answers with that id. The same folder is the same id on
 a second call. The server never takes an adopted checkout away: removing it
 forgets the id and leaves the folder and branch where they are.
+
+A start can carry a `goal` instead of a prompt. It goes to the adapter's
+`_session/goal` extension (`Proxy::set_goal`), which Claude Code and Codex
+ACP have: the agent starts pursuing it as a turn of its own, and the prompt,
+when there is one, opens the objective; the card's text is appended as
+usual. An adapter without the extension refuses at once and the start
+fails; one that takes the goal may answer only when its turn is over, so the
+answer is waited for 15 seconds and after that the goal is taken as
+accepted. The turn is recorded in the journal like a prompt
+(`Proxy::begin`).
 
 An agent started this way gets a token of its own (`Orchestrator::scope`):
 it reaches `/mcp` only and only its project's board, without `list_agents`,
