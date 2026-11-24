@@ -1135,3 +1135,124 @@ async fn start_agent_needs_a_prompt_or_a_goal() {
     );
     assert!(client.instances(project.id).await.unwrap().is_empty());
 }
+
+/// The board can make, list and remove checkouts itself: an orchestrator
+/// never needs a folder, only ids.
+#[tokio::test]
+async fn worktrees_are_made_listed_and_removed_from_the_board() {
+    aiddiction_client::install_crypto_provider();
+    let server = start_server().await;
+    let client = ServerClient::new(&server.url, "secret").unwrap();
+    let fake = fake_agent_on(&client, "Checkout agent").await;
+    let repo = tempfile::tempdir().unwrap();
+    assert!(
+        git_in(repo.path(), &["init", "-q", "-b", "main"])
+            .status
+            .success()
+    );
+    std::fs::write(repo.path().join("a.txt"), "one\n").unwrap();
+    assert!(git_in(repo.path(), &["add", "."]).status.success());
+    assert!(
+        git_in(repo.path(), &["commit", "-q", "-m", "first"])
+            .status
+            .success()
+    );
+    let project = client
+        .create_project(&NewProject {
+            name: "Board checkouts".into(),
+            source: ProjectSource::Existing {
+                path: repo.path().display().to_string(),
+            },
+        })
+        .await
+        .unwrap();
+
+    // Only the project's own checkout at first.
+    let listed = board(
+        &client,
+        "list_worktrees",
+        json!({ "projectId": project.id }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_eq!(listed[0]["main"], json!(true));
+    assert_eq!(listed[0]["worktreeId"], json!(project.id));
+
+    let made = board(
+        &client,
+        "create_worktree",
+        json!({ "projectId": project.id, "name": "coder", "base": "HEAD" }),
+    )
+    .await
+    .unwrap();
+    let id: aiddiction_api::WorktreeId = made["worktreeId"].as_str().unwrap().parse().unwrap();
+    assert_eq!(made["branch"], json!("aiddiction/coder"));
+    assert_eq!(made["name"], json!("coder"));
+    let path = std::path::PathBuf::from(made["path"].as_str().unwrap());
+    assert!(path.is_dir());
+
+    let listed = board(
+        &client,
+        "list_worktrees",
+        json!({ "projectId": project.id }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 2);
+    assert_eq!(listed[1]["worktreeId"], json!(id));
+    assert_eq!(listed[1]["branch"], json!("aiddiction/coder"));
+    assert_eq!(listed[1]["managed"], json!(true));
+
+    // An agent started there works in that checkout.
+    let started = board(
+        &client,
+        "start_agent",
+        json!({
+            "projectId": project.id,
+            "agentId": fake.id,
+            "worktreeId": id,
+            "prompt": "Work there",
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(started["worktreeId"], json!(id));
+
+    // It cannot go under a running agent, and goes once the agent is gone.
+    let refused = board(
+        &client,
+        "remove_worktree",
+        json!({ "projectId": project.id, "worktreeId": id }),
+    )
+    .await;
+    assert!(
+        matches!(&refused, Err(message) if message.contains("still working")),
+        "{refused:?}"
+    );
+    let instance: aiddiction_api::InstanceId =
+        started["instanceId"].as_str().unwrap().parse().unwrap();
+    client.stop_instance(instance).await.unwrap();
+    for _ in 0..50 {
+        if client.instance(instance).await.is_err() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    board(
+        &client,
+        "remove_worktree",
+        json!({ "projectId": project.id, "worktreeId": id }),
+    )
+    .await
+    .unwrap();
+    assert!(!path.exists());
+    let listed = board(
+        &client,
+        "list_worktrees",
+        json!({ "projectId": project.id }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+}

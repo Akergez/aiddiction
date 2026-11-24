@@ -12,7 +12,10 @@
 //! the route answers with 202 and no body. A tool that fails says so in its
 //! result (`isError`), as MCP wants, rather than as a protocol error.
 
-use aiddiction_api::{Agent, AgentProfile, ProjectId, TaskId, TaskInput, TaskStatus, WorktreeId};
+use aiddiction_api::{
+    Agent, AgentProfile, InstanceState, NewWorktree, ProjectId, TaskId, TaskInput, TaskStatus,
+    WorktreeId,
+};
 use serde_json::{Value, json};
 
 use crate::agents::Catalog;
@@ -155,8 +158,7 @@ fn tools(for_agent: bool) -> Value {
             }},
         }));
         tools.insert(3, json!({
-            "name": "start_agent",
-            "description": "Start an ACP agent on a task card. The agent gets a token for the project's board, is \
+            "name": "start_agent",            "description": "Start an ACP agent on a task card. The agent gets a token for the project's board, is \
                 prompted, and works in its own conversation, visible to the person in the common list. Answers \
                 once the prompt is sent, not when the turn ends: follow it with list_subagents, read the result on \
                 the card. It works in the project's own checkout unless a worktree is given: one the server made \
@@ -186,6 +188,35 @@ fn tools(for_agent: bool) -> Value {
                 },
             },
         }));
+        tools.push(json!({
+            "name": "list_worktrees",
+            "description": "The checkouts of a project: its own and the ones the server made or adopted, with the \
+                branch each has. An agent can be started in any of them by worktreeId.",
+            "inputSchema": { "type": "object", "required": ["projectId"], "properties": {
+                "projectId": { "type": "string" },
+            }},
+        }));
+        tools.push(json!({
+            "name": "create_worktree",
+            "description": "Make a worktree of the project on a new branch, outside its own checkout, and answer \
+                with its id: agents started there work in their own files and branch. The branch is kept when the \
+                worktree goes.",
+            "inputSchema": { "type": "object", "required": ["projectId"], "properties": {
+                "projectId": { "type": "string" },
+                "name": { "type": "string", "description": "Its name in a list; also the folder when there is no branch" },
+                "branch": { "type": "string", "description": "The branch to make; aiddiction/<name> when left out" },
+                "base": { "type": "string", "description": "The commit or branch to start from; the project's HEAD when left out" },
+            }},
+        }));
+        tools.push(json!({
+            "name": "remove_worktree",
+            "description": "Remove a worktree the server made, or forget an adopted one. Refused while an agent is \
+                working in it; the branch stays in the repository.",
+            "inputSchema": { "type": "object", "required": ["projectId", "worktreeId"], "properties": {
+                "projectId": { "type": "string" },
+                "worktreeId": { "type": "string", "description": "An id from list_worktrees" },
+            }},
+        }));
     }
     json!(tools)
 }
@@ -205,7 +236,17 @@ async fn call(
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    if is_agent(caller) && matches!(name, "list_agents" | "list_subagents" | "start_agent") {
+    if is_agent(caller)
+        && matches!(
+            name,
+            "list_agents"
+                | "list_subagents"
+                | "start_agent"
+                | "list_worktrees"
+                | "create_worktree"
+                | "remove_worktree"
+        )
+    {
         return Err((-32602, format!("{name} is not open to an agent")));
     }
     let output = match name {
@@ -274,6 +315,9 @@ async fn call(
             Ok(json!(infos))
         }
         "start_agent" => start(projects, catalog, supervisor, orchestration, worktrees, caller, &arguments).await,
+        "list_worktrees" => list_worktrees(projects, worktrees, caller, &arguments).await,
+        "create_worktree" => create_worktree(projects, worktrees, caller, &arguments).await,
+        "remove_worktree" => remove_worktree(projects, supervisor, worktrees, caller, &arguments).await,
         "list_tasks" => project_of(&arguments, caller).and_then(|project| Ok(json!(projects.tasks(project)?))),
         "share_file" => (|| { let project=project_of(&arguments, caller)?; let path=text(&arguments,"path").ok_or_else(||ToolError("path is required".into()))?; let name=text(&arguments,"name"); let p=projects.list().into_iter().find(|x|x.id==project).ok_or_else(||ToolError("project not found".into()))?; let file=crate::files::share(&projects.dir(&p), &path, name.as_deref(), "").map_err(ToolError)?; Ok(json!(file)) })(),
         "create_task" => (|| {
@@ -381,6 +425,106 @@ async fn start(
         )
         .await
         .map_err(ToolError)
+}
+
+/// The project the caller names, with the folder it works in.
+fn seen_project(
+    projects: &Projects,
+    caller: &Caller,
+    arguments: &Value,
+) -> Result<(aiddiction_api::Project, std::path::PathBuf), ToolError> {
+    let id = project_of(arguments, caller)?;
+    let project = projects
+        .list()
+        .into_iter()
+        .find(|project| project.id == id)
+        .ok_or_else(|| ToolError("no such project".into()))?;
+    let dir = projects.dir(&project);
+    Ok((project, dir))
+}
+
+/// `list_worktrees`: the project's own checkout and the ones made or adopted.
+async fn list_worktrees(
+    projects: &Projects,
+    worktrees: &Worktrees,
+    caller: &Caller,
+    arguments: &Value,
+) -> Result<Value, ToolError> {
+    let (project, dir) = seen_project(projects, caller, arguments)?;
+    let checkouts = worktrees.list_for(&project, &dir).await;
+    Ok(json!(
+        checkouts
+            .iter()
+            .map(|worktree| json!({
+                "worktreeId": worktree.id,
+                "name": worktree.name,
+                "branch": worktree.branch,
+                "baseCommit": worktree.base_commit,
+                "path": worktree.path,
+                "main": worktree.main,
+                "managed": worktree.managed,
+            }))
+            .collect::<Vec<_>>()
+    ))
+}
+
+/// `create_worktree`: a checkout of the project on a branch of its own.
+async fn create_worktree(
+    projects: &Projects,
+    worktrees: &Worktrees,
+    caller: &Caller,
+    arguments: &Value,
+) -> Result<Value, ToolError> {
+    let (project, dir) = seen_project(projects, caller, arguments)?;
+    let input = NewWorktree {
+        name: text(arguments, "name"),
+        branch: text(arguments, "branch"),
+        base: text(arguments, "base"),
+    };
+    let made = worktrees
+        .create(&project, &dir, input)
+        .await
+        .map_err(|error| ToolError(format!("{error}")))?;
+    Ok(json!({
+        "worktreeId": made.id,
+        "name": made.name,
+        "branch": made.branch,
+        "baseCommit": made.base_commit,
+        "path": made.path,
+    }))
+}
+
+/// `remove_worktree`: takes a worktree the server made away, or forgets an
+/// adopted one; a running agent stops it.
+async fn remove_worktree(
+    projects: &Projects,
+    supervisor: &Supervisor,
+    worktrees: &Worktrees,
+    caller: &Caller,
+    arguments: &Value,
+) -> Result<Value, ToolError> {
+    let (project, dir) = seen_project(projects, caller, arguments)?;
+    let worktree: WorktreeId = text(arguments, "worktreeId")
+        .ok_or_else(|| ToolError("worktreeId is required".into()))?
+        .parse()
+        .map_err(|_| ToolError("worktreeId is not an id".into()))?;
+    let busy = supervisor
+        .for_worktree(project.id, worktree)
+        .iter()
+        .any(|instance| {
+            matches!(
+                instance.state(),
+                InstanceState::Starting | InstanceState::Ready
+            )
+        });
+    if busy {
+        return Err(ToolError("the agent is still working in it".into()));
+    }
+    worktrees
+        .remove(&project, &dir, worktree)
+        .await
+        .map_err(|error| ToolError(format!("{error}")))?;
+    Ok(json!({ "worktreeId": worktree, "removed": true }))
 }
 
 fn agent_summary(

@@ -174,6 +174,12 @@ answer is waited for 15 seconds and after that the goal is taken as
 accepted. The turn is recorded in the journal like a prompt
 (`Proxy::begin`).
 
+The board also makes, lists and removes checkouts itself: `list_worktrees`
+gives ids, names, branches and paths, `create_worktree` makes one on a new
+branch, `remove_worktree` takes one away (refused while an agent works in it;
+an adopted checkout is only forgotten). An orchestrator that cannot see the
+server's files works with ids alone.
+
 An agent started this way gets a token of its own (`Orchestrator::scope`):
 it reaches `/mcp` only and only its project's board, without `list_agents`,
 `list_subagents` or `start_agent`, and cannot delete the card it works on.
