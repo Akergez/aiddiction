@@ -172,7 +172,7 @@ fn tools(for_agent: bool) -> Value {
                     "agentId": { "type": "string", "description": "An id from list_agents" },
                     "taskId": { "type": "string", "description": "The card to work on; it is linked to the thread" },
                     "worktreeId": { "type": "string", "description": "A checkout the server made, by id; the project's main one when neither is given" },
-                    "worktreePath": { "type": "string", "description": "A git worktree of this project you made yourself, by folder (absolute, relative to the project, or ~/…); it is adopted and the answer gives its id" },
+                    "worktreePath": { "type": "string", "description": "A git worktree of this project you made yourself, by folder (absolute, relative to the project, or ~/…); it is adopted and the answer gives its id. Its .git points into the project's own checkout, which the agent must reach at the same path" },
                     "prompt": { "type": "string", "description": "What to do, on top of the card; not needed when a goal is given" },
                     "goal": { "type": "string", "description": "An objective to pursue instead of a single prompt (Claude Code and Codex ACP have it); the agent works on it as a turn of its own, and the prompt, when given, opens it" },
                     "settings": {
@@ -200,7 +200,8 @@ fn tools(for_agent: bool) -> Value {
             "name": "create_worktree",
             "description": "Make a worktree of the project on a new branch, outside its own checkout, and answer \
                 with its id: agents started there work in their own files and branch. The branch is kept when the \
-                worktree goes.",
+                worktree goes. A worktree is not self-contained: its .git points into the project's own checkout, \
+                which the agent must reach at the same path.",
             "inputSchema": { "type": "object", "required": ["projectId"], "properties": {
                 "projectId": { "type": "string" },
                 "name": { "type": "string", "description": "Its name in a list; also the folder when there is no branch" },

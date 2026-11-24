@@ -162,7 +162,11 @@ worktree of this project's repository (same `--git-common-dir`, not a
 subfolder, not another repository), keeps it under an id of its own with
 `managed: false` and answers with that id. The same folder is the same id on
 a second call. The server never takes an adopted checkout away: removing it
-forgets the id and leaves the folder and branch where they are.
+forgets the id and leaves the folder and branch where they are. A worktree
+is not self-contained: its `.git` file points into the project's own checkout
+(`<project>/.git/worktrees/<name>`), so an agent in another container must
+reach that path at the same address — mounting only the worktree folder is
+not enough.
 
 A start can carry a `goal` instead of a prompt. It goes to the adapter's
 `_session/goal` extension (`Proxy::set_goal`), which Claude Code and Codex
