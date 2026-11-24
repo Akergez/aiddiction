@@ -102,6 +102,9 @@ pub struct ReviewOptions {
 
 impl Default for ReviewOptions {
     fn default() -> Self {
-        Self { submit_label: "Done".into(), discard_label: None }
+        Self {
+            submit_label: "Done".into(),
+            discard_label: None,
+        }
     }
 }

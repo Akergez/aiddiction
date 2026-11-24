@@ -43,8 +43,17 @@ pub fn methods(init: &Value) -> Vec<AuthMethod> {
                 MethodKind::Agent
             };
             Some(AuthMethod {
-                name: method["name"].as_str().filter(|name| !name.is_empty()).unwrap_or(&id).trim().to_owned(),
-                description: method["description"].as_str().unwrap_or_default().trim().to_owned(),
+                name: method["name"]
+                    .as_str()
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or(&id)
+                    .trim()
+                    .to_owned(),
+                description: method["description"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned(),
                 id,
                 kind,
             })
@@ -61,7 +70,9 @@ pub fn signed_out(params: &Value) -> bool {
 pub fn first_url(text: &str) -> Option<&str> {
     let start = text.find("https://").or_else(|| text.find("http://"))?;
     let rest = &text[start..];
-    let end = rest.find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>')).unwrap_or(rest.len());
+    let end = rest
+        .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>'))
+        .unwrap_or(rest.len());
     Some(rest[..end].trim_end_matches(['.', ',', ')']))
 }
 
@@ -89,14 +100,21 @@ mod tests {
 
     #[test]
     fn the_status_says_when_nobody_is_signed_in() {
-        assert!(signed_out(&json!({ "authStatus": { "kind": "none", "label": "Not logged in" } })));
-        assert!(!signed_out(&json!({ "authStatus": { "kind": "subscription" } })));
+        assert!(signed_out(
+            &json!({ "authStatus": { "kind": "none", "label": "Not logged in" } })
+        ));
+        assert!(!signed_out(
+            &json!({ "authStatus": { "kind": "subscription" } })
+        ));
     }
 
     #[test]
     fn the_address_is_found_in_what_a_sign_in_wrote() {
         let output = "Opening browser to sign in…\nIf the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&state=x\nPaste code here if prompted >";
-        assert_eq!(first_url(output), Some("https://claude.com/cai/oauth/authorize?code=true&state=x"));
+        assert_eq!(
+            first_url(output),
+            Some("https://claude.com/cai/oauth/authorize?code=true&state=x")
+        );
         assert_eq!(first_url("go to https://a.b/c."), Some("https://a.b/c"));
         assert_eq!(first_url("nothing"), None);
     }

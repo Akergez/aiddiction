@@ -22,7 +22,9 @@ impl LocalRepo {
         if !output.status.success() || root.is_empty() {
             return Err(format!("{} is not in a git repository", dir.display()));
         }
-        Ok(Self { root: PathBuf::from(root) })
+        Ok(Self {
+            root: PathBuf::from(root),
+        })
     }
 
     pub fn root(&self) -> &Path {
@@ -34,12 +36,17 @@ impl LocalRepo {
         request.source.validate()?;
         let mut args = vec!["diff".to_owned()];
         args.extend(request.git_args());
-        let output = git(&self.root, &args.iter().map(String::as_str).collect::<Vec<_>>())?;
+        let output = git(
+            &self.root,
+            &args.iter().map(String::as_str).collect::<Vec<_>>(),
+        )?;
         if !output.status.success() {
             // A repository with no commit yet has no HEAD to diff against:
             // everything there is is new.
             let stderr = String::from_utf8_lossy(&output.stderr);
-            if !(stderr.contains("bad revision 'HEAD'") || stderr.contains("ambiguous argument 'HEAD'")) {
+            if !(stderr.contains("bad revision 'HEAD'")
+                || stderr.contains("ambiguous argument 'HEAD'"))
+            {
                 return Err(stderr.trim().to_owned());
             }
         }
@@ -53,20 +60,43 @@ impl LocalRepo {
             }
         }
         if text.len() > MAX_DIFF_BYTES {
-            return Err(format!("the diff is larger than {} MB", MAX_DIFF_BYTES >> 20));
+            return Err(format!(
+                "the diff is larger than {} MB",
+                MAX_DIFF_BYTES >> 20
+            ));
         }
         Ok(text)
     }
 
     fn untracked(&self) -> Result<Vec<String>, String> {
-        let output = git(&self.root, &["ls-files", "--others", "--exclude-standard", "-z"])?;
-        Ok(output.stdout.split(|byte| *byte == 0).filter(|path| !path.is_empty()).map(|path| String::from_utf8_lossy(path).into_owned()).collect())
+        let output = git(
+            &self.root,
+            &["ls-files", "--others", "--exclude-standard", "-z"],
+        )?;
+        Ok(output
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|path| !path.is_empty())
+            .map(|path| String::from_utf8_lossy(path).into_owned())
+            .collect())
     }
 
     /// An untracked file as a diff adding it.
     fn new_file_diff(&self, path: &str, context: Option<u32>) -> Result<String, String> {
         let unified = context.map_or("-U1000000".to_owned(), |lines| format!("-U{lines}"));
-        let output = git(&self.root, &["diff", "--no-color", "--no-ext-diff", &unified, "--no-index", "--", "/dev/null", path])?;
+        let output = git(
+            &self.root,
+            &[
+                "diff",
+                "--no-color",
+                "--no-ext-diff",
+                &unified,
+                "--no-index",
+                "--",
+                "/dev/null",
+                path,
+            ],
+        )?;
         // `--no-index` exits 1 when the files differ, which they always do.
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
@@ -75,17 +105,34 @@ impl LocalRepo {
     pub fn refs(&self) -> Result<Refs, String> {
         let lines = |args: &[&str]| -> Result<Vec<String>, String> {
             let output = git(&self.root, args)?;
-            Ok(String::from_utf8_lossy(&output.stdout).lines().map(str::to_owned).filter(|line| !line.is_empty()).collect())
+            Ok(String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(str::to_owned)
+                .filter(|line| !line.is_empty())
+                .collect())
         };
         let branches = lines(&["for-each-ref", "--format=%(refname:short)", "refs/heads"])?;
-        let current_branch = lines(&["symbolic-ref", "--short", "-q", "HEAD"])?.into_iter().next();
-        let default_branch = ["main", "master"].into_iter().find(|name| branches.iter().any(|branch| branch == name)).map(str::to_owned);
+        let current_branch = lines(&["symbolic-ref", "--short", "-q", "HEAD"])?
+            .into_iter()
+            .next();
+        let default_branch = ["main", "master"]
+            .into_iter()
+            .find(|name| branches.iter().any(|branch| branch == name))
+            .map(str::to_owned);
         let commits = lines(&["log", "-n", "30", "--format=%h%x09%s"])
             .unwrap_or_default()
             .into_iter()
-            .filter_map(|line| line.split_once('\t').map(|(hash, subject)| (hash.to_owned(), subject.to_owned())))
+            .filter_map(|line| {
+                line.split_once('\t')
+                    .map(|(hash, subject)| (hash.to_owned(), subject.to_owned()))
+            })
             .collect();
-        Ok(Refs { current_branch, default_branch, branches, commits })
+        Ok(Refs {
+            current_branch,
+            default_branch,
+            branches,
+            commits,
+        })
     }
 }
 
@@ -109,7 +156,15 @@ mod tests {
     use crate::source::DiffSource;
 
     fn run(dir: &Path, args: &[&str]) {
-        let status = Command::new("git").args(args).current_dir(dir).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").status().unwrap();
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .status()
+            .unwrap();
         assert!(status.success(), "git {args:?}");
     }
 
@@ -126,17 +181,36 @@ mod tests {
 
         let repo = LocalRepo::open(root).unwrap();
         let files = parse(&repo.diff(&DiffRequest::default()).unwrap());
-        let paths: Vec<_> = files.iter().map(|file| (file.path.as_str(), file.status)).collect();
-        assert_eq!(paths, [("a.txt", FileStatus::Modified), ("new.txt", FileStatus::Added)]);
+        let paths: Vec<_> = files
+            .iter()
+            .map(|file| (file.path.as_str(), file.status))
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                ("a.txt", FileStatus::Modified),
+                ("new.txt", FileStatus::Added)
+            ]
+        );
         // The whole file is there by default.
         assert_eq!(files[0].lines.len(), 1 + 4);
 
-        let staged = DiffRequest { source: DiffSource::Staged, ..DiffRequest::default() };
+        let staged = DiffRequest {
+            source: DiffSource::Staged,
+            ..DiffRequest::default()
+        };
         assert!(parse(&repo.diff(&staged).unwrap()).is_empty());
 
         run(root, &["add", "a.txt"]);
         run(root, &["commit", "-q", "-m", "second"]);
-        let last = DiffRequest { source: DiffSource::Between { from: "HEAD~1".into(), to: "HEAD".into() }, context: Some(0), untracked: false };
+        let last = DiffRequest {
+            source: DiffSource::Between {
+                from: "HEAD~1".into(),
+                to: "HEAD".into(),
+            },
+            context: Some(0),
+            untracked: false,
+        };
         let files = parse(&repo.diff(&last).unwrap());
         assert_eq!(files.len(), 1);
         assert_eq!((files[0].added, files[0].removed), (1, 1));

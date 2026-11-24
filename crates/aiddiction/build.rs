@@ -19,7 +19,10 @@ fn main() {
     let resources = std::path::Path::new("windows");
     let rc = resources.join("aiddiction.rc");
     println!("cargo:rerun-if-changed={}", rc.display());
-    println!("cargo:rerun-if-changed={}", resources.join("aiddiction.ico").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        resources.join("aiddiction.ico").display()
+    );
     embed_resource::compile(rc, embed_resource::ParamsIncludeDirs([resources]))
         .manifest_optional()
         .unwrap();

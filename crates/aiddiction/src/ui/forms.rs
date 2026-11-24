@@ -7,10 +7,14 @@
 use std::collections::BTreeMap;
 
 use aiddiction_api::{
-    Agent, AgentCommand, AgentInput, DirListing, NewProject, NewWorktree, ProjectSource, Task, TaskId, TaskInput, TaskStatus,
+    Agent, AgentCommand, AgentInput, DirListing, NewProject, NewWorktree, ProjectSource, Task,
+    TaskId, TaskInput, TaskStatus,
 };
 use aiddiction_client::ServerClient;
-use gpui_adaptive::{Collection, Fields, Form, Icon, IconName, ListRow, Note, Purpose, Segments, TextField, TextFieldState};
+use gpui_adaptive::{
+    Collection, Fields, Form, Icon, IconName, ListRow, Note, Purpose, Segments, TextField,
+    TextFieldState,
+};
 use gpui_kit::Focusable as _;
 use gpui_kit::prelude::*;
 use gpui_kit::{App, AppContext, Context, Entity, FocusHandle, Render, SharedString, Window, rems};
@@ -29,7 +33,9 @@ pub fn open_form<F: Render>(
     cx: &mut App,
 ) {
     let fields = form.clone();
-    let open = Form::new(title, fields).commit(commit, move |window, cx| form.update(cx, |form, cx| submit(form, window, cx)));
+    let open = Form::new(title, fields).commit(commit, move |window, cx| {
+        form.update(cx, |form, cx| submit(form, window, cx))
+    });
     match first {
         Some(first) => open.focus(first).open(window, cx),
         None => open.open(window, cx),
@@ -37,7 +43,13 @@ pub fn open_form<F: Render>(
 }
 
 /// A field for `purpose`, showing `placeholder` while empty, holding `value`.
-fn line(purpose: Purpose, placeholder: &'static str, value: &str, window: &mut Window, cx: &mut App) -> Entity<TextFieldState> {
+fn line(
+    purpose: Purpose,
+    placeholder: &'static str,
+    value: &str,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<TextFieldState> {
     let value = value.to_owned();
     cx.new(|cx| {
         let mut field = TextFieldState::new(purpose, window, cx);
@@ -48,7 +60,13 @@ fn line(purpose: Purpose, placeholder: &'static str, value: &str, window: &mut W
 }
 
 /// [`line`] of several lines, growing from `min` to `max`.
-fn lines(placeholder: &'static str, value: &str, (min, max): (usize, usize), window: &mut Window, cx: &mut App) -> Entity<TextFieldState> {
+fn lines(
+    placeholder: &'static str,
+    value: &str,
+    (min, max): (usize, usize),
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<TextFieldState> {
     let value = value.to_owned();
     cx.new(|cx| {
         let mut field = TextFieldState::multiline(Purpose::Message, min, max, window, cx);
@@ -86,9 +104,27 @@ impl ServerForm {
     pub fn new(entry: Option<&ServerEntry>, window: &mut Window, cx: &mut App) -> Self {
         Self {
             id: entry.map(|entry| entry.id.clone()),
-            name: line(Purpose::Message, "My workstation", entry.map_or("", |e| e.name.as_str()), window, cx),
-            url: line(Purpose::Address, "192.168.1.10:7878 or https://…", entry.map_or("", |e| e.url.as_str()), window, cx),
-            token: line(Purpose::Password, "From `aiddiction-server token`", entry.map_or("", |e| e.token.as_str()), window, cx),
+            name: line(
+                Purpose::Message,
+                "My workstation",
+                entry.map_or("", |e| e.name.as_str()),
+                window,
+                cx,
+            ),
+            url: line(
+                Purpose::Address,
+                "192.168.1.10:7878 or https://…",
+                entry.map_or("", |e| e.url.as_str()),
+                window,
+                cx,
+            ),
+            token: line(
+                Purpose::Password,
+                "From `aiddiction-server token`",
+                entry.map_or("", |e| e.token.as_str()),
+                window,
+                cx,
+            ),
             note: None,
         }
     }
@@ -114,7 +150,15 @@ impl ServerForm {
             name if name.is_empty() => url.clone(),
             name => name,
         };
-        Some(ServerEntry { id: self.id.clone().unwrap_or_else(|| uuid::Uuid::now_v7().to_string()), name, url, token })
+        Some(ServerEntry {
+            id: self
+                .id
+                .clone()
+                .unwrap_or_else(|| uuid::Uuid::now_v7().to_string()),
+            name,
+            url,
+            token,
+        })
     }
 
     /// The server at the address did not answer with the token.
@@ -144,11 +188,17 @@ enum Origin {
 }
 
 impl Origin {
-    const ALL: [(Origin, &'static str, &'static str); 3] =
-        [(Origin::Empty, "empty", "Empty folder"), (Origin::Git, "git", "Clone from git"), (Origin::Existing, "existing", "Existing folder")];
+    const ALL: [(Origin, &'static str, &'static str); 3] = [
+        (Origin::Empty, "empty", "Empty folder"),
+        (Origin::Git, "git", "Clone from git"),
+        (Origin::Existing, "existing", "Existing folder"),
+    ];
 
     fn key(self) -> &'static str {
-        Self::ALL.iter().find(|(origin, ..)| *origin == self).map_or("empty", |(_, key, _)| key)
+        Self::ALL
+            .iter()
+            .find(|(origin, ..)| *origin == self)
+            .map_or("empty", |(_, key, _)| key)
     }
 }
 
@@ -172,9 +222,21 @@ impl ProjectForm {
             origin: Origin::Empty,
             client,
             name: line(Purpose::Message, "my-project", "", window, cx),
-            url: line(Purpose::Address, "https://github.com/owner/repo.git", "", window, cx),
+            url: line(
+                Purpose::Address,
+                "https://github.com/owner/repo.git",
+                "",
+                window,
+                cx,
+            ),
             branch: line(Purpose::Message, "Default branch", "", window, cx),
-            token: line(Purpose::Password, "Only for a private repository over HTTPS", "", window, cx),
+            token: line(
+                Purpose::Password,
+                "Only for a private repository over HTTPS",
+                "",
+                window,
+                cx,
+            ),
             path: line(Purpose::Address, "/home/me/code/project", "", window, cx),
             listing: None,
             note: None,
@@ -195,23 +257,29 @@ impl ProjectForm {
 
     /// Lists a folder on the server; with `Some`, it becomes the path too.
     fn browse(&mut self, path: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(client) = self.client.clone() else { return };
+        let Some(client) = self.client.clone() else {
+            return;
+        };
         if let Some(path) = &path {
-            self.path.update(cx, |field, cx| field.set_value(path.clone(), window, cx));
+            self.path
+                .update(cx, |field, cx| field.set_value(path.clone(), window, cx));
         }
         let this = cx.entity().downgrade();
-        crate::runtime::spawn(async move { client.dirs(path.as_deref()).await }, move |result, cx| {
-            let _ = this.update(cx, |form, cx| {
-                match result {
-                    Ok(listing) => {
-                        form.listing = Some(listing);
-                        form.note = None;
+        crate::runtime::spawn(
+            async move { client.dirs(path.as_deref()).await },
+            move |result, cx| {
+                let _ = this.update(cx, |form, cx| {
+                    match result {
+                        Ok(listing) => {
+                            form.listing = Some(listing);
+                            form.note = None;
+                        }
+                        Err(error) => form.note = Some(error.to_string().into()),
                     }
-                    Err(error) => form.note = Some(error.to_string().into()),
-                }
-                cx.notify();
-            });
-        });
+                    cx.notify();
+                });
+            },
+        );
     }
 
     /// The project the fields describe; or none, with what is wrong said
@@ -228,10 +296,22 @@ impl ProjectForm {
                 }
                 if name.is_empty() {
                     // The repository's own name, as `git clone` would choose.
-                    name = url.trim_end_matches('/').trim_end_matches(".git").rsplit(['/', ':']).next().unwrap_or_default().to_owned();
+                    name = url
+                        .trim_end_matches('/')
+                        .trim_end_matches(".git")
+                        .rsplit(['/', ':'])
+                        .next()
+                        .unwrap_or_default()
+                        .to_owned();
                 }
-                let optional = |field: &Entity<TextFieldState>| Some(text(field, cx)).filter(|value| !value.is_empty());
-                ProjectSource::Git { url, branch: optional(&self.branch), token: optional(&self.token) }
+                let optional = |field: &Entity<TextFieldState>| {
+                    Some(text(field, cx)).filter(|value| !value.is_empty())
+                };
+                ProjectSource::Git {
+                    url,
+                    branch: optional(&self.branch),
+                    token: optional(&self.token),
+                }
             }
             Origin::Existing => {
                 let path = text(&self.path, cx);
@@ -240,7 +320,10 @@ impl ProjectForm {
                     return None;
                 }
                 // An empty name is the folder's own; the server knows it.
-                return Some(NewProject { name, source: ProjectSource::Existing { path } });
+                return Some(NewProject {
+                    name,
+                    source: ProjectSource::Existing { path },
+                });
             }
         };
         if name.is_empty() {
@@ -260,12 +343,24 @@ impl ProjectForm {
         let form = cx.entity().downgrade();
         let row = |id: String, label: String, path: String| {
             let form = form.clone();
-            ListRow::new(SharedString::from(id), label).leading(Icon::new(IconName::Folder)).on_activate(move |window, cx| {
-                form.update(cx, |form, cx| form.browse(Some(path.clone()), window, cx)).ok();
-            })
+            ListRow::new(SharedString::from(id), label)
+                .leading(Icon::new(IconName::Folder))
+                .on_activate(move |window, cx| {
+                    form.update(cx, |form, cx| form.browse(Some(path.clone()), window, cx))
+                        .ok();
+                })
         };
-        let up = listing.parent.clone().map(|parent| row("folder-up".into(), "..".into(), parent));
-        let dirs = listing.dirs.iter().map(|dir| row(format!("folder-{}", dir.path), dir.name.clone(), dir.path.clone()));
+        let up = listing
+            .parent
+            .clone()
+            .map(|parent| row("folder-up".into(), "..".into(), parent));
+        let dirs = listing.dirs.iter().map(|dir| {
+            row(
+                format!("folder-{}", dir.path),
+                dir.name.clone(),
+                dir.path.clone(),
+            )
+        });
         folders.children(up).children(dirs)
     }
 }
@@ -275,10 +370,17 @@ impl Render for ProjectForm {
         let form = cx.entity().downgrade();
         let kind = Origin::ALL
             .iter()
-            .fold(Segments::new("origin", self.origin.key()), |segments, (_, key, label)| segments.segment(*key, *label))
+            .fold(
+                Segments::new("origin", self.origin.key()),
+                |segments, (_, key, label)| segments.segment(*key, *label),
+            )
             .on_change(move |key, window, cx| {
-                let origin = Origin::ALL.iter().find(|(_, k, _)| *k == key.as_ref()).map_or(Origin::Empty, |(origin, ..)| *origin);
-                form.update(cx, |form, cx| form.set_origin(origin, window, cx)).ok();
+                let origin = Origin::ALL
+                    .iter()
+                    .find(|(_, k, _)| *k == key.as_ref())
+                    .map_or(Origin::Empty, |(origin, ..)| *origin);
+                form.update(cx, |form, cx| form.set_origin(origin, window, cx))
+                    .ok();
             });
         let folders = (self.origin == Origin::Existing).then(|| self.render_folders(cx));
         Fields::new()
@@ -323,12 +425,31 @@ impl AgentForm {
             })
             .unwrap_or_default();
         let env: String = agent
-            .map(|agent| agent.command.env.iter().map(|(key, value)| format!("{key}={value}\n")).collect())
+            .map(|agent| {
+                agent
+                    .command
+                    .env
+                    .iter()
+                    .map(|(key, value)| format!("{key}={value}\n"))
+                    .collect()
+            })
             .unwrap_or_default();
         Self {
             id: agent.map(|agent| agent.id.clone()),
-            name: line(Purpose::Message, "My agent", agent.map_or("", |a| a.name.as_str()), window, cx),
-            command: line(Purpose::Address, "npx -y @scope/some-acp --flag", &command, window, cx),
+            name: line(
+                Purpose::Message,
+                "My agent",
+                agent.map_or("", |a| a.name.as_str()),
+                window,
+                cx,
+            ),
+            command: line(
+                Purpose::Address,
+                "npx -y @scope/some-acp --flag",
+                &command,
+                window,
+                cx,
+            ),
             env: lines("KEY=value, one a line", &env, (2, 6), window, cx),
         }
     }
@@ -363,7 +484,14 @@ impl AgentForm {
             };
             env.insert(key.trim().to_owned(), value.trim().to_owned());
         }
-        Some(AgentInput { name, command: AgentCommand { command, args: Vec::new(), env } })
+        Some(AgentInput {
+            name,
+            command: AgentCommand {
+                command,
+                args: Vec::new(),
+                env,
+            },
+        })
     }
 }
 
@@ -371,11 +499,9 @@ impl Render for AgentForm {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         Fields::new()
             .child(TextField::new(&self.name).label("Name"))
-            .child(
-                TextField::new(&self.command)
-                    .label("Command")
-                    .help("Run by bash in the project's folder on the server; it must speak ACP on stdio."),
-            )
+            .child(TextField::new(&self.command).label("Command").help(
+                "Run by bash in the project's folder on the server; it must speak ACP on stdio.",
+            ))
             .child(TextField::new(&self.env).label("Environment"))
     }
 }
@@ -395,7 +521,13 @@ impl TaskForm {
         Self {
             id: task.map(|task| task.id),
             status: Some(task.map_or(status, |task| task.status)),
-            title: line(Purpose::Message, "What needs doing", task.map_or("", |task| task.title.as_str()), window, cx),
+            title: line(
+                Purpose::Message,
+                "What needs doing",
+                task.map_or("", |task| task.title.as_str()),
+                window,
+                cx,
+            ),
             markdown: lines("Details, in Markdown", &markdown, (3, 10), window, cx),
         }
     }
@@ -412,13 +544,19 @@ impl TaskForm {
             wrong(&self.title, "The task needs a title.", cx);
             return None;
         }
-        Some(TaskInput { title, markdown: self.markdown.read(cx).value(cx).trim_end().to_owned(), status: self.status })
+        Some(TaskInput {
+            title,
+            markdown: self.markdown.read(cx).value(cx).trim_end().to_owned(),
+            status: self.status,
+        })
     }
 }
 
 impl Render for TaskForm {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        Fields::new().child(TextField::new(&self.title).label("Title")).child(TextField::new(&self.markdown).label("Details"))
+        Fields::new()
+            .child(TextField::new(&self.title).label("Title"))
+            .child(TextField::new(&self.markdown).label("Details"))
     }
 }
 
@@ -471,7 +609,11 @@ impl Render for WorktreeForm {
 }
 
 fn shell_quote(arg: &str) -> String {
-    if !arg.is_empty() && arg.chars().all(|c| c.is_ascii_alphanumeric() || "-_./=:@".contains(c)) {
+    if !arg.is_empty()
+        && arg
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./=:@".contains(c))
+    {
         arg.to_owned()
     } else {
         format!("'{}'", arg.replace('\'', r"'\''"))

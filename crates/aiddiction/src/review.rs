@@ -24,15 +24,17 @@ impl ServerBackend {
 impl ReviewBackend for ServerBackend {
     fn diff(&self, request: DiffRequest, _cx: &mut App, done: Done<String>) {
         let (client, project) = (self.client.clone(), self.project);
-        runtime::spawn(async move { client.review_diff(project, &request).await }, move |result, cx| {
-            done(result.map_err(|error| error.to_string()), cx)
-        });
+        runtime::spawn(
+            async move { client.review_diff(project, &request).await },
+            move |result, cx| done(result.map_err(|error| error.to_string()), cx),
+        );
     }
 
     fn refs(&self, _cx: &mut App, done: Done<Refs>) {
         let (client, project) = (self.client.clone(), self.project);
-        runtime::spawn(async move { client.review_refs(project).await }, move |result, cx| {
-            done(result.map_err(|error| error.to_string()), cx)
-        });
+        runtime::spawn(
+            async move { client.review_refs(project).await },
+            move |result, cx| done(result.map_err(|error| error.to_string()), cx),
+        );
     }
 }

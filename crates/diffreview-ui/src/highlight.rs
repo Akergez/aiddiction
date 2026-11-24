@@ -13,10 +13,10 @@ use std::ops::Range;
 use diffreview::{FileDiff, LineKind};
 use std::sync::Arc;
 
-use gpui_kit::component::Theme;
-use gpui_kit::{App, HighlightStyle};
 use gpui_kit::component::Rope;
+use gpui_kit::component::Theme;
 use gpui_kit::component::highlighter::{HighlightTheme, LanguageRegistry, SyntaxHighlighter};
+use gpui_kit::{App, HighlightStyle};
 
 /// Styles of one line, as byte ranges into its [`display_text`].
 pub type LineStyles = Vec<(Range<usize>, HighlightStyle)>;
@@ -58,13 +58,18 @@ pub fn language_of(path: &str) -> Option<String> {
         "Cargo.lock" => "toml".to_owned(),
         _ => name.rsplit_once('.')?.1.to_lowercase(),
     };
-    LanguageRegistry::singleton().language(&language).is_some().then_some(language)
+    LanguageRegistry::singleton()
+        .language(&language)
+        .is_some()
+        .then_some(language)
 }
 
 /// One entry per line of `file`, empty for a line with nothing to colour.
 pub fn highlight(file: &FileDiff, theme: &HighlightTheme) -> Vec<LineStyles> {
     let empty = || vec![Vec::new(); file.lines.len()];
-    let Some(language) = language_of(&file.path) else { return empty() };
+    let Some(language) = language_of(&file.path) else {
+        return empty();
+    };
 
     #[derive(Clone, Copy)]
     enum Side {
@@ -126,7 +131,8 @@ fn slice(styles: &LineStyles, span: Range<usize>) -> LineStyles {
         .filter_map(|(range, style)| {
             let start = range.start.max(span.start);
             let end = range.end.min(span.end);
-            (start < end && *style != HighlightStyle::default()).then(|| (start - span.start..end - span.start, *style))
+            (start < end && *style != HighlightStyle::default())
+                .then(|| (start - span.start..end - span.start, *style))
         })
         .collect()
 }
@@ -145,7 +151,10 @@ mod tests {
 
     #[test]
     fn a_style_is_cut_to_each_line_it_covers() {
-        let red = HighlightStyle { font_weight: Some(gpui_kit::FontWeight::BOLD), ..Default::default() };
+        let red = HighlightStyle {
+            font_weight: Some(gpui_kit::FontWeight::BOLD),
+            ..Default::default()
+        };
         let styles = vec![(2..9, red)];
         assert_eq!(slice(&styles, 0..4), vec![(2..4, red)]);
         assert_eq!(slice(&styles, 5..12), vec![(0..4, red)]);

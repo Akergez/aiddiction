@@ -43,11 +43,21 @@ pub fn expand_home(path: &str) -> PathBuf {
 }
 
 fn resolve(variable: &str, standard: Option<PathBuf>, fallback: &str) -> PathBuf {
-    resolve_from(std::env::var_os(variable).map(PathBuf::from), standard, dirs::home_dir(), fallback)
+    resolve_from(
+        std::env::var_os(variable).map(PathBuf::from),
+        standard,
+        dirs::home_dir(),
+        fallback,
+    )
 }
 
 /// The rule apart from the environment, so it can be tested.
-fn resolve_from(variable: Option<PathBuf>, standard: Option<PathBuf>, home: Option<PathBuf>, fallback: &str) -> PathBuf {
+fn resolve_from(
+    variable: Option<PathBuf>,
+    standard: Option<PathBuf>,
+    home: Option<PathBuf>,
+    fallback: &str,
+) -> PathBuf {
     match variable {
         Some(dir) if !dir.as_os_str().is_empty() => dir,
         _ => standard.unwrap_or_else(|| home.unwrap_or_else(|| PathBuf::from("/")).join(fallback)),
@@ -62,10 +72,29 @@ mod tests {
     fn the_variable_wins_then_the_platform_then_home() {
         let home = Some(PathBuf::from("/home/someone"));
         let standard = Some(PathBuf::from("/standard"));
-        assert_eq!(resolve_from(Some("/elsewhere".into()), standard.clone(), home.clone(), ".config"), PathBuf::from("/elsewhere"));
+        assert_eq!(
+            resolve_from(
+                Some("/elsewhere".into()),
+                standard.clone(),
+                home.clone(),
+                ".config"
+            ),
+            PathBuf::from("/elsewhere")
+        );
         // Unset and empty mean the same thing, as the XDG spec says.
-        assert_eq!(resolve_from(Some(PathBuf::new()), standard.clone(), home.clone(), ".config"), PathBuf::from("/standard"));
-        assert_eq!(resolve_from(None, None, home, ".local/share"), PathBuf::from("/home/someone/.local/share"));
+        assert_eq!(
+            resolve_from(
+                Some(PathBuf::new()),
+                standard.clone(),
+                home.clone(),
+                ".config"
+            ),
+            PathBuf::from("/standard")
+        );
+        assert_eq!(
+            resolve_from(None, None, home, ".local/share"),
+            PathBuf::from("/home/someone/.local/share")
+        );
     }
 
     #[test]

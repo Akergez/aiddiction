@@ -16,13 +16,16 @@
 use std::collections::HashMap;
 
 use aiddiction_api::{Instance, Project, ProjectId};
-use gpui_adaptive::{
-    AppFrame, Avatar, Command, Destination, Destinations, Empty, Navigator, NavigatorEvent, NavigatorState, Presence,
-    Route, Screen, Signal, Tone,
-};
 use gpui_adaptive::IconName;
+use gpui_adaptive::{
+    AppFrame, Avatar, Command, Destination, Destinations, Empty, Navigator, NavigatorEvent,
+    NavigatorState, Presence, Route, Screen, Signal, Tone,
+};
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, App, Context, Entity, EntityId, Render, Rems, SharedString, Subscription, Window, div, rems};
+use gpui_kit::{
+    AnyElement, App, Context, Entity, EntityId, Rems, Render, SharedString, Subscription, Window,
+    div, rems,
+};
 
 use super::chat::ChatView;
 use crate::server::ServerConnection;
@@ -126,7 +129,9 @@ impl Shell {
         // Only now is there a window to ask what the desktop looks like.
         crate::appearance::apply_mode(Some(window), cx);
         let appearance = vec![
-            window.observe_window_appearance(|window, cx| crate::appearance::apply_mode(Some(window), cx)),
+            window.observe_window_appearance(|window, cx| {
+                crate::appearance::apply_mode(Some(window), cx)
+            }),
             // Android does not announce a new wallpaper colour; it is asked
             // again whenever the window comes back to the front.
             cx.observe_window_activation(window, |_, window, cx| {
@@ -140,9 +145,15 @@ impl Shell {
                 }
             }),
         ];
-        let first = if Settings::get(cx).servers.is_empty() { Page::Servers } else { Page::Inbox };
+        let first = if Settings::get(cx).servers.is_empty() {
+            Page::Servers
+        } else {
+            Page::Inbox
+        };
         let navigator = cx.new(|_| NavigatorState::new(first));
-        let navigated = cx.subscribe(&navigator, |this, _, _: &NavigatorEvent, cx| this.navigated(cx));
+        let navigated = cx.subscribe(&navigator, |this, _, _: &NavigatorEvent, cx| {
+            this.navigated(cx)
+        });
         let mut this = Self {
             servers: Vec::new(),
             server: None,
@@ -167,17 +178,25 @@ impl Shell {
         let settings = Settings::get(cx).clone();
         let mut old = std::mem::take(&mut self.servers);
         for entry in &settings.servers {
-            let kept = old.iter().position(|server| server.read(cx).entry == *entry).map(|index| old.remove(index));
+            let kept = old
+                .iter()
+                .position(|server| server.read(cx).entry == *entry)
+                .map(|index| old.remove(index));
             self.servers.push(kept.unwrap_or_else(|| {
                 let entry = entry.clone();
                 cx.new(|cx| ServerConnection::new(entry, cx))
             }));
         }
-        let gone: Vec<ProjectId> = old.iter().flat_map(|server| server.read(cx).projects.iter().map(|project| project.id)).collect();
+        let gone: Vec<ProjectId> = old
+            .iter()
+            .flat_map(|server| server.read(cx).projects.iter().map(|project| project.id))
+            .collect();
         if !gone.is_empty() {
-            self.chats.retain(|chat| !gone.contains(&chat.read(cx).project_id));
+            self.chats
+                .retain(|chat| !gone.contains(&chat.read(cx).project_id));
             self.reviews.retain(|project, _| !gone.contains(project));
-            self.review_from.retain(|project, _| !gone.contains(project));
+            self.review_from
+                .retain(|project, _| !gone.contains(project));
             let chats: Vec<EntityId> = self.chats.iter().map(|chat| chat.entity_id()).collect();
             self.navigator.update(cx, |navigator, cx| {
                 navigator.retain(
@@ -190,7 +209,11 @@ impl Shell {
                 )
             });
         }
-        self._server_subscriptions = self.servers.iter().map(|server| cx.observe(server, |_, _, cx| cx.notify())).collect();
+        self._server_subscriptions = self
+            .servers
+            .iter()
+            .map(|server| cx.observe(server, |_, _, cx| cx.notify()))
+            .collect();
         self.server = settings
             .active
             .as_deref()
@@ -200,18 +223,34 @@ impl Shell {
     }
 
     /// The connection to the server with this id in the settings.
-    pub(crate) fn connection(&self, id: &str, cx: &gpui_kit::App) -> Option<Entity<ServerConnection>> {
-        self.servers.iter().find(|server| server.read(cx).entry.id == id).cloned()
+    pub(crate) fn connection(
+        &self,
+        id: &str,
+        cx: &gpui_kit::App,
+    ) -> Option<Entity<ServerConnection>> {
+        self.servers
+            .iter()
+            .find(|server| server.read(cx).entry.id == id)
+            .cloned()
     }
 
     /// The server a project is on; project ids are unique across servers.
-    pub(crate) fn server_of(&self, project: ProjectId, cx: &gpui_kit::App) -> Option<Entity<ServerConnection>> {
-        self.servers.iter().find(|server| server.read(cx).project(project).is_some()).cloned()
+    pub(crate) fn server_of(
+        &self,
+        project: ProjectId,
+        cx: &gpui_kit::App,
+    ) -> Option<Entity<ServerConnection>> {
+        self.servers
+            .iter()
+            .find(|server| server.read(cx).project(project).is_some())
+            .cloned()
     }
 
     /// Makes the server with this id the one in use, and remembers it.
     pub(super) fn use_server(&mut self, id: &str, cx: &mut Context<Self>) {
-        let Some(server) = self.connection(id, cx) else { return };
+        let Some(server) = self.connection(id, cx) else {
+            return;
+        };
         if Settings::get(cx).active.as_deref() != Some(id) {
             Settings::update(cx, |settings| settings.active = Some(id.to_owned()));
         }
@@ -226,12 +265,14 @@ impl Shell {
 
     /// Opens `page` over this one; back returns here.
     pub(super) fn go(&mut self, page: Page, cx: &mut Context<Self>) {
-        self.navigator.update(cx, |navigator, cx| navigator.push(page, cx));
+        self.navigator
+            .update(cx, |navigator, cx| navigator.push(page, cx));
     }
 
     /// Goes to a section's page from its tab: there is nothing to go back to.
     pub(super) fn go_root(&mut self, page: Page, cx: &mut Context<Self>) {
-        self.navigator.update(cx, |navigator, cx| navigator.replace_root(page, cx));
+        self.navigator
+            .update(cx, |navigator, cx| navigator.replace_root(page, cx));
     }
 
     /// What a page needs as it comes up and as it goes.
@@ -258,9 +299,13 @@ impl Shell {
     fn mark_seen(&self, page: Page, cx: &mut Context<Self>) {
         let Page::Chat(id) = page else { return };
         let Some(chat) = self.chat(id) else { return };
-        let Some(server) = self.server_of(chat.read(cx).project_id, cx) else { return };
+        let Some(server) = self.server_of(chat.read(cx).project_id, cx) else {
+            return;
+        };
         let session = chat.read(cx).session.read(cx);
-        let Some(session_id) = session.session_id.clone() else { return };
+        let Some(session_id) = session.session_id.clone() else {
+            return;
+        };
         let seq = session.last_seq();
         let server = server.read(cx).entry.id.clone();
         if Settings::get(cx).seen(&server, &session_id) < seq {
@@ -276,7 +321,9 @@ impl Shell {
 
     /// The session of the conversation on screen, if one is.
     pub(super) fn showing_session(&self, cx: &gpui_kit::App) -> Option<String> {
-        let Page::Chat(id) = self.page(cx) else { return None };
+        let Page::Chat(id) = self.page(cx) else {
+            return None;
+        };
         self.chat(id)?.read(cx).session.read(cx).session_id.clone()
     }
 
@@ -304,7 +351,8 @@ impl Shell {
         if let Some(session) = &session {
             let open = self.chats.iter().find(|chat| {
                 let session_of = chat.read(cx).session.read(cx);
-                session_of.instance_id == instance.id && session_of.session_id.as_ref() == Some(session)
+                session_of.instance_id == instance.id
+                    && session_of.session_id.as_ref() == Some(session)
             });
             if let Some(chat) = open.cloned() {
                 self.go(Page::Chat(chat.entity_id()), cx);
@@ -312,21 +360,34 @@ impl Shell {
                 return;
             }
         }
-        let Some(client) = self.server_of(project.id, cx).and_then(|server| server.read(cx).client().cloned()) else {
+        let Some(client) = self
+            .server_of(project.id, cx)
+            .and_then(|server| server.read(cx).client().cloned())
+        else {
             return;
         };
         let session = cx.new(|cx| {
-            let mut session =
-                AgentSession::new(client, instance.id, instance.agent_name.clone(), project.name.clone(), session, cx);
+            let mut session = AgentSession::new(
+                client,
+                instance.id,
+                instance.agent_name.clone(),
+                project.name.clone(),
+                session,
+                cx,
+            );
             session.queue_prompt(prompt);
             session
         });
         let chat = cx.new(|cx| ChatView::new(session, project.id, window, cx));
         let project_id = project.id;
-        let review = cx.subscribe_in(&chat, window, move |this, chat, _: &super::chat::OpenReview, window, cx| {
-            this.review_from.insert(project_id, chat.entity_id());
-            this.open_review(project_id, window, cx);
-        });
+        let review = cx.subscribe_in(
+            &chat,
+            window,
+            move |this, chat, _: &super::chat::OpenReview, window, cx| {
+                this.review_from.insert(project_id, chat.entity_id());
+                this.open_review(project_id, window, cx);
+            },
+        );
         // The subscription lives as long as the chat does.
         chat.update(cx, |chat, _| chat.keep(review));
         chat.read(cx).composer_focus(cx).focus(window, cx);
@@ -345,37 +406,57 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(server) = self.server_of(project, cx) else { return };
+        let Some(server) = self.server_of(project, cx) else {
+            return;
+        };
         Settings::update(cx, |settings| settings.last_agent = Some(agent.clone()));
         let this = cx.entity().downgrade();
         let window_handle = window.window_handle();
         server.update(cx, |server, cx| {
-            server.start_instance(project, agent, worktree, cx, move |result, cx| match result {
-                Ok(instance) => {
-                    let _ = window_handle.update(cx, |_, window, cx| {
-                        let _ = this.update(cx, |shell, cx| {
-                            let project = shell.server_of(project, cx).and_then(|server| server.read(cx).project(project).cloned());
-                            if let Some(project) = project {
-                                shell.open_chat(&project, &instance, None, prompt, window, cx);
-                            }
+            server.start_instance(
+                project,
+                agent,
+                worktree,
+                cx,
+                move |result, cx| match result {
+                    Ok(instance) => {
+                        let _ = window_handle.update(cx, |_, window, cx| {
+                            let _ = this.update(cx, |shell, cx| {
+                                let project = shell
+                                    .server_of(project, cx)
+                                    .and_then(|server| server.read(cx).project(project).cloned());
+                                if let Some(project) = project {
+                                    shell.open_chat(&project, &instance, None, prompt, window, cx);
+                                }
+                            });
                         });
-                    });
-                }
-                Err(error) => super::toast_error(format!("Could not start the agent: {error}"), cx),
-            });
+                    }
+                    Err(error) => {
+                        super::toast_error(format!("Could not start the agent: {error}"), cx)
+                    }
+                },
+            );
         });
     }
 
     pub(super) fn close_chat(&mut self, id: EntityId, cx: &mut Context<Self>) {
         self.mark_seen(Page::Chat(id), cx);
-        self.navigator.update(cx, |navigator, cx| navigator.retain(|page| *page != Page::Chat(id), cx));
+        self.navigator.update(cx, |navigator, cx| {
+            navigator.retain(|page| *page != Page::Chat(id), cx)
+        });
         self.chats.retain(|chat| chat.entity_id() != id);
         cx.notify();
     }
 
     /// Draws one page. The navigator calls it for the page up, the list
     /// beside it, and the page a back gesture shows: it changes nothing.
-    fn render_route(&mut self, route: Page, page: gpui_adaptive::Page, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_route(
+        &mut self,
+        route: Page,
+        page: gpui_adaptive::Page,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let screen = match route {
             Page::Inbox => self.render_inbox(cx),
             Page::Projects => self.render_projects(cx),
@@ -384,7 +465,9 @@ impl Shell {
             Page::Appearance => {
                 let settings = self
                     .settings
-                    .get_or_insert_with(|| cx.new(|cx| super::settings_page::SettingsPage::new(window, cx)))
+                    .get_or_insert_with(|| {
+                        cx.new(|cx| super::settings_page::SettingsPage::new(window, cx))
+                    })
                     .clone();
                 Screen::new("appearance", "Appearance").content(settings)
             }
@@ -402,7 +485,11 @@ impl Shell {
     /// server's, all of them.
     fn render_pick(&self, section: Section, cx: &mut Context<Self>) -> Screen {
         let (title, subtitle) = if section == Section::Inbox && self.servers.len() > 1 {
-            let names = self.servers.iter().map(|server| server.read(cx).entry.name.clone()).collect::<Vec<_>>();
+            let names = self
+                .servers
+                .iter()
+                .map(|server| server.read(cx).entry.name.clone())
+                .collect::<Vec<_>>();
             ("All servers".into(), Some(names.join(" · ")))
         } else {
             match &self.server {
@@ -421,7 +508,8 @@ impl Shell {
         let empty = if self.servers.is_empty() {
             Empty::new(IconName::HardDrive, "Add a server to begin.")
         } else if section == Section::Inbox {
-            Empty::new(IconName::Inbox, "Pick a conversation, or start a new one.").action(self.new_conversation_command(cx))
+            Empty::new(IconName::Inbox, "Pick a conversation, or start a new one.")
+                .action(self.new_conversation_command(cx))
         } else {
             Empty::new(IconName::Folder, "Pick a project, or make a new one.")
         };
@@ -433,7 +521,9 @@ impl Shell {
 
     fn render_chat(&self, id: EntityId, cx: &mut Context<Self>) -> Screen {
         let Some(chat) = self.chat(id).cloned() else {
-            return Screen::new("chat-closed", "").scrolls(false).content(Empty::new(IconName::Inbox, "This conversation is closed."));
+            return Screen::new("chat-closed", "")
+                .scrolls(false)
+                .content(Empty::new(IconName::Inbox, "This conversation is closed."));
         };
         let session = chat.read(cx).session.read(cx);
         let title = self.session_title(session, cx);
@@ -454,11 +544,17 @@ impl Shell {
             .command(
                 Command::new("bar-review", "Review")
                     .icon(IconName::FileText)
-                    .on_trigger(move |_, cx| review.update(cx, |_, cx| cx.emit(super::chat::OpenReview))),
+                    .on_trigger(move |_, cx| {
+                        review.update(cx, |_, cx| cx.emit(super::chat::OpenReview))
+                    }),
             )
-            .command(Command::new("bar-close", "Close").icon(IconName::Close).on_trigger(move |_, cx| {
-                shell.update(cx, |shell, cx| shell.close_chat(id, cx)).ok();
-            }))
+            .command(
+                Command::new("bar-close", "Close")
+                    .icon(IconName::Close)
+                    .on_trigger(move |_, cx| {
+                        shell.update(cx, |shell, cx| shell.close_chat(id, cx)).ok();
+                    }),
+            )
             .content(chat)
     }
 
@@ -488,7 +584,9 @@ impl Shell {
             .primary()
             .disabled(self.servers.is_empty())
             .on_trigger(move |window, cx| {
-                shell.update(cx, |shell, cx| shell.new_conversation(window, cx)).ok();
+                shell
+                    .update(cx, |shell, cx| shell.new_conversation(window, cx))
+                    .ok();
             })
     }
 
@@ -498,20 +596,35 @@ impl Shell {
         let (letter, presence, name) = match &self.server {
             Some(server) => {
                 let server = server.read(cx);
-                let letter = server.entry.name.chars().next().unwrap_or('?').to_uppercase().collect::<String>();
+                let letter = server
+                    .entry
+                    .name
+                    .chars()
+                    .next()
+                    .unwrap_or('?')
+                    .to_uppercase()
+                    .collect::<String>();
                 let presence = match server.status {
                     crate::server::Status::Connecting => Presence::Away,
                     crate::server::Status::Online => Presence::Online,
                     crate::server::Status::Offline(_) => Presence::Busy,
                 };
-                (letter, presence, SharedString::from(server.entry.name.clone()))
+                (
+                    letter,
+                    presence,
+                    SharedString::from(server.entry.name.clone()),
+                )
             }
             None => ("+".to_owned(), Presence::Offline, "No server".into()),
         };
         div()
             .id("rail-server")
             .cursor_pointer()
-            .child(Avatar::new("server-avatar", letter).square().presence(presence))
+            .child(
+                Avatar::new("server-avatar", letter)
+                    .square()
+                    .presence(presence),
+            )
             .tooltip(gpui_adaptive::prim::tooltip(name))
             .on_click(cx.listener(|this, _, _, cx| this.go_root(Page::Servers, cx)))
             .into_any_element()

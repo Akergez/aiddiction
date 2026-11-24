@@ -25,7 +25,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use aiddiction_api::{AttachParams, AttachResult, PendingPermission, PermissionChoice, PromptFinished, SessionSummary, TaskId, ext};
+use aiddiction_api::{
+    AttachParams, AttachResult, PendingPermission, PermissionChoice, PromptFinished,
+    SessionSummary, TaskId, ext,
+};
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -85,9 +88,18 @@ enum InitState {
 }
 
 enum PendingClient {
-    Client { conn: ConnId, id: Value, method: String, session: Option<String> },
+    Client {
+        conn: ConnId,
+        id: Value,
+        method: String,
+        session: Option<String>,
+    },
     /// A request the server made on its own behalf: no socket, no client id.
-    Internal { tx: oneshot::Sender<Result<Value, Value>>, method: String, session: Option<String> },
+    Internal {
+        tx: oneshot::Sender<Result<Value, Value>>,
+        method: String,
+        session: Option<String>,
+    },
 }
 
 struct PendingAgent {
@@ -154,7 +166,10 @@ impl Session {
         if let Some(modes) = result.get("modes").filter(|modes| !modes.is_null()) {
             self.modes = modes.clone();
         }
-        if let Some(options) = result.get("configOptions").filter(|options| !options.is_null()) {
+        if let Some(options) = result
+            .get("configOptions")
+            .filter(|options| !options.is_null())
+        {
             self.config_options = options.clone();
         }
     }
@@ -179,7 +194,10 @@ fn kind(message: &Value) -> Option<Kind<'_>> {
 }
 
 fn session_of(message: &Value) -> Option<String> {
-    message.pointer("/params/sessionId").and_then(Value::as_str).map(str::to_owned)
+    message
+        .pointer("/params/sessionId")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
 }
 
 fn response(id: &Value, result: Value) -> String {
@@ -208,7 +226,10 @@ async fn reply(rx: oneshot::Receiver<Result<Value, Value>>) -> Result<Value, Str
 }
 
 pub fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 impl Proxy {
@@ -251,7 +272,12 @@ impl Proxy {
     }
 
     /// Sets one of the session's configuration options as a client would.
-    pub async fn set_config_option(&self, session: &str, config_id: &str, value: &Value) -> Result<Value, String> {
+    pub async fn set_config_option(
+        &self,
+        session: &str,
+        config_id: &str,
+        value: &Value,
+    ) -> Result<Value, String> {
         let params = json!({ "sessionId": session, "configId": config_id, "value": value });
         reply(self.internal_request("session/set_config_option", params)).await
     }
@@ -262,7 +288,11 @@ impl Proxy {
     pub async fn prompt(&self, session: &str, text: &str, task_id: Option<TaskId>) {
         {
             let mut state = self.state.lock().unwrap();
-            state.sessions.entry(session.to_owned()).or_insert_with(Session::new).task_id = task_id;
+            state
+                .sessions
+                .entry(session.to_owned())
+                .or_insert_with(Session::new)
+                .task_id = task_id;
             state.begin_prompt(session, text);
         }
         (self.on_sessions_changed)();
@@ -275,7 +305,10 @@ impl Proxy {
     pub async fn close_session(&self, session: &str) {
         let loaded = self
             .init_result()
-            .and_then(|init| init.pointer("/agentCapabilities/sessionCapabilities/close").cloned())
+            .and_then(|init| {
+                init.pointer("/agentCapabilities/sessionCapabilities/close")
+                    .cloned()
+            })
             .is_some_and(|close| !close.is_null());
         if loaded {
             let _ = tokio::time::timeout(
@@ -290,24 +323,48 @@ impl Proxy {
     /// session: what to offer before a new one is made.
     pub fn latest_choices(&self) -> Option<(Value, Value, u64)> {
         let state = self.state.lock().unwrap();
-        let session = state.sessions.values().filter(|session| session.listed).max_by_key(|session| session.updated_at_ms)?;
+        let session = state
+            .sessions
+            .values()
+            .filter(|session| session.listed)
+            .max_by_key(|session| session.updated_at_ms)?;
         if session.modes.is_null() && session.config_options.is_null() {
             return None;
         }
-        Some((session.modes.clone(), session.config_options.clone(), session.updated_at_ms))
+        Some((
+            session.modes.clone(),
+            session.config_options.clone(),
+            session.updated_at_ms,
+        ))
     }
 
     /// Sends a request to the agent in the server's own name and hands back
     /// the agent's answer when it comes.
-    fn internal_request(&self, method: &str, params: Value) -> oneshot::Receiver<Result<Value, Value>> {
+    fn internal_request(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> oneshot::Receiver<Result<Value, Value>> {
         let (tx, rx) = oneshot::channel();
         let mut state = self.state.lock().unwrap();
         let id = state.next_upstream_id;
         state.next_upstream_id += 1;
-        let session = params.get("sessionId").and_then(Value::as_str).map(str::to_owned);
-        state.pending_client.insert(id, PendingClient::Internal { tx, method: method.to_owned(), session });
+        let session = params
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        state.pending_client.insert(
+            id,
+            PendingClient::Internal {
+                tx,
+                method: method.to_owned(),
+                session,
+            },
+        );
         drop(state);
-        let _ = self.to_agent.send(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }).to_string());
+        let _ = self.to_agent.send(
+            json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }).to_string(),
+        );
         rx
     }
 
@@ -346,9 +403,19 @@ impl Proxy {
         state.init = InitState::Waiting(Vec::new());
         let id = state.next_upstream_id;
         state.next_upstream_id += 1;
-        state.pending_client.insert(id, PendingClient::Internal { tx, method: "initialize".into(), session: None });
+        state.pending_client.insert(
+            id,
+            PendingClient::Internal {
+                tx,
+                method: "initialize".into(),
+                session: None,
+            },
+        );
         drop(state);
-        let _ = self.to_agent.send(json!({ "jsonrpc": "2.0", "id": id, "method": "initialize", "params": params }).to_string());
+        let _ = self.to_agent.send(
+            json!({ "jsonrpc": "2.0", "id": id, "method": "initialize", "params": params })
+                .to_string(),
+        );
         rx
     }
 
@@ -428,12 +495,17 @@ impl Proxy {
     /// for every client. False when it was already settled.
     pub fn answer_permission(&self, request_id: &Value, option_id: &str) -> bool {
         let mut state = self.state.lock().unwrap();
-        if state.pending_agent.remove(&request_id.to_string()).is_none() {
+        if state
+            .pending_agent
+            .remove(&request_id.to_string())
+            .is_none()
+        {
             return false;
         }
         let outcome = json!({ "outcome": { "outcome": "selected", "optionId": option_id } });
         let _ = self.to_agent.send(response(request_id, outcome));
-        let resolved = notification(ext::REQUEST_RESOLVED, json!({ "requestId": request_id })).to_string();
+        let resolved =
+            notification(ext::REQUEST_RESOLVED, json!({ "requestId": request_id })).to_string();
         let conns: Vec<_> = state.conns.keys().copied().collect();
         for conn in conns {
             state.send(conn, resolved.clone());
@@ -493,8 +565,15 @@ impl Proxy {
                 let mut state = self.state.lock().unwrap();
                 if state.pending_agent.remove(&key).is_some() {
                     let _ = self.to_agent.send(message.to_string());
-                    let resolved = notification(ext::REQUEST_RESOLVED, json!({ "requestId": message["id"] })).to_string();
-                    let others: Vec<_> = state.conns.keys().copied().filter(|other| *other != conn).collect();
+                    let resolved =
+                        notification(ext::REQUEST_RESOLVED, json!({ "requestId": message["id"] }))
+                            .to_string();
+                    let others: Vec<_> = state
+                        .conns
+                        .keys()
+                        .copied()
+                        .filter(|other| *other != conn)
+                        .collect();
                     for other in others {
                         state.send(other, resolved.clone());
                     }
@@ -521,7 +600,11 @@ impl Proxy {
                         waiting.push((conn, id.clone()));
                         None
                     }
-                    InitState::Pending => Some(error_response(&id, INTERNAL_ERROR, "the agent is not running")),
+                    InitState::Pending => Some(error_response(
+                        &id,
+                        INTERNAL_ERROR,
+                        "the agent is not running",
+                    )),
                 };
                 if let Some(line) = line {
                     state.send(conn, line);
@@ -540,7 +623,10 @@ impl Proxy {
                             state.send(conn, line);
                         }
                     }
-                    Err(error) => state.send(conn, error_response(&id, INVALID_PARAMS, &error.to_string())),
+                    Err(error) => state.send(
+                        conn,
+                        error_response(&id, INVALID_PARAMS, &error.to_string()),
+                    ),
                 }
                 return;
             }
@@ -562,7 +648,10 @@ impl Proxy {
                 "session/load" => {
                     // The agent replays the whole conversation: the journal
                     // starts over with it.
-                    let entry = state.sessions.entry(session.clone()).or_insert_with(Session::new);
+                    let entry = state
+                        .sessions
+                        .entry(session.clone())
+                        .or_insert_with(Session::new);
                     entry.journal.clear();
                     entry.dropped = true;
                     state.list_session(session);
@@ -571,14 +660,20 @@ impl Proxy {
                 "session/set_mode" => {
                     // Agents do not all announce a mode the client set.
                     if let Some(mode) = message["params"]["modeId"].as_str() {
-                        let entry = state.sessions.entry(session.clone()).or_insert_with(Session::new);
+                        let entry = state
+                            .sessions
+                            .entry(session.clone())
+                            .or_insert_with(Session::new);
                         if entry.modes.is_object() {
                             entry.modes["currentModeId"] = json!(mode);
                         }
                     }
                 }
                 "session/resume" => {
-                    state.sessions.entry(session.clone()).or_insert_with(Session::new);
+                    state
+                        .sessions
+                        .entry(session.clone())
+                        .or_insert_with(Session::new);
                     state.list_session(session);
                     state.owners.insert(session.clone(), conn);
                 }
@@ -599,7 +694,12 @@ impl Proxy {
         state.next_upstream_id += 1;
         state.pending_client.insert(
             upstream,
-            PendingClient::Client { conn, id, method: method.to_owned(), session },
+            PendingClient::Client {
+                conn,
+                id,
+                method: method.to_owned(),
+                session,
+            },
         );
         message["id"] = json!(upstream);
         drop(state);
@@ -628,7 +728,11 @@ impl Proxy {
             }
             Some(Kind::Request { id, method }) if method.starts_with("terminal/") => {
                 // Not offered in `initialize`; an agent that asks anyway is told no.
-                let _ = self.to_agent.send(error_response(id, METHOD_NOT_FOUND, "terminals are not supported"));
+                let _ = self.to_agent.send(error_response(
+                    id,
+                    METHOD_NOT_FOUND,
+                    "terminals are not supported",
+                ));
             }
             Some(Kind::Request { id, method }) => {
                 let session = session_of(&message);
@@ -645,7 +749,14 @@ impl Proxy {
                     }
                     None => (state.audience(session.as_deref()), line.to_owned()),
                 };
-                state.pending_agent.insert(key, PendingAgent { session, method, line: line.clone() });
+                state.pending_agent.insert(
+                    key,
+                    PendingAgent {
+                        session,
+                        method,
+                        line: line.clone(),
+                    },
+                );
                 for conn in audience {
                     state.send(conn, line.clone());
                 }
@@ -656,7 +767,8 @@ impl Proxy {
                 let mut state = self.state.lock().unwrap();
                 match session_of(&message) {
                     Some(session) => {
-                        let changed = method == "session/update" && state.follow(&session, &message);
+                        let changed =
+                            method == "session/update" && state.follow(&session, &message);
                         state.publish(&session, message);
                         if changed {
                             drop(state);
@@ -683,10 +795,14 @@ impl Proxy {
             return;
         };
         let method = match &pending {
-            PendingClient::Client { method, .. } | PendingClient::Internal { method, .. } => method.clone(),
+            PendingClient::Client { method, .. } | PendingClient::Internal { method, .. } => {
+                method.clone()
+            }
         };
         let session = match &pending {
-            PendingClient::Client { session, .. } | PendingClient::Internal { session, .. } => session.clone(),
+            PendingClient::Client { session, .. } | PendingClient::Internal { session, .. } => {
+                session.clone()
+            }
         };
         let sessions_changed = state.settled(&method, session.as_deref(), &message);
         match pending {
@@ -700,7 +816,10 @@ impl Proxy {
             PendingClient::Client { conn, id, .. } => {
                 if method == "session/new"
                     && message.get("error").is_none()
-                    && let Some(new) = message.pointer("/result/sessionId").and_then(Value::as_str).map(str::to_owned)
+                    && let Some(new) = message
+                        .pointer("/result/sessionId")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
                 {
                     state.owners.insert(new, conn);
                 }
@@ -726,15 +845,26 @@ impl State {
         }
         let mut changed = false;
         if method == "session/new"
-            && let Some(new) = message.pointer("/result/sessionId").and_then(Value::as_str).map(str::to_owned)
+            && let Some(new) = message
+                .pointer("/result/sessionId")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
         {
-            self.sessions.entry(new.clone()).or_insert_with(Session::new);
+            self.sessions
+                .entry(new.clone())
+                .or_insert_with(Session::new);
             self.list_session(&new);
             changed = true;
         }
-        if matches!(method, "session/new" | "session/load" | "session/resume" | "session/set_config_option") {
+        if matches!(
+            method,
+            "session/new" | "session/load" | "session/resume" | "session/set_config_option"
+        ) {
             let id = if method == "session/new" {
-                message.pointer("/result/sessionId").and_then(Value::as_str).map(str::to_owned)
+                message
+                    .pointer("/result/sessionId")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
             } else {
                 session.map(str::to_owned)
             };
@@ -750,8 +880,14 @@ impl State {
         {
             let finished = PromptFinished {
                 session_id: session.to_owned(),
-                stop_reason: message.pointer("/result/stopReason").and_then(Value::as_str).map(str::to_owned),
-                error: message.pointer("/error/message").and_then(Value::as_str).map(str::to_owned),
+                stop_reason: message
+                    .pointer("/result/stopReason")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                error: message
+                    .pointer("/error/message")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
             };
             if let Some(entry) = self.sessions.get_mut(session) {
                 entry.prompts_running = entry.prompts_running.saturating_sub(1);
@@ -777,7 +913,10 @@ impl State {
     /// Every client of the session, the sender included, shows the user's
     /// message from that one place.
     fn begin_prompt(&mut self, session: &str, text: &str) {
-        let entry = self.sessions.entry(session.to_owned()).or_insert_with(Session::new);
+        let entry = self
+            .sessions
+            .entry(session.to_owned())
+            .or_insert_with(Session::new);
         entry.prompts_running += 1;
         entry.reply.clear();
         entry.activity.clear();
@@ -800,9 +939,10 @@ impl State {
 
     fn send(&mut self, conn: ConnId, line: String) {
         if let Some(tx) = self.conns.get(&conn)
-            && tx.send(line).is_err() {
-                self.conns.remove(&conn);
-            }
+            && tx.send(line).is_err()
+        {
+            self.conns.remove(&conn);
+        }
     }
 
     fn send_auth_status(&mut self, conn: ConnId) {
@@ -824,23 +964,28 @@ impl State {
     /// Who hears about a session: its owner while connected, else everyone.
     fn audience(&self, session: Option<&str>) -> Vec<ConnId> {
         if let Some(owner) = session.and_then(|session| self.owners.get(session))
-            && self.conns.contains_key(owner) {
-                return vec![*owner];
-            }
+            && self.conns.contains_key(owner)
+        {
+            return vec![*owner];
+        }
         self.conns.keys().copied().collect()
     }
 
     fn list_session(&mut self, session: &str) {
         if let Some(entry) = self.sessions.get_mut(session)
-            && !entry.listed {
-                entry.listed = true;
-                self.order.push(session.to_owned());
-            }
+            && !entry.listed
+        {
+            entry.listed = true;
+            self.order.push(session.to_owned());
+        }
     }
 
     /// Numbers a notification, keeps it, and sends it to the session's audience.
     fn publish(&mut self, session: &str, mut message: Value) {
-        let entry = self.sessions.entry(session.to_owned()).or_insert_with(Session::new);
+        let entry = self
+            .sessions
+            .entry(session.to_owned())
+            .or_insert_with(Session::new);
         let seq = entry.next_seq;
         entry.next_seq += 1;
         entry.updated_at_ms = now_ms();
@@ -875,7 +1020,11 @@ impl State {
             };
             return (unknown, Vec::new());
         };
-        let first = entry.journal.front().map(|(seq, _)| *seq).unwrap_or(entry.next_seq);
+        let first = entry
+            .journal
+            .front()
+            .map(|(seq, _)| *seq)
+            .unwrap_or(entry.next_seq);
         let truncated = entry.dropped && first > params.after_seq + 1;
         let mut replay: Vec<String> = entry
             .journal
@@ -907,7 +1056,10 @@ impl State {
     /// runs. True when a list should be read again.
     fn follow(&mut self, session: &str, message: &Value) -> bool {
         let update = &message["params"]["update"];
-        let entry = self.sessions.entry(session.to_owned()).or_insert_with(Session::new);
+        let entry = self
+            .sessions
+            .entry(session.to_owned())
+            .or_insert_with(Session::new);
         match update["sessionUpdate"].as_str().unwrap_or_default() {
             "session_info_update" => match update.get("title").and_then(Value::as_str) {
                 Some(title) if entry.title != title => {
@@ -919,7 +1071,9 @@ impl State {
             "agent_message_chunk" => {
                 if let Some(text) = update.pointer("/content/text").and_then(Value::as_str) {
                     let room = REPLY_LIMIT.saturating_sub(entry.reply.len());
-                    entry.reply.push_str(&text[..floor_char_boundary(text, room)]);
+                    entry
+                        .reply
+                        .push_str(&text[..floor_char_boundary(text, room)]);
                 }
                 false
             }
@@ -938,7 +1092,9 @@ impl State {
                 false
             }
             "tool_call_update" => {
-                if let (Some(id), Some(title)) = (update["toolCallId"].as_str(), update["title"].as_str()) {
+                if let (Some(id), Some(title)) =
+                    (update["toolCallId"].as_str(), update["title"].as_str())
+                {
                     entry.tools.insert(id.to_owned(), title.to_owned());
                 }
                 false
@@ -968,10 +1124,16 @@ impl State {
                 let mut asked: Vec<_> = self
                     .pending_agent
                     .iter()
-                    .filter(|(_, pending)| pending.session.as_deref() == Some(id.as_str()) && pending.method == "session/request_permission")
+                    .filter(|(_, pending)| {
+                        pending.session.as_deref() == Some(id.as_str())
+                            && pending.method == "session/request_permission"
+                    })
                     .collect();
                 asked.sort_by(|a, b| a.0.cmp(b.0));
-                let permissions = asked.into_iter().filter_map(|(_, pending)| permission_of(&pending.line, &session.tools)).collect();
+                let permissions = asked
+                    .into_iter()
+                    .filter_map(|(_, pending)| permission_of(&pending.line, &session.tools))
+                    .collect();
                 Some(SessionSummary {
                     session_id: id.clone(),
                     title: session.title.clone(),
@@ -980,7 +1142,11 @@ impl State {
                     last_seq: session.next_seq - 1,
                     busy,
                     permissions,
-                    preview: if busy && !session.activity.is_empty() { session.activity.clone() } else { session.preview.clone() },
+                    preview: if busy && !session.activity.is_empty() {
+                        session.activity.clone()
+                    } else {
+                        session.preview.clone()
+                    },
                     error: session.error.clone(),
                     task_id: session.task_id,
                 })
@@ -1010,7 +1176,13 @@ fn permission_of(line: &str, tools: &HashMap<String, String>) -> Option<PendingP
     let title = params
         .pointer("/toolCall/title")
         .and_then(Value::as_str)
-        .or_else(|| params.pointer("/toolCall/toolCallId").and_then(Value::as_str).and_then(|id| tools.get(id)).map(String::as_str))
+        .or_else(|| {
+            params
+                .pointer("/toolCall/toolCallId")
+                .and_then(Value::as_str)
+                .and_then(|id| tools.get(id))
+                .map(String::as_str)
+        })
         .filter(|title| !title.is_empty())
         .unwrap_or("The agent asks for permission")
         .to_owned();
@@ -1024,13 +1196,20 @@ fn permission_of(line: &str, tools: &HashMap<String, String>) -> Option<PendingP
             kind: option["kind"].as_str().unwrap_or_default().to_owned(),
         })
         .collect();
-    Some(PendingPermission { request_id: message["id"].clone(), title, options })
+    Some(PendingPermission {
+        request_id: message["id"].clone(),
+        title,
+        options,
+    })
 }
 
 /// The start of a reply on one line, without the markdown that would show
 /// as stray characters.
 fn preview_of(reply: &str) -> String {
-    let plain: String = reply.chars().filter(|c| !matches!(c, '*' | '`' | '#')).collect();
+    let plain: String = reply
+        .chars()
+        .filter(|c| !matches!(c, '*' | '`' | '#'))
+        .collect();
     let line = plain.split_whitespace().collect::<Vec<_>>().join(" ");
     truncate(&line, PREVIEW_LENGTH)
 }
@@ -1040,11 +1219,18 @@ fn floor_char_boundary(text: &str, at: usize) -> usize {
     if at >= text.len() {
         return text.len();
     }
-    (0..=at).rev().find(|index| text.is_char_boundary(*index)).unwrap_or(0)
+    (0..=at)
+        .rev()
+        .find(|index| text.is_char_boundary(*index))
+        .unwrap_or(0)
 }
 
 fn title_from(text: &str) -> String {
-    let line = text.lines().find(|line| !line.trim().is_empty()).unwrap_or_default().trim();
+    let line = text
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or_default()
+        .trim();
     truncate(line, 60)
 }
 
@@ -1058,16 +1244,30 @@ fn truncate(text: &str, max: usize) -> String {
 /// `fs/read_text_file` and `fs/write_text_file`, confined to the project.
 fn serve_fs(root: &Path, method: &str, params: &Value) -> Result<Value, (i64, String)> {
     let invalid = |message: String| (INVALID_PARAMS, message);
-    let path = params["path"].as_str().ok_or_else(|| invalid("path is required".into()))?;
-    let root = root.canonicalize().map_err(|error| (INTERNAL_ERROR, error.to_string()))?;
-    let path = if Path::new(path).is_absolute() { PathBuf::from(path) } else { root.join(path) };
+    let path = params["path"]
+        .as_str()
+        .ok_or_else(|| invalid("path is required".into()))?;
+    let root = root
+        .canonicalize()
+        .map_err(|error| (INTERNAL_ERROR, error.to_string()))?;
+    let path = if Path::new(path).is_absolute() {
+        PathBuf::from(path)
+    } else {
+        root.join(path)
+    };
     match method {
         "fs/read_text_file" => {
-            let path = path.canonicalize().map_err(|error| invalid(format!("{}: {error}", path.display())))?;
+            let path = path
+                .canonicalize()
+                .map_err(|error| invalid(format!("{}: {error}", path.display())))?;
             if !path.starts_with(&root) {
-                return Err(invalid(format!("{} is outside the project", path.display())));
+                return Err(invalid(format!(
+                    "{} is outside the project",
+                    path.display()
+                )));
             }
-            let text = std::fs::read_to_string(&path).map_err(|error| invalid(format!("{}: {error}", path.display())))?;
+            let text = std::fs::read_to_string(&path)
+                .map_err(|error| invalid(format!("{}: {error}", path.display())))?;
             let line = params["line"].as_u64().unwrap_or(1).max(1) as usize;
             let limit = params["limit"].as_u64().map(|limit| limit as usize);
             let content = if line == 1 && limit.is_none() {
@@ -1082,26 +1282,47 @@ fn serve_fs(root: &Path, method: &str, params: &Value) -> Result<Value, (i64, St
             Ok(json!({ "content": content }))
         }
         "fs/write_text_file" => {
-            let content = params["content"].as_str().ok_or_else(|| invalid("content is required".into()))?;
+            let content = params["content"]
+                .as_str()
+                .ok_or_else(|| invalid("content is required".into()))?;
             // Checked before anything is created, then again once symlinks
             // can be resolved.
             let path = normalize(&path);
             if !path.starts_with(&root) {
-                return Err(invalid(format!("{} is outside the project", path.display())));
+                return Err(invalid(format!(
+                    "{} is outside the project",
+                    path.display()
+                )));
             }
-            let name = path.file_name().ok_or_else(|| invalid("not a file path".into()))?.to_owned();
-            let parent = path.parent().ok_or_else(|| invalid("not a file path".into()))?;
-            std::fs::create_dir_all(parent).map_err(|error| (INTERNAL_ERROR, format!("{}: {error}", parent.display())))?;
-            let parent = parent.canonicalize().map_err(|error| invalid(format!("{}: {error}", parent.display())))?;
+            let name = path
+                .file_name()
+                .ok_or_else(|| invalid("not a file path".into()))?
+                .to_owned();
+            let parent = path
+                .parent()
+                .ok_or_else(|| invalid("not a file path".into()))?;
+            std::fs::create_dir_all(parent)
+                .map_err(|error| (INTERNAL_ERROR, format!("{}: {error}", parent.display())))?;
+            let parent = parent
+                .canonicalize()
+                .map_err(|error| invalid(format!("{}: {error}", parent.display())))?;
             if !parent.starts_with(&root) {
-                return Err(invalid(format!("{} is outside the project", path.display())));
+                return Err(invalid(format!(
+                    "{} is outside the project",
+                    path.display()
+                )));
             }
             let target = parent.join(name);
             if let Ok(resolved) = target.canonicalize()
-                && !resolved.starts_with(&root) {
-                    return Err(invalid(format!("{} is outside the project", target.display())));
-                }
-            std::fs::write(&target, content).map_err(|error| (INTERNAL_ERROR, format!("{}: {error}", target.display())))?;
+                && !resolved.starts_with(&root)
+            {
+                return Err(invalid(format!(
+                    "{} is outside the project",
+                    target.display()
+                )));
+            }
+            std::fs::write(&target, content)
+                .map_err(|error| (INTERNAL_ERROR, format!("{}: {error}", target.display())))?;
             Ok(Value::Null)
         }
         _ => Err((METHOD_NOT_FOUND, format!("{method} is not supported"))),
@@ -1138,7 +1359,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (tx, agent) = mpsc::unbounded_channel();
         let proxy = Proxy::new(dir.path().to_path_buf(), tx, || {});
-        Harness { proxy, agent, _dir: dir }
+        Harness {
+            proxy,
+            agent,
+            _dir: dir,
+        }
     }
 
     fn json_of(line: String) -> Value {
@@ -1150,7 +1375,10 @@ mod tests {
             drop(self.proxy.initialize());
             let init = json_of(self.agent.try_recv().unwrap());
             assert_eq!(init["method"], "initialize");
-            self.proxy.on_agent_line(&json!({ "jsonrpc": "2.0", "id": init["id"], "result": { "protocolVersion": 1 } }).to_string());
+            self.proxy.on_agent_line(
+                &json!({ "jsonrpc": "2.0", "id": init["id"], "result": { "protocolVersion": 1 } })
+                    .to_string(),
+            );
             self.proxy.initialized(Ok(json!({ "protocolVersion": 1 })));
         }
     }
@@ -1161,14 +1389,26 @@ mod tests {
         h.ready();
         let (a, mut a_rx) = h.proxy.connect().unwrap();
         let (b, mut b_rx) = h.proxy.connect().unwrap();
-        h.proxy.on_client_line(a, r#"{"jsonrpc":"2.0","id":0,"method":"session/new","params":{"cwd":"/elsewhere"}}"#);
-        h.proxy.on_client_line(b, r#"{"jsonrpc":"2.0","id":0,"method":"session/new","params":{"cwd":"."}}"#);
+        h.proxy.on_client_line(
+            a,
+            r#"{"jsonrpc":"2.0","id":0,"method":"session/new","params":{"cwd":"/elsewhere"}}"#,
+        );
+        h.proxy.on_client_line(
+            b,
+            r#"{"jsonrpc":"2.0","id":0,"method":"session/new","params":{"cwd":"."}}"#,
+        );
         let first = json_of(h.agent.try_recv().unwrap());
         let second = json_of(h.agent.try_recv().unwrap());
         assert_ne!(first["id"], second["id"]);
-        assert_eq!(first["params"]["cwd"], json!(h._dir.path().to_string_lossy()));
+        assert_eq!(
+            first["params"]["cwd"],
+            json!(h._dir.path().to_string_lossy())
+        );
 
-        h.proxy.on_agent_line(&json!({ "jsonrpc": "2.0", "id": second["id"], "result": { "sessionId": "s-b" } }).to_string());
+        h.proxy.on_agent_line(
+            &json!({ "jsonrpc": "2.0", "id": second["id"], "result": { "sessionId": "s-b" } })
+                .to_string(),
+        );
         let answer = json_of(b_rx.try_recv().unwrap());
         assert_eq!(answer["id"], 0);
         assert_eq!(answer["result"]["sessionId"], "s-b");
@@ -1181,16 +1421,25 @@ mod tests {
         h.ready();
         let (a, mut a_rx) = h.proxy.connect().unwrap();
         let (_b, mut b_rx) = h.proxy.connect().unwrap();
-        h.proxy.on_client_line(a, r#"{"jsonrpc":"2.0","id":1,"method":"session/new","params":{}}"#);
+        h.proxy.on_client_line(
+            a,
+            r#"{"jsonrpc":"2.0","id":1,"method":"session/new","params":{}}"#,
+        );
         let new = json_of(h.agent.try_recv().unwrap());
-        h.proxy.on_agent_line(&json!({ "jsonrpc": "2.0", "id": new["id"], "result": { "sessionId": "s" } }).to_string());
+        h.proxy.on_agent_line(
+            &json!({ "jsonrpc": "2.0", "id": new["id"], "result": { "sessionId": "s" } })
+                .to_string(),
+        );
         a_rx.try_recv().unwrap();
 
         let chunk = json!({ "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "s", "update": { "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "hi" } } } });
         h.proxy.on_agent_line(&chunk.to_string());
         let got = json_of(a_rx.try_recv().unwrap());
         assert_eq!(got["params"]["_meta"][ext::SEQ_META], 1);
-        assert!(b_rx.try_recv().is_err(), "a session's updates go to its owner only");
+        assert!(
+            b_rx.try_recv().is_err(),
+            "a session's updates go to its owner only"
+        );
 
         h.proxy.disconnect(a);
         let (c, mut c_rx) = h.proxy.connect().unwrap();
@@ -1207,7 +1456,10 @@ mod tests {
         let mut h = harness();
         h.ready();
         let (a, mut a_rx) = h.proxy.connect().unwrap();
-        h.proxy.on_client_line(a, r#"{"jsonrpc":"2.0","id":1,"method":"session/new","params":{}}"#);
+        h.proxy.on_client_line(
+            a,
+            r#"{"jsonrpc":"2.0","id":1,"method":"session/new","params":{}}"#,
+        );
         let new = json_of(h.agent.try_recv().unwrap());
         let modes = json!({ "currentModeId": "ask", "availableModes": [{ "id": "ask", "name": "Ask first" }, { "id": "auto", "name": "Auto" }, { "id": "plan", "name": "Plan" }] });
         let model = json!([{ "id": "model", "category": "model", "currentValue": "a", "options": [{ "value": "a", "name": "A" }, { "value": "b", "name": "B" }] }]);
@@ -1216,17 +1468,29 @@ mod tests {
 
         // The client sets one mode, the agent announces another; the model changes.
         h.proxy.on_client_line(a, r#"{"jsonrpc":"2.0","id":2,"method":"session/set_mode","params":{"sessionId":"s","modeId":"auto"}}"#);
-        let update = |update: Value| json!({ "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "s", "update": update } }).to_string();
-        h.proxy.on_agent_line(&update(json!({ "sessionUpdate": "current_mode_update", "currentModeId": "plan" })));
+        let update = |update: Value| {
+            json!({ "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "s", "update": update } }).to_string()
+        };
+        h.proxy.on_agent_line(&update(
+            json!({ "sessionUpdate": "current_mode_update", "currentModeId": "plan" }),
+        ));
         let mut changed = model.clone();
         changed[0]["currentValue"] = json!("b");
-        h.proxy.on_agent_line(&update(json!({ "sessionUpdate": "config_option_update", "configOptions": changed })));
+        h.proxy.on_agent_line(&update(
+            json!({ "sessionUpdate": "config_option_update", "configOptions": changed }),
+        ));
 
         let (b, mut b_rx) = h.proxy.connect().unwrap();
         h.proxy.on_client_line(b, r#"{"jsonrpc":"2.0","id":5,"method":"_aiddiction/attach","params":{"sessionId":"s","afterSeq":0}}"#);
         let attached = json_of(b_rx.try_recv().unwrap());
         assert_eq!(attached["result"]["modes"]["currentModeId"], "plan");
-        assert_eq!(attached["result"]["modes"]["availableModes"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            attached["result"]["modes"]["availableModes"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
         assert_eq!(attached["result"]["configOptions"][0]["currentValue"], "b");
     }
 
@@ -1237,14 +1501,21 @@ mod tests {
         let (a, mut a_rx) = h.proxy.connect().unwrap();
         h.proxy.on_client_line(a, r#"{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"s","prompt":[{"type":"text","text":"do it"}]}}"#);
         let echo = json_of(a_rx.try_recv().unwrap());
-        assert_eq!(echo["params"]["update"]["sessionUpdate"], "user_message_chunk");
+        assert_eq!(
+            echo["params"]["update"]["sessionUpdate"],
+            "user_message_chunk"
+        );
         let prompt = json_of(h.agent.try_recv().unwrap());
         h.proxy.on_agent_line(&json!({ "jsonrpc": "2.0", "id": prompt["id"], "result": { "stopReason": "end_turn" } }).to_string());
         let finished = json_of(a_rx.try_recv().unwrap());
         assert_eq!(finished["method"], ext::PROMPT_FINISHED);
         let answer = json_of(a_rx.try_recv().unwrap());
         assert_eq!(answer["id"], 3);
-        assert_eq!(h.proxy.sessions().len(), 0, "a prompt alone does not list a session");
+        assert_eq!(
+            h.proxy.sessions().len(),
+            0,
+            "a prompt alone does not list a session"
+        );
     }
 
     #[test]
@@ -1256,11 +1527,20 @@ mod tests {
         h.proxy.on_agent_line(r#"{"jsonrpc":"2.0","id":"p1","method":"session/request_permission","params":{"sessionId":"s","options":[]}}"#);
         a_rx.try_recv().unwrap();
         b_rx.try_recv().unwrap();
-        h.proxy.on_client_line(a, r#"{"jsonrpc":"2.0","id":"p1","result":{"outcome":{"outcome":"cancelled"}}}"#);
-        h.proxy.on_client_line(b, r#"{"jsonrpc":"2.0","id":"p1","result":{"outcome":{"outcome":"cancelled"}}}"#);
+        h.proxy.on_client_line(
+            a,
+            r#"{"jsonrpc":"2.0","id":"p1","result":{"outcome":{"outcome":"cancelled"}}}"#,
+        );
+        h.proxy.on_client_line(
+            b,
+            r#"{"jsonrpc":"2.0","id":"p1","result":{"outcome":{"outcome":"cancelled"}}}"#,
+        );
         assert!(h.agent.try_recv().is_ok());
         assert!(h.agent.try_recv().is_err());
-        assert_eq!(json_of(b_rx.try_recv().unwrap())["method"], ext::REQUEST_RESOLVED);
+        assert_eq!(
+            json_of(b_rx.try_recv().unwrap())["method"],
+            ext::REQUEST_RESOLVED
+        );
     }
 
     #[test]
@@ -1268,9 +1548,15 @@ mod tests {
         let mut h = harness();
         h.ready();
         let (a, mut a_rx) = h.proxy.connect().unwrap();
-        h.proxy.on_client_line(a, r#"{"jsonrpc":"2.0","id":1,"method":"session/new","params":{}}"#);
+        h.proxy.on_client_line(
+            a,
+            r#"{"jsonrpc":"2.0","id":1,"method":"session/new","params":{}}"#,
+        );
         let new = json_of(h.agent.try_recv().unwrap());
-        h.proxy.on_agent_line(&json!({ "jsonrpc": "2.0", "id": new["id"], "result": { "sessionId": "s" } }).to_string());
+        h.proxy.on_agent_line(
+            &json!({ "jsonrpc": "2.0", "id": new["id"], "result": { "sessionId": "s" } })
+                .to_string(),
+        );
         h.proxy.on_client_line(a, r#"{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":"s","prompt":[{"type":"text","text":"fix the login\nplease"}]}}"#);
         let prompt = json_of(h.agent.try_recv().unwrap());
 
@@ -1280,13 +1566,19 @@ mod tests {
         let listed = &h.proxy.sessions()[0];
         assert_eq!(listed.title, "fix the login");
         assert!(listed.busy);
-        assert_eq!(listed.preview, "Run npm test", "while a turn runs, its tool");
+        assert_eq!(
+            listed.preview, "Run npm test",
+            "while a turn runs, its tool"
+        );
         assert_eq!(listed.permissions[0].title, "Run npm test");
         assert_eq!(listed.permissions[0].request_id, json!("p"));
         assert_eq!(listed.permissions[0].options[0].kind, "allow_once");
 
         assert!(h.proxy.answer_permission(&json!("p"), "y"));
-        assert!(!h.proxy.answer_permission(&json!("p"), "y"), "answered once");
+        assert!(
+            !h.proxy.answer_permission(&json!("p"), "y"),
+            "answered once"
+        );
         let answer = json_of(h.agent.try_recv().unwrap());
         assert_eq!(answer["id"], "p");
         assert_eq!(answer["result"]["outcome"]["optionId"], "y");
@@ -1296,7 +1588,10 @@ mod tests {
         h.proxy.on_agent_line(&json!({ "jsonrpc": "2.0", "id": prompt["id"], "result": { "stopReason": "end_turn" } }).to_string());
         let listed = &h.proxy.sessions()[0];
         assert!(!listed.busy);
-        assert_eq!(listed.preview, "Fixed: the returnTo check.", "after a turn, what the agent said after its last tool");
+        assert_eq!(
+            listed.preview, "Fixed: the returnTo check.",
+            "after a turn, what the agent said after its last tool"
+        );
         assert!(listed.last_seq >= 4);
         while a_rx.try_recv().is_ok() {}
     }
@@ -1307,9 +1602,14 @@ mod tests {
         drop(h.proxy.initialize());
         h.agent.try_recv().unwrap();
         let (a, mut a_rx) = h.proxy.connect().unwrap();
-        h.proxy.on_client_line(a, r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}"#);
+        h.proxy.on_client_line(
+            a,
+            r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}"#,
+        );
         assert!(a_rx.try_recv().is_err());
-        h.proxy.initialized(Ok(json!({ "protocolVersion": 1, "agentInfo": { "name": "x" } })));
+        h.proxy.initialized(Ok(
+            json!({ "protocolVersion": 1, "agentInfo": { "name": "x" } }),
+        ));
         let answer = json_of(a_rx.try_recv().unwrap());
         assert_eq!(answer["result"]["agentInfo"]["name"], "x");
     }
@@ -1320,7 +1620,10 @@ mod tests {
         h.ready();
         h.proxy.on_agent_line(r#"{"jsonrpc":"2.0","method":"_auth/status_update","params":{"authStatus":{"kind":"none"}}}"#);
         let (a, mut a_rx) = h.proxy.connect().unwrap();
-        h.proxy.on_client_line(a, r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}"#);
+        h.proxy.on_client_line(
+            a,
+            r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}"#,
+        );
         assert_eq!(json_of(a_rx.try_recv().unwrap())["id"], 0);
         let status = json_of(a_rx.try_recv().unwrap());
         assert_eq!(status["method"], ext::AUTH_STATUS);
@@ -1341,19 +1644,52 @@ mod tests {
         assert_eq!(got["params"]["requestId"], 7, "in the client's own ids");
         assert!(b_rx.try_recv().is_err());
 
-        h.proxy.on_client_line(a, r#"{"jsonrpc":"2.0","id":0,"result":{"action":"accept"}}"#);
-        assert_eq!(json_of(h.agent.try_recv().unwrap())["result"]["action"], "accept");
+        h.proxy.on_client_line(
+            a,
+            r#"{"jsonrpc":"2.0","id":0,"result":{"action":"accept"}}"#,
+        );
+        assert_eq!(
+            json_of(h.agent.try_recv().unwrap())["result"]["action"],
+            "accept"
+        );
     }
 
     #[test]
     fn files_outside_the_project_are_refused() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.txt"), "one\ntwo\nthree\n").unwrap();
-        let read = serve_fs(dir.path(), "fs/read_text_file", &json!({ "path": "a.txt", "line": 2, "limit": 1 })).unwrap();
+        let read = serve_fs(
+            dir.path(),
+            "fs/read_text_file",
+            &json!({ "path": "a.txt", "line": 2, "limit": 1 }),
+        )
+        .unwrap();
         assert_eq!(read["content"], "two\n");
-        assert!(serve_fs(dir.path(), "fs/read_text_file", &json!({ "path": "/etc/hostname" })).is_err());
-        assert!(serve_fs(dir.path(), "fs/write_text_file", &json!({ "path": "../escape.txt", "content": "x" })).is_err());
-        serve_fs(dir.path(), "fs/write_text_file", &json!({ "path": "sub/b.txt", "content": "x" })).unwrap();
-        assert_eq!(std::fs::read_to_string(dir.path().join("sub/b.txt")).unwrap(), "x");
+        assert!(
+            serve_fs(
+                dir.path(),
+                "fs/read_text_file",
+                &json!({ "path": "/etc/hostname" })
+            )
+            .is_err()
+        );
+        assert!(
+            serve_fs(
+                dir.path(),
+                "fs/write_text_file",
+                &json!({ "path": "../escape.txt", "content": "x" })
+            )
+            .is_err()
+        );
+        serve_fs(
+            dir.path(),
+            "fs/write_text_file",
+            &json!({ "path": "sub/b.txt", "content": "x" }),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("sub/b.txt")).unwrap(),
+            "x"
+        );
     }
 }

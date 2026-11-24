@@ -27,8 +27,9 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::{
-    AnyWindowHandle, App, Entity, Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    PlatformInput, TouchEvent, TouchId, TouchPhase, Window, point, px,
+    AnyWindowHandle, App, Entity, Keystroke, Modifiers, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, PlatformInput, TouchEvent, TouchId, TouchPhase, Window, point,
+    px,
 };
 
 use crate::ui::shell::{Page, Shell};
@@ -56,7 +57,10 @@ fn parse(script: &str) -> Vec<Step> {
         .filter_map(|step| {
             let step = step.trim();
             let (verb, rest) = step.split_once(':').unwrap_or((step, ""));
-            let pair = || rest.split_once('=').map(|(what, value)| (what.trim().to_owned(), value.trim().to_owned()));
+            let pair = || {
+                rest.split_once('=')
+                    .map(|(what, value)| (what.trim().to_owned(), value.trim().to_owned()))
+            };
             Some(match verb {
                 "wait" => Step::Wait(rest.parse().ok()?),
                 "click" => {
@@ -64,9 +68,18 @@ fn parse(script: &str) -> Vec<Step> {
                     Step::Click(x.trim().parse().ok()?, y.trim().parse().ok()?)
                 }
                 "swipe" | "hold" => {
-                    let numbers: Vec<f32> = rest.split(',').map(|number| number.trim().parse().ok()).collect::<Option<_>>()?;
-                    let [x, y, dx, dy] = numbers[..] else { return None };
-                    if verb == "swipe" { Step::Swipe(x, y, dx, dy) } else { Step::Hold(x, y, dx, dy) }
+                    let numbers: Vec<f32> = rest
+                        .split(',')
+                        .map(|number| number.trim().parse().ok())
+                        .collect::<Option<_>>()?;
+                    let [x, y, dx, dy] = numbers[..] else {
+                        return None;
+                    };
+                    if verb == "swipe" {
+                        Step::Swipe(x, y, dx, dy)
+                    } else {
+                        Step::Hold(x, y, dx, dy)
+                    }
                 }
                 "lift" => Step::Lift,
                 "key" => Step::Key(rest.to_owned()),
@@ -91,7 +104,9 @@ fn parse(script: &str) -> Vec<Step> {
 }
 
 pub fn play(window: AnyWindowHandle, shell: Entity<Shell>, cx: &mut App) {
-    let Ok(script) = std::env::var("AIDDICTION_SCRIPT") else { return };
+    let Ok(script) = std::env::var("AIDDICTION_SCRIPT") else {
+        return;
+    };
     next(window, shell, parse(&script).into(), cx);
 }
 
@@ -117,23 +132,60 @@ fn observe(what: &str, shell: &Entity<Shell>, window: &mut Window, cx: &mut App)
         }
         .to_owned(),
         "sessions" => shell.listed(cx).len().to_string(),
-        "waiting" => shell.listed(cx).iter().filter(|listed| listed.group == crate::inbox::Group::NeedsYou).count().to_string(),
-        "projects" => shell.server.as_ref().map_or(0, |server| server.read(cx).projects.len()).to_string(),
+        "waiting" => shell
+            .listed(cx)
+            .iter()
+            .filter(|listed| listed.group == crate::inbox::Group::NeedsYou)
+            .count()
+            .to_string(),
+        "projects" => shell
+            .server
+            .as_ref()
+            .map_or(0, |server| server.read(cx).projects.len())
+            .to_string(),
         "chats" => shell.chats.len().to_string(),
         "annotations" => match page {
-            Page::Review(project) => shell.reviews.get(&project).map_or(0, |(view, _)| view.read(cx).annotations().count()),
+            Page::Review(project) => shell
+                .reviews
+                .get(&project)
+                .map_or(0, |(view, _)| view.read(cx).annotations().count()),
             _ => 0,
         }
         .to_string(),
-        "agents" => shell.server.as_ref().map_or(0, |server| server.read(cx).agents.len()).to_string(),
-        "tasks" => shell.server.as_ref().map_or(0, |server| server.read(cx).tasks.values().map(Vec::len).sum::<usize>()).to_string(),
-        "worktrees" => shell.server.as_ref().map_or(0, |server| server.read(cx).worktrees.values().map(Vec::len).sum::<usize>()).to_string(),
+        "agents" => shell
+            .server
+            .as_ref()
+            .map_or(0, |server| server.read(cx).agents.len())
+            .to_string(),
+        "tasks" => shell
+            .server
+            .as_ref()
+            .map_or(0, |server| {
+                server.read(cx).tasks.values().map(Vec::len).sum::<usize>()
+            })
+            .to_string(),
+        "worktrees" => shell
+            .server
+            .as_ref()
+            .map_or(0, |server| {
+                server
+                    .read(cx)
+                    .worktrees
+                    .values()
+                    .map(Vec::len)
+                    .sum::<usize>()
+            })
+            .to_string(),
         "entries" => chat?.thread.entries.len().to_string(),
         "busy" => if chat?.busy { "yes" } else { "no" }.to_owned(),
         // The agent's mode in use: "none" when it offers none.
         "mode" => {
             let thread = &chat?.thread;
-            if thread.modes.is_empty() { "none".to_owned() } else { thread.current_mode.clone().unwrap_or_default() }
+            if thread.modes.is_empty() {
+                "none".to_owned()
+            } else {
+                thread.current_mode.clone().unwrap_or_default()
+            }
         }
         // A configuration choice in use: "none" when the agent offers none.
         "model" => choice(&chat?.thread, "model"),
@@ -153,11 +205,22 @@ fn observe(what: &str, shell: &Entity<Shell>, window: &mut Window, cx: &mut App)
             .to_owned()
         }
         // A form is a dialog on a pointer and a sheet on a finger.
-        "dialog" => {
-            if window.has_active_dialog(cx) || gpui_adaptive::Sheet::is_open(window, cx) { "open" } else { "closed" }.to_owned()
+        "dialog" => if window.has_active_dialog(cx) || gpui_adaptive::Sheet::is_open(window, cx) {
+            "open"
+        } else {
+            "closed"
         }
-        #[allow(clippy::disallowed_methods, reason = "the scenario asks which mode the theme is in, not for a colour")]
-        "theme" => if gpui_kit::component::ActiveTheme::theme(cx).mode.is_dark() { "dark" } else { "light" }.to_owned(),
+        .to_owned(),
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "the scenario asks which mode the theme is in, not for a colour"
+        )]
+        "theme" => if gpui_kit::component::ActiveTheme::theme(cx).mode.is_dark() {
+            "dark"
+        } else {
+            "light"
+        }
+        .to_owned(),
         _ => return None,
     })
 }
@@ -173,7 +236,9 @@ fn choice(thread: &crate::thread::Thread, category: &str) -> String {
 }
 
 fn next(handle: AnyWindowHandle, shell: Entity<Shell>, mut steps: VecDeque<Step>, cx: &mut App) {
-    let Some(step) = steps.pop_front() else { return };
+    let Some(step) = steps.pop_front() else {
+        return;
+    };
     let mut pause = 120;
     tracing::info!(?step, "script");
     let _ = handle.update(cx, |_, window, cx| match &step {
@@ -181,7 +246,11 @@ fn next(handle: AnyWindowHandle, shell: Entity<Shell>, mut steps: VecDeque<Step>
         Step::Click(x, y) => {
             let position = point(px(*x), px(*y));
             window.dispatch_event(
-                PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers: Modifiers::default() }),
+                PlatformInput::MouseMove(MouseMoveEvent {
+                    position,
+                    pressed_button: None,
+                    modifiers: Modifiers::default(),
+                }),
                 cx,
             );
             window.dispatch_event(
@@ -211,7 +280,9 @@ fn next(handle: AnyWindowHandle, shell: Entity<Shell>, mut steps: VecDeque<Step>
             for step in 0..=MOVES + u16::from(lifted) {
                 let (phase, done) = match step {
                     0 => (TouchPhase::Started, 0.),
-                    step if step <= MOVES => (TouchPhase::Moved, f32::from(step) / f32::from(MOVES)),
+                    step if step <= MOVES => {
+                        (TouchPhase::Moved, f32::from(step) / f32::from(MOVES))
+                    }
                     _ => (TouchPhase::Ended, 1.),
                 };
                 let position = point(px(x + dx * done), px(y + dy * done));
@@ -266,7 +337,9 @@ fn next(handle: AnyWindowHandle, shell: Entity<Shell>, mut steps: VecDeque<Step>
         Step::Quit => cx.quit(),
     });
     cx.spawn(async move |cx| {
-        cx.background_executor().timer(Duration::from_millis(pause)).await;
+        cx.background_executor()
+            .timer(Duration::from_millis(pause))
+            .await;
         cx.update(|cx| next(handle, shell, steps, cx));
     })
     .detach();
@@ -279,7 +352,9 @@ mod tests {
     #[test]
     fn a_script_is_steps_between_semicolons() {
         assert_eq!(
-            parse("wait:200; click:10,20 ;swipe:1,2,-3,0;swipe:1,2;key:enter;type:a:b;until:page=chat;quit;bogus"),
+            parse(
+                "wait:200; click:10,20 ;swipe:1,2,-3,0;swipe:1,2;key:enter;type:a:b;until:page=chat;quit;bogus"
+            ),
             [
                 Step::Wait(200),
                 Step::Click(10.0, 20.0),
@@ -298,8 +373,19 @@ thread_local! {
     static FINGER: std::cell::Cell<Option<gpui_kit::Point<gpui_kit::Pixels>>> = const { std::cell::Cell::new(None) };
 }
 
-fn touch(phase: TouchPhase, position: gpui_kit::Point<gpui_kit::Pixels>, window: &mut Window, cx: &mut App) {
+fn touch(
+    phase: TouchPhase,
+    position: gpui_kit::Point<gpui_kit::Pixels>,
+    window: &mut Window,
+    cx: &mut App,
+) {
     FINGER.set((phase != TouchPhase::Ended).then_some(position));
-    let touch = TouchEvent { id: TouchId(1), phase, position, predicted_position: None, force: None };
+    let touch = TouchEvent {
+        id: TouchId(1),
+        phase,
+        position,
+        predicted_position: None,
+        force: None,
+    };
     window.dispatch_event(PlatformInput::Touch(touch), cx);
 }

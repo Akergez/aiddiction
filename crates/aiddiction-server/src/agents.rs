@@ -73,7 +73,10 @@ impl Catalog {
             .into_iter()
             .filter(|agent| !fixed.iter().any(|known| known.id == agent.id))
             .collect();
-        Self { fixed, custom: Mutex::new(custom) }
+        Self {
+            fixed,
+            custom: Mutex::new(custom),
+        }
     }
 
     pub fn list(&self) -> Vec<Agent> {
@@ -85,7 +88,10 @@ impl Catalog {
     /// environment (API keys, as like as not) stay on the server.
     pub fn public_list(&self) -> Vec<Agent> {
         let mut agents = self.list();
-        for agent in agents.iter_mut().filter(|agent| agent.source != AgentSource::Custom) {
+        for agent in agents
+            .iter_mut()
+            .filter(|agent| agent.source != AgentSource::Custom)
+        {
             for value in agent.command.env.values_mut() {
                 *value = "•••".into();
             }
@@ -103,27 +109,50 @@ impl Catalog {
         let base = slug(&input.name, "agent");
         let mut id = base.clone();
         let mut n = 2;
-        while self.fixed.iter().chain(custom.iter()).any(|agent| agent.id == id) {
+        while self
+            .fixed
+            .iter()
+            .chain(custom.iter())
+            .any(|agent| agent.id == id)
+        {
             id = format!("{base}-{n}");
             n += 1;
         }
-        let agent = Agent { id, name: input.name.trim().to_owned(), source: AgentSource::Custom, command: input.command, profile: None };
+        let agent = Agent {
+            id,
+            name: input.name.trim().to_owned(),
+            source: AgentSource::Custom,
+            command: input.command,
+            profile: None,
+        };
         custom.push(agent.clone());
-        store.save_custom_agents(&custom).map_err(|error| CatalogError::Invalid(error.to_string()))?;
+        store
+            .save_custom_agents(&custom)
+            .map_err(|error| CatalogError::Invalid(error.to_string()))?;
         Ok(agent)
     }
 
-    pub fn update(&self, id: &str, input: AgentInput, store: &Store) -> Result<Agent, CatalogError> {
+    pub fn update(
+        &self,
+        id: &str,
+        input: AgentInput,
+        store: &Store,
+    ) -> Result<Agent, CatalogError> {
         validate(&input)?;
         if self.fixed.iter().any(|agent| agent.id == id) {
             return Err(CatalogError::ReadOnly);
         }
         let mut custom = self.custom.lock().unwrap();
-        let agent = custom.iter_mut().find(|agent| agent.id == id).ok_or(CatalogError::NotFound)?;
+        let agent = custom
+            .iter_mut()
+            .find(|agent| agent.id == id)
+            .ok_or(CatalogError::NotFound)?;
         agent.name = input.name.trim().to_owned();
         agent.command = input.command;
         let updated = agent.clone();
-        store.save_custom_agents(&custom).map_err(|error| CatalogError::Invalid(error.to_string()))?;
+        store
+            .save_custom_agents(&custom)
+            .map_err(|error| CatalogError::Invalid(error.to_string()))?;
         Ok(updated)
     }
 
@@ -137,7 +166,9 @@ impl Catalog {
         if custom.len() == before {
             return Err(CatalogError::NotFound);
         }
-        store.save_custom_agents(&custom).map_err(|error| CatalogError::Invalid(error.to_string()))
+        store
+            .save_custom_agents(&custom)
+            .map_err(|error| CatalogError::Invalid(error.to_string()))
     }
 }
 
@@ -148,8 +179,15 @@ fn validate(input: &AgentInput) -> Result<(), CatalogError> {
     if input.command.command.trim().is_empty() {
         return Err(CatalogError::Invalid("the agent needs a command".into()));
     }
-    if let Some(key) = input.command.env.keys().find(|key| key.is_empty() || key.contains('=')) {
-        return Err(CatalogError::Invalid(format!("not a variable name: {key:?}")));
+    if let Some(key) = input
+        .command
+        .env
+        .keys()
+        .find(|key| key.is_empty() || key.contains('='))
+    {
+        return Err(CatalogError::Invalid(format!(
+            "not a variable name: {key:?}"
+        )));
     }
     Ok(())
 }
@@ -166,7 +204,11 @@ pub fn slug(name: &str, fallback: &str) -> String {
         }
     }
     let slug = slug.trim_end_matches('-').to_owned();
-    if slug.is_empty() { fallback.into() } else { slug }
+    if slug.is_empty() {
+        fallback.into()
+    } else {
+        slug
+    }
 }
 
 #[cfg(test)]
@@ -203,7 +245,11 @@ mod tests {
             }],
             vec![],
         );
-        let shown = catalog.public_list().into_iter().find(|agent| agent.id == "x").unwrap();
+        let shown = catalog
+            .public_list()
+            .into_iter()
+            .find(|agent| agent.id == "x")
+            .unwrap();
         assert_eq!(shown.command.env["API_KEY"], "•••");
         assert_eq!(catalog.get("x").unwrap().command.env["API_KEY"], "secret");
     }

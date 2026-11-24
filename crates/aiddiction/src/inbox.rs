@@ -32,7 +32,11 @@ pub struct Listed {
 
 impl Listed {
     pub fn title(&self) -> &str {
-        if self.session.title.is_empty() { "Untitled conversation" } else { &self.session.title }
+        if self.session.title.is_empty() {
+            "Untitled conversation"
+        } else {
+            &self.session.title
+        }
     }
 }
 
@@ -50,7 +54,8 @@ pub fn list(
     for project in projects {
         for instance in instances.get(&project.id).into_iter().flatten() {
             for session in &instance.sessions {
-                let read = showing == Some(session.session_id.as_str()) || session.last_seq <= seen(&session.session_id);
+                let read = showing == Some(session.session_id.as_str())
+                    || session.last_seq <= seen(&session.session_id);
                 listed.push(Listed {
                     server: server.to_owned(),
                     project: project.clone(),
@@ -115,7 +120,10 @@ pub fn ago(now_ms: u64, then_ms: u64) -> String {
 }
 
 pub fn now_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// The hue of a project's avatar, the same on every device: the project is
@@ -160,7 +168,11 @@ mod tests {
         }
     }
 
-    fn instance(project: &Project, state: InstanceState, sessions: Vec<SessionSummary>) -> Instance {
+    fn instance(
+        project: &Project,
+        state: InstanceState,
+        sessions: Vec<SessionSummary>,
+    ) -> Instance {
         Instance {
             id: uuid::Uuid::now_v7(),
             project_id: project.id,
@@ -179,17 +191,35 @@ mod tests {
     fn conversations_from_every_project_come_in_one_list_by_project() {
         let (web, api) = (project("web"), project("api"));
         let mut asking = session("asking", 1, 5);
-        asking.permissions.push(PendingPermission { request_id: json!(1), title: "Run tests".into(), options: Vec::new() });
+        asking.permissions.push(PendingPermission {
+            request_id: json!(1),
+            title: "Run tests".into(),
+            options: Vec::new(),
+        });
         let mut working = session("working", 9, 5);
         working.busy = true;
         let mut failed = session("failed", 2, 5);
         failed.error = Some("boom".into());
         let instances = HashMap::from([
-            (web.id, vec![instance(&web, InstanceState::Ready, vec![session("old", 3, 5), asking, working])]),
-            (api.id, vec![
-                instance(&api, InstanceState::Ready, vec![session("fresh", 8, 9), failed]),
-                instance(&api, InstanceState::Exited, vec![session("gone", 7, 1)]),
-            ]),
+            (
+                web.id,
+                vec![instance(
+                    &web,
+                    InstanceState::Ready,
+                    vec![session("old", 3, 5), asking, working],
+                )],
+            ),
+            (
+                api.id,
+                vec![
+                    instance(
+                        &api,
+                        InstanceState::Ready,
+                        vec![session("fresh", 8, 9), failed],
+                    ),
+                    instance(&api, InstanceState::Exited, vec![session("gone", 7, 1)]),
+                ],
+            ),
         ]);
         let seen = |id: &str| if id == "fresh" { 4 } else { 5 };
         let order: Vec<_> = list("home", &[web, api], &instances, seen, None)
@@ -216,18 +246,45 @@ mod tests {
         assert_eq!(group(InstanceState::Ready, &failed, false), Group::NeedsYou);
         assert_eq!(group(InstanceState::Ready, &failed, true), Group::Recent);
         let web = project("web");
-        let instances = HashMap::from([(web.id, vec![instance(&web, InstanceState::Ready, vec![session("s", 1, 7)])])]);
-        assert_eq!(list("home", &[web], &instances, |_| 0, Some("s"))[0].group, Group::Recent);
+        let instances = HashMap::from([(
+            web.id,
+            vec![instance(
+                &web,
+                InstanceState::Ready,
+                vec![session("s", 1, 7)],
+            )],
+        )]);
+        assert_eq!(
+            list("home", &[web], &instances, |_| 0, Some("s"))[0].group,
+            Group::Recent
+        );
     }
 
     #[test]
     fn a_projects_conversations_stay_together_newest_first() {
         let (web, api) = (project("web"), project("api"));
         let instances = HashMap::from([
-            (web.id, vec![instance(&web, InstanceState::Ready, vec![session("web-old", 1, 5), session("web-new", 5, 5)])]),
-            (api.id, vec![instance(&api, InstanceState::Ready, vec![session("api", 3, 5)])]),
+            (
+                web.id,
+                vec![instance(
+                    &web,
+                    InstanceState::Ready,
+                    vec![session("web-old", 1, 5), session("web-new", 5, 5)],
+                )],
+            ),
+            (
+                api.id,
+                vec![instance(
+                    &api,
+                    InstanceState::Ready,
+                    vec![session("api", 3, 5)],
+                )],
+            ),
         ]);
-        let order: Vec<_> = list("home", &[api, web], &instances, |_| 5, None).into_iter().map(|listed| listed.session.session_id).collect();
+        let order: Vec<_> = list("home", &[api, web], &instances, |_| 5, None)
+            .into_iter()
+            .map(|listed| listed.session.session_id)
+            .collect();
         assert_eq!(order, ["web-new", "web-old", "api"]);
     }
 
@@ -235,9 +292,27 @@ mod tests {
     fn every_server_comes_in_one_project_grouped_list() {
         let (web, api) = (project("web"), project("api"));
         let mut asking = session("asking", 1, 5);
-        asking.permissions.push(PendingPermission { request_id: json!(1), title: "Run tests".into(), options: Vec::new() });
-        let home = HashMap::from([(web.id, vec![instance(&web, InstanceState::Ready, vec![session("old", 3, 5)])])]);
-        let work = HashMap::from([(api.id, vec![instance(&api, InstanceState::Ready, vec![asking, session("new", 9, 5)])])]);
+        asking.permissions.push(PendingPermission {
+            request_id: json!(1),
+            title: "Run tests".into(),
+            options: Vec::new(),
+        });
+        let home = HashMap::from([(
+            web.id,
+            vec![instance(
+                &web,
+                InstanceState::Ready,
+                vec![session("old", 3, 5)],
+            )],
+        )]);
+        let work = HashMap::from([(
+            api.id,
+            vec![instance(
+                &api,
+                InstanceState::Ready,
+                vec![asking, session("new", 9, 5)],
+            )],
+        )]);
         let order: Vec<_> = merge([
             list("home", std::slice::from_ref(&web), &home, |_| 5, None),
             list("work", std::slice::from_ref(&api), &work, |_| 5, None),
@@ -246,7 +321,14 @@ mod tests {
         .map(|listed| (listed.server, listed.session.session_id))
         .collect();
         let pair = |server: &str, session: &str| (server.to_owned(), session.to_owned());
-        assert_eq!(order, [pair("work", "new"), pair("work", "asking"), pair("home", "old")]);
+        assert_eq!(
+            order,
+            [
+                pair("work", "new"),
+                pair("work", "asking"),
+                pair("home", "old")
+            ]
+        );
     }
 
     #[test]
@@ -255,6 +337,9 @@ mod tests {
         assert_eq!(ago(10 * minute, 10 * minute - 5000), "now");
         assert_eq!(ago(100 * minute, 95 * minute), "5m");
         assert_eq!(ago(1000 * minute, 820 * minute), "3h");
-        assert_eq!(ago(10_000 * minute, 10_000 * minute - 3 * 1440 * minute), "3d");
+        assert_eq!(
+            ago(10_000 * minute, 10_000 * minute - 3 * 1440 * minute),
+            "3d"
+        );
     }
 }

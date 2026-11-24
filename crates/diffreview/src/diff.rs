@@ -57,7 +57,15 @@ pub struct FileDiff {
 
 impl FileDiff {
     fn new(path: String) -> Self {
-        Self { path, old_path: None, status: FileStatus::Modified, binary: false, lines: Vec::new(), added: 0, removed: 0 }
+        Self {
+            path,
+            old_path: None,
+            status: FileStatus::Modified,
+            binary: false,
+            lines: Vec::new(),
+            added: 0,
+            removed: 0,
+        }
     }
 }
 
@@ -75,30 +83,52 @@ pub fn parse(text: &str) -> Vec<FileDiff> {
             files.push(FileDiff::new(path_from_header(rest)));
             continue;
         }
-        let Some(file) = files.last_mut() else { continue };
+        let Some(file) = files.last_mut() else {
+            continue;
+        };
 
         if in_hunk {
             if let Some(text) = line.strip_prefix('+') {
-                file.lines.push(DiffLine { kind: LineKind::Add, old: None, new: Some(new_line), text: text.to_owned() });
+                file.lines.push(DiffLine {
+                    kind: LineKind::Add,
+                    old: None,
+                    new: Some(new_line),
+                    text: text.to_owned(),
+                });
                 new_line += 1;
                 file.added += 1;
                 continue;
             }
             if let Some(text) = line.strip_prefix('-') {
-                file.lines.push(DiffLine { kind: LineKind::Remove, old: Some(old_line), new: None, text: text.to_owned() });
+                file.lines.push(DiffLine {
+                    kind: LineKind::Remove,
+                    old: Some(old_line),
+                    new: None,
+                    text: text.to_owned(),
+                });
                 old_line += 1;
                 file.removed += 1;
                 continue;
             }
             if let Some(text) = line.strip_prefix(' ') {
-                file.lines.push(DiffLine { kind: LineKind::Context, old: Some(old_line), new: Some(new_line), text: text.to_owned() });
+                file.lines.push(DiffLine {
+                    kind: LineKind::Context,
+                    old: Some(old_line),
+                    new: Some(new_line),
+                    text: text.to_owned(),
+                });
                 old_line += 1;
                 new_line += 1;
                 continue;
             }
             if line.is_empty() {
                 // Some tools drop the space of an empty context line.
-                file.lines.push(DiffLine { kind: LineKind::Context, old: Some(old_line), new: Some(new_line), text: String::new() });
+                file.lines.push(DiffLine {
+                    kind: LineKind::Context,
+                    old: Some(old_line),
+                    new: Some(new_line),
+                    text: String::new(),
+                });
                 old_line += 1;
                 new_line += 1;
                 continue;
@@ -114,7 +144,12 @@ pub fn parse(text: &str) -> Vec<FileDiff> {
                 old_line = old;
                 new_line = new;
                 in_hunk = true;
-                file.lines.push(DiffLine { kind: LineKind::Hunk, old: None, new: None, text: line.to_owned() });
+                file.lines.push(DiffLine {
+                    kind: LineKind::Hunk,
+                    old: None,
+                    new: None,
+                    text: line.to_owned(),
+                });
             }
         } else if line.starts_with("new file mode") {
             file.status = FileStatus::Added;
@@ -133,9 +168,10 @@ pub fn parse(text: &str) -> Vec<FileDiff> {
             }
         } else if let Some(path) = line.strip_prefix("--- ")
             && file.status == FileStatus::Deleted
-                && let Some(path) = strip_side(path, "a/") {
-                    file.path = path;
-                }
+            && let Some(path) = strip_side(path, "a/")
+        {
+            file.path = path;
+        }
     }
     files
 }
@@ -204,13 +240,43 @@ Binary files /dev/null and b/img.png differ
         let files = parse(DIFF);
         assert_eq!(files.len(), 4);
         let a = &files[0];
-        assert_eq!((a.path.as_str(), a.status, a.added, a.removed), ("src/a.rs", FileStatus::Modified, 2, 1));
+        assert_eq!(
+            (a.path.as_str(), a.status, a.added, a.removed),
+            ("src/a.rs", FileStatus::Modified, 2, 1)
+        );
         assert_eq!(a.lines[0].kind, LineKind::Hunk);
-        assert_eq!(a.lines[2], DiffLine { kind: LineKind::Remove, old: Some(2), new: None, text: "    old();".into() });
-        assert_eq!(a.lines[4], DiffLine { kind: LineKind::Add, old: None, new: Some(3), text: "    more();".into() });
-        assert_eq!(a.lines[5], DiffLine { kind: LineKind::Context, old: Some(3), new: Some(4), text: String::new() });
+        assert_eq!(
+            a.lines[2],
+            DiffLine {
+                kind: LineKind::Remove,
+                old: Some(2),
+                new: None,
+                text: "    old();".into()
+            }
+        );
+        assert_eq!(
+            a.lines[4],
+            DiffLine {
+                kind: LineKind::Add,
+                old: None,
+                new: Some(3),
+                text: "    more();".into()
+            }
+        );
+        assert_eq!(
+            a.lines[5],
+            DiffLine {
+                kind: LineKind::Context,
+                old: Some(3),
+                new: Some(4),
+                text: String::new()
+            }
+        );
 
-        assert_eq!((files[1].path.as_str(), files[1].status), ("gone.txt", FileStatus::Deleted));
+        assert_eq!(
+            (files[1].path.as_str(), files[1].status),
+            ("gone.txt", FileStatus::Deleted)
+        );
         assert_eq!(files[2].path, "new name.rs");
         assert_eq!(files[2].old_path.as_deref(), Some("old name.rs"));
         assert_eq!(files[2].status, FileStatus::Renamed);

@@ -3,7 +3,9 @@
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
 use gpui_kit::component::{ActiveTheme, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{App, AppContext, Context, Entity, FocusHandle, Focusable, Render, SharedString, Window, div};
+use gpui_kit::{
+    App, AppContext, Context, Entity, FocusHandle, Focusable, Render, SharedString, Window, div,
+};
 
 pub struct AnnotationEditor {
     pub text: Entity<TextareaState>,
@@ -22,7 +24,11 @@ impl AnnotationEditor {
         });
         // Prose: sentences, capitals, corrections.
         cx.subscribe(&text, |text, event: &InputEvent, _| {
-            gpui_android_glue::keyboard::follow(text.entity_id(), event, gpui_android_glue::keyboard::Purpose::Message)
+            gpui_android_glue::keyboard::follow(
+                text.entity_id(),
+                event,
+                gpui_android_glue::keyboard::Purpose::Message,
+            )
         })
         .detach();
         Self { text, context }

@@ -41,7 +41,8 @@ impl TerminalLogin {
         method_id: &str,
         on_success: impl FnOnce() + Send + 'static,
     ) -> Result<Arc<Self>, String> {
-        let (args, env) = terminal_method(init, method_id).ok_or_else(|| format!("the agent has no terminal sign-in \"{method_id}\""))?;
+        let (args, env) = terminal_method(init, method_id)
+            .ok_or_else(|| format!("the agent has no terminal sign-in \"{method_id}\""))?;
         let mut command = shell_command(agent);
         command
             .args(&args)
@@ -54,11 +55,16 @@ impl TerminalLogin {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .process_group(0);
-        let mut child = command.spawn().map_err(|error| format!("starting the sign-in: {error}"))?;
+        let mut child = command
+            .spawn()
+            .map_err(|error| format!("starting the sign-in: {error}"))?;
         let (input, mut lines) = mpsc::unbounded_channel::<String>();
         let login = Arc::new(Self {
             method_id: method_id.to_owned(),
-            shown: Mutex::new(Shown { running: true, ..Default::default() }),
+            shown: Mutex::new(Shown {
+                running: true,
+                ..Default::default()
+            }),
             input,
             pid: child.id(),
         });
@@ -66,7 +72,11 @@ impl TerminalLogin {
         let mut stdin = child.stdin.take().expect("piped");
         tokio::spawn(async move {
             while let Some(line) = lines.recv().await {
-                if stdin.write_all(format!("{line}\n").as_bytes()).await.is_err() {
+                if stdin
+                    .write_all(format!("{line}\n").as_bytes())
+                    .await
+                    .is_err()
+                {
                     break;
                 }
                 let _ = stdin.flush().await;
@@ -95,7 +105,12 @@ impl TerminalLogin {
         let shown = self.shown.lock().unwrap();
         let (front, back) = shown.output.as_slices();
         let raw = String::from_utf8_lossy(&[front, back].concat()).into_owned();
-        Login { method_id: self.method_id.clone(), output: plain(&raw), running: shown.running, success: shown.success }
+        Login {
+            method_id: self.method_id.clone(),
+            output: plain(&raw),
+            running: shown.running,
+            success: shown.success,
+        }
     }
 
     pub fn write(&self, text: &str) {
@@ -104,9 +119,10 @@ impl TerminalLogin {
 
     pub fn stop(&self) {
         if self.shown.lock().unwrap().running
-            && let Some(pid) = self.pid {
-                stop_group(pid);
-            }
+            && let Some(pid) = self.pid
+        {
+            stop_group(pid);
+        }
     }
 }
 
@@ -126,8 +142,17 @@ async fn collect(mut from: impl AsyncRead + Unpin, login: Arc<TerminalLogin>) {
 /// The arguments and environment of the `terminal` auth method `id` in the
 /// agent's answer to `initialize`.
 pub fn terminal_method(init: &Value, id: &str) -> Option<(Vec<String>, BTreeMap<String, String>)> {
-    let method = init["authMethods"].as_array()?.iter().find(|method| method["id"] == id && method["type"] == "terminal")?;
-    let args = method["args"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect();
+    let method = init["authMethods"]
+        .as_array()?
+        .iter()
+        .find(|method| method["id"] == id && method["type"] == "terminal")?;
+    let args = method["args"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect();
     let env = method["env"]
         .as_object()
         .into_iter()
@@ -196,7 +221,10 @@ mod tests {
 
     #[test]
     fn output_loses_its_escape_sequences() {
-        assert_eq!(plain("\x1b[1mVisit\x1b[0m: x\r\n\x1b]8;;https://a\x07link\x1b]8;;\x1b\\\rdone"), "Visit: x\nlink\ndone");
+        assert_eq!(
+            plain("\x1b[1mVisit\x1b[0m: x\r\n\x1b]8;;https://a\x07link\x1b]8;;\x1b\\\rdone"),
+            "Visit: x\nlink\ndone"
+        );
     }
 
     #[tokio::test]
@@ -207,7 +235,11 @@ mod tests {
             id: "a".into(),
             name: "A".into(),
             source: aiddiction_api::AgentSource::Custom,
-            command: aiddiction_api::AgentCommand { command: "sh -c 'printf \"code > \"; read code; echo got $code; exit 3' x".into(), args: vec![], env: Default::default() },
+            command: aiddiction_api::AgentCommand {
+                command: "sh -c 'printf \"code > \"; read code; echo got $code; exit 3' x".into(),
+                args: vec![],
+                env: Default::default(),
+            },
         };
         let init = json!({ "authMethods": [{ "id": "t", "type": "terminal" }] });
         let login = TerminalLogin::start(&agent, dir.path(), &init, "t", || {}).unwrap();

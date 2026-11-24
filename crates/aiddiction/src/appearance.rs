@@ -21,8 +21,14 @@ use gpui_zed_themes::{Registry, Store};
 use crate::settings::Settings;
 
 /// The colours offered beside the system's.
-pub const SEEDS: [(&str, &str); 6] =
-    [("#0b57d0", "Blue"), ("#00838f", "Teal"), ("#2fb380", "Green"), ("#6750a4", "Violet"), ("#e91e63", "Pink"), ("#c88800", "Amber")];
+pub const SEEDS: [(&str, &str); 6] = [
+    ("#0b57d0", "Blue"),
+    ("#00838f", "Teal"),
+    ("#2fb380", "Green"),
+    ("#6750a4", "Violet"),
+    ("#e91e63", "Pink"),
+    ("#c88800", "Amber"),
+];
 
 /// What the scheme is called in a list of themes.
 pub const SCHEME: &str = "Color scheme";
@@ -67,12 +73,22 @@ pub fn registry() -> Registry {
 /// Starts the engine with the stored choices. Once, before the first window.
 pub fn init(cx: &mut App) {
     let appearance = Settings::get(cx).appearance.clone();
-    let remembered = appearance.system_color.as_deref().and_then(|seed| seed.parse::<Seed>().ok());
-    gpui_adaptive_colors::init(Options::new(Color::from_u32(0x0b57d0)).source(source(cx)).remembered(remembered), cx);
+    let remembered = appearance
+        .system_color
+        .as_deref()
+        .and_then(|seed| seed.parse::<Seed>().ok());
+    gpui_adaptive_colors::init(
+        Options::new(Color::from_u32(0x0b57d0))
+            .source(source(cx))
+            .remembered(remembered),
+        cx,
+    );
     // The system's colour arrives after the first frame; kept, it is what the
     // next launch starts with.
     cx.observe_global::<AdaptiveColors>(|cx| {
-        let said = AdaptiveColors::global(cx).system_seed().map(|seed| seed.to_string());
+        let said = AdaptiveColors::global(cx)
+            .system_seed()
+            .map(|seed| seed.to_string());
         if Settings::get(cx).appearance.system_color != said {
             Settings::update(cx, |settings| settings.appearance.system_color = said);
         }
@@ -94,7 +110,11 @@ fn fit_highlight(cx: &mut App) {
     if theme.highlight_theme.appearance == theme.mode {
         return;
     }
-    let fitting = if theme.mode.is_dark() { HighlightTheme::default_dark() } else { HighlightTheme::default_light() };
+    let fitting = if theme.mode.is_dark() {
+        HighlightTheme::default_dark()
+    } else {
+        HighlightTheme::default_light()
+    };
     Theme::global_mut(cx).highlight_theme = fitting;
 }
 
@@ -110,11 +130,17 @@ fn source(cx: &App) -> Source {
 
 /// The colour chosen, or `None` for the system's.
 pub fn color(cx: &App) -> Option<Color> {
-    Settings::get(cx).appearance.color.as_deref().and_then(Color::parse_hex)
+    Settings::get(cx)
+        .appearance
+        .color
+        .as_deref()
+        .and_then(Color::parse_hex)
 }
 
 pub fn set_color(color: Option<Color>, cx: &mut App) {
-    Settings::update(cx, |settings| settings.appearance.color = color.map(|color| color.to_hex()));
+    Settings::update(cx, |settings| {
+        settings.appearance.color = color.map(|color| color.to_hex())
+    });
     gpui_adaptive_colors::set_source(source(cx), cx);
 }
 
@@ -176,15 +202,30 @@ pub fn reload_themes(cx: &mut App) {
 
 fn chosen(mode: ThemeMode, cx: &App) -> Option<Rc<ThemeConfig>> {
     let appearance = &Settings::get(cx).appearance;
-    let wanted = if mode.is_dark() { appearance.dark_theme.as_deref() } else { appearance.light_theme.as_deref() }?;
-    cx.try_global::<Installed>()?.0.iter().find(|theme| theme.mode == mode && theme.name.as_ref() == wanted).cloned()
+    let wanted = if mode.is_dark() {
+        appearance.dark_theme.as_deref()
+    } else {
+        appearance.light_theme.as_deref()
+    }?;
+    cx.try_global::<Installed>()?
+        .0
+        .iter()
+        .find(|theme| theme.mode == mode && theme.name.as_ref() == wanted)
+        .cloned()
 }
 
 /// The scheme first, then the installed themes of that mode by name.
 pub fn theme_names(mode: ThemeMode, cx: &App) -> Vec<SharedString> {
     let mut names: Vec<SharedString> = cx
         .try_global::<Installed>()
-        .map(|installed| installed.0.iter().filter(|theme| theme.mode == mode).map(|theme| theme.name.clone()).collect())
+        .map(|installed| {
+            installed
+                .0
+                .iter()
+                .filter(|theme| theme.mode == mode)
+                .map(|theme| theme.name.clone())
+                .collect()
+        })
         .unwrap_or_default();
     names.sort_by_key(|name| name.to_lowercase());
     names.dedup();

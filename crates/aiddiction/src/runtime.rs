@@ -25,7 +25,8 @@ pub fn install(cx: &mut App) {
 }
 
 fn app() -> AsyncApp {
-    APP.with_borrow(|app| app.clone()).expect("runtime::install runs before anything is spawned")
+    APP.with_borrow(|app| app.clone())
+        .expect("runtime::install runs before anything is spawned")
 }
 
 pub fn runtime() -> &'static Runtime {

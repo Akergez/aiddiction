@@ -13,19 +13,23 @@ use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::list::ListItem;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tree::{TreeItem, TreeState, tree};
-use gpui_kit::component::{ActiveTheme, Icon, IconName, Selectable as _, Sizable as _, WindowExt, h_flex, v_flex};
+use gpui_kit::component::{
+    ActiveTheme, Icon, IconName, Selectable as _, Sizable as _, WindowExt, h_flex, v_flex,
+};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, AppContext, ClipboardItem, Context, ElementId, Entity, EventEmitter, FocusHandle, Hsla, Render,
-    ScrollStrategy, SharedString, StyledText, Subscription, UniformListScrollHandle, Window, div, uniform_list,
+    AnyElement, AppContext, ClipboardItem, Context, ElementId, Entity, EventEmitter, FocusHandle,
+    Hsla, Render, ScrollStrategy, SharedString, StyledText, Subscription, UniformListScrollHandle,
+    Window, div, uniform_list,
 };
 
 use crate::editor::AnnotationEditor;
 use crate::highlight::{self, LineStyles};
 use crate::rows::{self, Row};
 use crate::{
-    Annotate, AnnotateFile, CONTEXT, CursorDown, CursorUp, DeleteAnnotation, NextFile, NextHunk, PageDown, PageUp,
-    PreviousFile, PreviousHunk, Reload, ReviewBackend, ReviewEvent, ReviewOptions, Submit, ToggleReviewed,
+    Annotate, AnnotateFile, CONTEXT, CursorDown, CursorUp, DeleteAnnotation, NextFile, NextHunk,
+    PageDown, PageUp, PreviousFile, PreviousHunk, Reload, ReviewBackend, ReviewEvent,
+    ReviewOptions, Submit, ToggleReviewed,
 };
 
 /// How far a page move goes.
@@ -104,13 +108,19 @@ impl ReviewView {
         };
         // A file chosen in the tree, by mouse or by keys, is opened.
         let tree = this.tree.clone();
-        this._subscriptions.push(cx.observe(&tree, |this, tree, cx| {
-            let chosen = tree.read(cx).selected_item().and_then(|item| item.id.strip_prefix("f:").map(str::to_owned));
-            if let Some(index) = chosen.and_then(|path| this.files.iter().position(|file| file.path == path))
-                && (index != this.file || this.showing_files) {
+        this._subscriptions
+            .push(cx.observe(&tree, |this, tree, cx| {
+                let chosen = tree
+                    .read(cx)
+                    .selected_item()
+                    .and_then(|item| item.id.strip_prefix("f:").map(str::to_owned));
+                if let Some(index) =
+                    chosen.and_then(|path| this.files.iter().position(|file| file.path == path))
+                    && (index != this.file || this.showing_files)
+                {
                     this.open_file(index, cx);
                 }
-        }));
+            }));
         this.load(cx);
         this.load_refs(cx);
         this
@@ -196,8 +206,11 @@ impl ReviewView {
         self.tree.update(cx, |tree, cx| tree.set_items(items, cx));
         self.sync_tree(cx);
         self.rebuild_rows(cx);
-        self.cursor = self.current().map_or(0, |file| rows::first_change(file, &self.rows));
-        self.scroll.scroll_to_item(self.cursor, ScrollStrategy::Center);
+        self.cursor = self
+            .current()
+            .map_or(0, |file| rows::first_change(file, &self.rows));
+        self.scroll
+            .scroll_to_item(self.cursor, ScrollStrategy::Center);
     }
 
     fn current(&self) -> Option<&FileDiff> {
@@ -205,7 +218,10 @@ impl ReviewView {
     }
 
     fn rebuild_rows(&mut self, cx: &mut Context<Self>) {
-        self.rows = self.current().map(|file| rows::rows(file, &self.store)).unwrap_or_default();
+        self.rows = self
+            .current()
+            .map(|file| rows::rows(file, &self.store))
+            .unwrap_or_default();
         self.cursor = self.cursor.min(self.rows.len().saturating_sub(1));
         cx.notify();
     }
@@ -218,8 +234,11 @@ impl ReviewView {
         self.file = index;
         self.showing_files = false;
         self.rebuild_rows(cx);
-        self.cursor = self.current().map_or(0, |file| rows::first_change(file, &self.rows));
-        self.scroll.scroll_to_item(self.cursor, ScrollStrategy::Center);
+        self.cursor = self
+            .current()
+            .map_or(0, |file| rows::first_change(file, &self.rows));
+        self.scroll
+            .scroll_to_item(self.cursor, ScrollStrategy::Center);
     }
 
     /// Opens a file from a key or a button, and keeps the tree's selection
@@ -244,7 +263,12 @@ impl ReviewView {
     }
 
     fn sync_tree(&mut self, cx: &mut Context<Self>) {
-        let Some(path) = self.current().map(|file| SharedString::from(format!("f:{}", file.path))) else { return };
+        let Some(path) = self
+            .current()
+            .map(|file| SharedString::from(format!("f:{}", file.path)))
+        else {
+            return;
+        };
         self.tree.update(cx, |tree, cx| {
             let index = tree.index_of(&path);
             if index.is_some() && tree.selected_index() != index {
@@ -266,8 +290,16 @@ impl ReviewView {
         if fresh {
             return;
         }
-        let lines = self.current().map(|file| highlight::highlight(file, &theme)).unwrap_or_default();
-        self.highlights = Some(Highlights { file: self.file, generation: self.generation, theme: key, lines: Rc::new(lines) });
+        let lines = self
+            .current()
+            .map(|file| highlight::highlight(file, &theme))
+            .unwrap_or_default();
+        self.highlights = Some(Highlights {
+            file: self.file,
+            generation: self.generation,
+            theme: key,
+            lines: Rc::new(lines),
+        });
     }
 
     fn move_cursor(&mut self, to: usize, cx: &mut Context<Self>) {
@@ -275,7 +307,8 @@ impl ReviewView {
             return;
         }
         self.cursor = to.min(self.rows.len() - 1);
-        self.scroll.scroll_to_item(self.cursor, ScrollStrategy::Nearest);
+        self.scroll
+            .scroll_to_item(self.cursor, ScrollStrategy::Nearest);
         cx.notify();
     }
 
@@ -306,13 +339,32 @@ impl ReviewView {
             return self.annotate_file(window, cx);
         }
         let Some(file) = self.current() else { return };
-        let Some(index) = self.cursor_line() else { return };
+        let Some(index) = self.cursor_line() else {
+            return;
+        };
         let line = &file.lines[index];
-        let Some(anchor) = Anchor::of(line) else { return };
-        let Anchor::Line { line: number, change } = anchor else { return };
-        let context = format!("{}:{number} {} {}", file.path, change.marker(), line.text.trim());
+        let Some(anchor) = Anchor::of(line) else {
+            return;
+        };
+        let Anchor::Line {
+            line: number,
+            change,
+        } = anchor
+        else {
+            return;
+        };
+        let context = format!(
+            "{}:{number} {} {}",
+            file.path,
+            change.marker(),
+            line.text.trim()
+        );
         let path = file.path.clone();
-        let existing = self.store.get(&path, anchor).map(|annotation| annotation.comment.clone()).unwrap_or_default();
+        let existing = self
+            .store
+            .get(&path, anchor)
+            .map(|annotation| annotation.comment.clone())
+            .unwrap_or_default();
         let hunk_end = annotation::hunk_end(&file.lines, index);
         self.edit(path, anchor, hunk_end, context.into(), existing, window, cx);
     }
@@ -320,8 +372,20 @@ impl ReviewView {
     fn annotate_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(file) = self.current() else { return };
         let path = file.path.clone();
-        let existing = self.store.get(&path, Anchor::File).map(|annotation| annotation.comment.clone()).unwrap_or_default();
-        self.edit(path.clone(), Anchor::File, None, format!("{path} (the whole file)").into(), existing, window, cx);
+        let existing = self
+            .store
+            .get(&path, Anchor::File)
+            .map(|annotation| annotation.comment.clone())
+            .unwrap_or_default();
+        self.edit(
+            path.clone(),
+            Anchor::File,
+            None,
+            format!("{path} (the whole file)").into(),
+            existing,
+            window,
+            cx,
+        );
     }
 
     /// The dialog: what is written replaces the annotation, nothing removes it.
@@ -339,7 +403,11 @@ impl ReviewView {
         let editor = cx.new(|cx| AnnotationEditor::new(context, &existing, window, cx));
         let focus = editor.read(cx).focus(cx);
         let this = cx.entity().downgrade();
-        let title = if anchor == Anchor::File { "File annotation" } else { "Annotation" };
+        let title = if anchor == Anchor::File {
+            "File annotation"
+        } else {
+            "Annotation"
+        };
         window.open_dialog(cx, move |dialog, _, _| {
             let (editor, this, path) = (editor.clone(), this.clone(), path.clone());
             dialog
@@ -348,7 +416,9 @@ impl ReviewView {
                 .footer(
                     DialogFooter::new()
                         .child(DialogClose::new().child(Button::new("cancel").label("Cancel")))
-                        .child(DialogAction::new().child(Button::new("ok").label("Save").primary())),
+                        .child(
+                            DialogAction::new().child(Button::new("ok").label("Save").primary()),
+                        ),
                 )
                 .on_ok(move |_, window, cx| {
                     let comment = editor.read(cx).value(cx);
@@ -362,12 +432,24 @@ impl ReviewView {
         focus.focus(window, cx);
     }
 
-    fn save(&mut self, path: &str, anchor: Anchor, hunk_end: Option<u32>, comment: String, cx: &mut Context<Self>) {
+    fn save(
+        &mut self,
+        path: &str,
+        anchor: Anchor,
+        hunk_end: Option<u32>,
+        comment: String,
+        cx: &mut Context<Self>,
+    ) {
         if comment.is_empty() {
             self.store.remove(path, anchor);
         } else {
             let end_line = hunk_end.filter(|_| annotation::mentions_hunk(&comment));
-            self.store.add(Annotation { file: path.to_owned(), anchor, end_line, comment });
+            self.store.add(Annotation {
+                file: path.to_owned(),
+                anchor,
+                end_line,
+                comment,
+            });
         }
         self.rebuild_rows(cx);
     }
@@ -387,7 +469,9 @@ impl ReviewView {
     }
 
     fn toggle_reviewed(&mut self, cx: &mut Context<Self>) {
-        let Some(path) = self.current().map(|file| file.path.clone()) else { return };
+        let Some(path) = self.current().map(|file| file.path.clone()) else {
+            return;
+        };
         if !self.reviewed.remove(&path) {
             self.reviewed.insert(path);
         }
@@ -405,15 +489,16 @@ impl ReviewView {
 
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let source = &self.request.source;
-        let source_button = |id: &'static str, label: SharedString, value: DiffSource, cx: &mut Context<Self>| {
-            let selected = *source == value;
-            Button::new(id)
-                .xsmall()
-                .label(label)
-                .selected(selected)
-                .when(!selected, |button| button.ghost())
-                .on_click(cx.listener(move |this, _, _, cx| this.set_source(value.clone(), cx)))
-        };
+        let source_button =
+            |id: &'static str, label: SharedString, value: DiffSource, cx: &mut Context<Self>| {
+                let selected = *source == value;
+                Button::new(id)
+                    .xsmall()
+                    .label(label)
+                    .selected(selected)
+                    .when(!selected, |button| button.ghost())
+                    .on_click(cx.listener(move |this, _, _, cx| this.set_source(value.clone(), cx)))
+            };
         let mut bar = h_flex()
             .flex_wrap()
             .gap_1()
@@ -421,71 +506,140 @@ impl ReviewView {
             .py_1p5()
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(source_button("uncommitted", "Uncommitted".into(), DiffSource::Uncommitted, cx))
-            .child(source_button("staged", "Staged".into(), DiffSource::Staged, cx))
+            .child(source_button(
+                "uncommitted",
+                "Uncommitted".into(),
+                DiffSource::Uncommitted,
+                cx,
+            ))
+            .child(source_button(
+                "staged",
+                "Staged".into(),
+                DiffSource::Staged,
+                cx,
+            ))
             .child(source_button(
                 "last-commit",
                 "Last commit".into(),
-                DiffSource::Between { from: "HEAD~1".into(), to: "HEAD".into() },
+                DiffSource::Between {
+                    from: "HEAD~1".into(),
+                    to: "HEAD".into(),
+                },
                 cx,
             ));
         if let Some(refs) = &self.refs
-            && let Some(base) = refs.default_branch.clone().filter(|base| refs.current_branch.as_ref() != Some(base)) {
-                let label: SharedString = format!("Branch vs {base}").into();
-                bar = bar.child(source_button("branch", label, DiffSource::Since { base, head: "HEAD".into() }, cx));
-            }
+            && let Some(base) = refs
+                .default_branch
+                .clone()
+                .filter(|base| refs.current_branch.as_ref() != Some(base))
+        {
+            let label: SharedString = format!("Branch vs {base}").into();
+            bar = bar.child(source_button(
+                "branch",
+                label,
+                DiffSource::Since {
+                    base,
+                    head: "HEAD".into(),
+                },
+                cx,
+            ));
+        }
         let full = self.request.context.is_none();
         let untracked = self.request.untracked;
-        bar.child(div().w_32().child(gpui_android_glue::keyboard::on_tap(Input::new(&self.ref_input).xsmall(), &self.ref_input, cx)))
-            .child(Button::new("against").xsmall().ghost().label("Diff").on_click(cx.listener(|this, _, _, cx| {
-                let base = this.ref_input.read(cx).value().trim().to_owned();
-                if !base.is_empty() {
-                    this.set_source(DiffSource::Against { base }, cx);
-                }
-            })))
-            .child(div().w_2())
-            .child(Button::new("full").xsmall().label(if full { "Full files" } else { "Compact" }).ghost().on_click(
-                cx.listener(move |this, _, _, cx| {
+        bar.child(div().w_32().child(gpui_android_glue::keyboard::on_tap(
+            Input::new(&self.ref_input).xsmall(),
+            &self.ref_input,
+            cx,
+        )))
+        .child(
+            Button::new("against")
+                .xsmall()
+                .ghost()
+                .label("Diff")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    let base = this.ref_input.read(cx).value().trim().to_owned();
+                    if !base.is_empty() {
+                        this.set_source(DiffSource::Against { base }, cx);
+                    }
+                })),
+        )
+        .child(div().w_2())
+        .child(
+            Button::new("full")
+                .xsmall()
+                .label(if full { "Full files" } else { "Compact" })
+                .ghost()
+                .on_click(cx.listener(move |this, _, _, cx| {
                     this.request.context = if full { Some(3) } else { None };
                     this.load(cx);
-                }),
-            ))
-            .child(Button::new("untracked").xsmall().ghost().selected(untracked).label("Untracked").on_click(cx.listener(
-                move |this, _, _, cx| {
+                })),
+        )
+        .child(
+            Button::new("untracked")
+                .xsmall()
+                .ghost()
+                .selected(untracked)
+                .label("Untracked")
+                .on_click(cx.listener(move |this, _, _, cx| {
                     this.request.untracked = !untracked;
                     this.load(cx);
-                },
-            )))
-            .child(Button::new("reload").xsmall().ghost().icon(IconName::RefreshCw).tooltip("Reload (R)").on_click(
-                cx.listener(|this, _, _, cx| this.load(cx)),
-            ))
-            .child(div().flex_1())
-            .child(div().text_xs().text_color(cx.theme().muted_foreground).child(match self.store.count() {
-                0 => "No annotations".to_owned(),
-                1 => "1 annotation".to_owned(),
-                count => format!("{count} annotations"),
-            }))
-            .child(Button::new("copy").xsmall().ghost().icon(IconName::Copy).tooltip("Copy annotations").on_click(
-                cx.listener(|this, _, window, cx| this.copy(window, cx)),
-            ))
-            .when_some(self.options.discard_label.clone(), |bar, label| {
-                bar.child(Button::new("discard").xsmall().label(label).on_click(cx.listener(|_, _, _, cx| cx.emit(ReviewEvent::Discard))))
-            })
-            .child(
-                Button::new("submit")
+                })),
+        )
+        .child(
+            Button::new("reload")
+                .xsmall()
+                .ghost()
+                .icon(IconName::RefreshCw)
+                .tooltip("Reload (R)")
+                .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
+        )
+        .child(div().flex_1())
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(match self.store.count() {
+                    0 => "No annotations".to_owned(),
+                    1 => "1 annotation".to_owned(),
+                    count => format!("{count} annotations"),
+                }),
+        )
+        .child(
+            Button::new("copy")
+                .xsmall()
+                .ghost()
+                .icon(IconName::Copy)
+                .tooltip("Copy annotations")
+                .on_click(cx.listener(|this, _, window, cx| this.copy(window, cx))),
+        )
+        .when_some(self.options.discard_label.clone(), |bar, label| {
+            bar.child(
+                Button::new("discard")
                     .xsmall()
-                    .primary()
-                    .label(self.options.submit_label.clone())
-                    .tooltip("Ctrl+Enter")
-                    .on_click(cx.listener(|this, _, _, cx| this.submit(cx))),
+                    .label(label)
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(ReviewEvent::Discard))),
             )
+        })
+        .child(
+            Button::new("submit")
+                .xsmall()
+                .primary()
+                .label(self.options.submit_label.clone())
+                .tooltip("Ctrl+Enter")
+                .on_click(cx.listener(|this, _, _, cx| this.submit(cx))),
+        )
     }
 
     fn render_files(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         if self.files.is_empty() {
             let text = if self.loading { "" } else { "No changes" };
-            return div().p_3().text_sm().text_color(theme.muted_foreground).child(text).into_any_element();
+            return div()
+                .p_3()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child(text)
+                .into_any_element();
         }
         let view = cx.entity().downgrade();
         tree(&self.tree, move |index, entry, selected, _window, cx| {
@@ -494,25 +648,64 @@ impl ReviewView {
             let mut row = h_flex().w_full().gap_1p5().pl(indent).text_sm();
             match item.id.strip_prefix("f:") {
                 None => {
-                    let icon = if entry.is_expanded() { IconName::FolderOpen } else { IconName::FolderClosed };
+                    let icon = if entry.is_expanded() {
+                        IconName::FolderOpen
+                    } else {
+                        IconName::FolderClosed
+                    };
                     row = row
                         .child(Icon::new(icon).xsmall().text_color(theme.muted_foreground))
-                        .child(div().flex_1().min_w_0().truncate().text_color(theme.muted_foreground).child(item.label.clone()));
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_color(theme.muted_foreground)
+                                .child(item.label.clone()),
+                        );
                 }
                 Some(path) => {
                     let view = view.upgrade();
                     let view = view.as_ref().map(|view| view.read(cx));
-                    let file = view.and_then(|view| view.files.iter().find(|file| file.path == path));
+                    let file =
+                        view.and_then(|view| view.files.iter().find(|file| file.path == path));
                     let notes = view.map_or(0, |view| view.store.count_in(path));
                     let reviewed = view.is_some_and(|view| view.reviewed.contains(path));
                     let (letter, color, added, removed) = match file {
-                        Some(file) => (file.status.letter(), status_color(file.status, &theme), file.added, file.removed),
+                        Some(file) => (
+                            file.status.letter(),
+                            status_color(file.status, &theme),
+                            file.added,
+                            file.removed,
+                        ),
                         None => (' ', theme.muted_foreground, 0, 0),
                     };
                     row = row
-                        .child(div().w_3().flex_none().text_xs().font_family(theme.mono_font_family.clone()).text_color(color).child(letter.to_string()))
-                        .child(div().flex_1().min_w_0().truncate().when(reviewed, |name| name.opacity(0.5)).child(item.label.clone()))
-                        .when(notes > 0, |row| row.child(div().text_xs().text_color(theme.warning).child(format!("●{notes}"))))
+                        .child(
+                            div()
+                                .w_3()
+                                .flex_none()
+                                .text_xs()
+                                .font_family(theme.mono_font_family.clone())
+                                .text_color(color)
+                                .child(letter.to_string()),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .when(reviewed, |name| name.opacity(0.5))
+                                .child(item.label.clone()),
+                        )
+                        .when(notes > 0, |row| {
+                            row.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.warning)
+                                    .child(format!("●{notes}")),
+                            )
+                        })
                         .child(
                             h_flex()
                                 .flex_none()
@@ -531,7 +724,9 @@ impl ReviewView {
 
     fn render_row(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
-        let Some(file) = self.current() else { return div().into_any_element() };
+        let Some(file) = self.current() else {
+            return div().into_any_element();
+        };
         let selected = index == self.cursor;
         let base = h_flex()
             .id(ElementId::Name(format!("review-row-{index}").into()))
@@ -540,7 +735,11 @@ impl ReviewView {
             .text_xs()
             .font_family(theme.mono_font_family.clone())
             .border_l_2()
-            .border_color(if selected { theme.primary } else { Hsla::transparent_black() })
+            .border_color(if selected {
+                theme.primary
+            } else {
+                Hsla::transparent_black()
+            })
             .cursor_pointer()
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.focus.focus(window, cx);
@@ -553,17 +752,27 @@ impl ReviewView {
         // A note is one row: its first line, and a mark when there is more.
         let note = match self.rows[index] {
             Row::FileNote => Some(("› file: ", self.store.get(&file.path, Anchor::File))),
-            Row::Note(line) => Some(("› ", Anchor::of(&file.lines[line]).and_then(|anchor| self.store.get(&file.path, anchor)))),
+            Row::Note(line) => Some((
+                "› ",
+                Anchor::of(&file.lines[line]).and_then(|anchor| self.store.get(&file.path, anchor)),
+            )),
             Row::Line(_) => None,
         };
         if let Some((prefix, annotation)) = note {
-            let text = annotation.map(|annotation| annotation.comment.as_str()).unwrap_or_default();
+            let text = annotation
+                .map(|annotation| annotation.comment.as_str())
+                .unwrap_or_default();
             let first = text.lines().next().unwrap_or_default();
             let more = if text.lines().count() > 1 { " …" } else { "" };
             return base
                 .bg(theme.warning.opacity(0.12))
                 .pl(gpui_kit::rems(5.5))
-                .child(div().truncate().text_color(theme.foreground).child(format!("{prefix}{first}{more}")))
+                .child(
+                    div()
+                        .truncate()
+                        .text_color(theme.foreground)
+                        .child(format!("{prefix}{first}{more}")),
+                )
                 .into_any_element();
         }
         match self.rows[index] {
@@ -587,20 +796,30 @@ impl ReviewView {
                 };
                 let text = highlight::display_text(&line.text);
                 let styles = match &self.highlights {
-                    Some(cached) if cached.file == self.file => cached.lines.get(line_index).cloned().unwrap_or_default(),
+                    Some(cached) if cached.file == self.file => {
+                        cached.lines.get(line_index).cloned().unwrap_or_default()
+                    }
                     _ => Vec::new(),
                 };
                 base.when_some(background, |row, background| row.bg(background))
                     .when(selected, |row| row.bg(theme.accent))
                     .child(number(line.old))
                     .child(number(line.new))
-                    .child(div().w_4().flex_none().text_color(theme.muted_foreground).child(marker))
+                    .child(
+                        div()
+                            .w_4()
+                            .flex_none()
+                            .text_color(theme.muted_foreground)
+                            .child(marker),
+                    )
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .when(line.kind == LineKind::Hunk, |text| text.text_color(theme.muted_foreground))
+                            .when(line.kind == LineKind::Hunk, |text| {
+                                text.text_color(theme.muted_foreground)
+                            })
                             .child(StyledText::new(text).with_highlights(styles)),
                     )
                     .into_any_element()
@@ -617,7 +836,11 @@ impl ReviewView {
                 .items_center()
                 .justify_center()
                 .text_color(theme.muted_foreground)
-                .child(if self.loading { "Reading the diff…" } else { "Nothing to review" })
+                .child(if self.loading {
+                    "Reading the diff…"
+                } else {
+                    "Nothing to review"
+                })
                 .into_any_element();
         };
         let reviewed = self.reviewed.contains(&file.path);
@@ -632,32 +855,67 @@ impl ReviewView {
             .border_b_1()
             .border_color(theme.border)
             .when(phone, |header| {
-                header.child(Button::new("files").xsmall().ghost().icon(IconName::ArrowLeft).on_click(cx.listener(|this, _, _, cx| {
-                    this.showing_files = true;
-                    cx.notify();
-                })))
+                header.child(
+                    Button::new("files")
+                        .xsmall()
+                        .ghost()
+                        .icon(IconName::ArrowLeft)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.showing_files = true;
+                            cx.notify();
+                        })),
+                )
             })
             .child(div().flex_1().min_w_0().truncate().text_sm().child(title))
-            .child(Button::new("prev-file").xsmall().ghost().icon(IconName::ChevronUp).tooltip("Previous file (p)").on_click(
-                cx.listener(|this, _, window, cx| this.step_file(false, window, cx)),
-            ))
-            .child(Button::new("next-file").xsmall().ghost().icon(IconName::ChevronDown).tooltip("Next file (n)").on_click(
-                cx.listener(|this, _, window, cx| this.step_file(true, window, cx)),
-            ))
-            .child(Button::new("file-note").xsmall().ghost().label("File note").tooltip("Shift+A").on_click(
-                cx.listener(|this, _, window, cx| this.annotate_file(window, cx)),
-            ))
-            .child(Button::new("reviewed").xsmall().ghost().selected(reviewed).icon(IconName::Check).label("Reviewed").tooltip("Space").on_click(
-                cx.listener(|this, _, _, cx| this.toggle_reviewed(cx)),
-            ));
+            .child(
+                Button::new("prev-file")
+                    .xsmall()
+                    .ghost()
+                    .icon(IconName::ChevronUp)
+                    .tooltip("Previous file (p)")
+                    .on_click(cx.listener(|this, _, window, cx| this.step_file(false, window, cx))),
+            )
+            .child(
+                Button::new("next-file")
+                    .xsmall()
+                    .ghost()
+                    .icon(IconName::ChevronDown)
+                    .tooltip("Next file (n)")
+                    .on_click(cx.listener(|this, _, window, cx| this.step_file(true, window, cx))),
+            )
+            .child(
+                Button::new("file-note")
+                    .xsmall()
+                    .ghost()
+                    .label("File note")
+                    .tooltip("Shift+A")
+                    .on_click(cx.listener(|this, _, window, cx| this.annotate_file(window, cx))),
+            )
+            .child(
+                Button::new("reviewed")
+                    .xsmall()
+                    .ghost()
+                    .selected(reviewed)
+                    .icon(IconName::Check)
+                    .label("Reviewed")
+                    .tooltip("Space")
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_reviewed(cx))),
+            );
         let body = if file.binary {
-            div().p_4().text_sm().text_color(theme.muted_foreground).child("Binary file").into_any_element()
+            div()
+                .p_4()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child("Binary file")
+                .into_any_element()
         } else {
             uniform_list(
                 "review-rows",
                 self.rows.len(),
                 cx.processor(|this, range: std::ops::Range<usize>, _window, cx| {
-                    range.map(|index| this.render_row(index, cx)).collect::<Vec<_>>()
+                    range
+                        .map(|index| this.render_row(index, cx))
+                        .collect::<Vec<_>>()
                 }),
             )
             .track_scroll(&self.scroll)
@@ -670,7 +928,11 @@ impl ReviewView {
             })
             .into_any_element()
         };
-        v_flex().size_full().child(header).child(div().flex_1().min_h_0().child(body)).into_any_element()
+        v_flex()
+            .size_full()
+            .child(header)
+            .child(div().flex_1().min_h_0().child(body))
+            .into_any_element()
     }
 }
 
@@ -680,34 +942,83 @@ impl Render for ReviewView {
         let theme = cx.theme().clone();
         let phone = window.viewport_size().width / window.rem_size() < 44.0;
         let status = if self.loading {
-            Some(h_flex().gap_2().px_3().py_1().text_xs().child(Spinner::new().xsmall()).child(format!("{}…", self.request.source.label())).into_any_element())
+            Some(
+                h_flex()
+                    .gap_2()
+                    .px_3()
+                    .py_1()
+                    .text_xs()
+                    .child(Spinner::new().xsmall())
+                    .child(format!("{}…", self.request.source.label()))
+                    .into_any_element(),
+            )
         } else {
-            self.error.clone().map(|error| div().px_3().py_1().text_xs().text_color(theme.danger).child(error).into_any_element())
+            self.error.clone().map(|error| {
+                div()
+                    .px_3()
+                    .py_1()
+                    .text_xs()
+                    .text_color(theme.danger)
+                    .child(error)
+                    .into_any_element()
+            })
         };
         let body = if phone {
-            if self.showing_files { self.render_files(cx) } else { self.render_diff(true, cx) }
+            if self.showing_files {
+                self.render_files(cx)
+            } else {
+                self.render_diff(true, cx)
+            }
         } else {
             h_flex()
                 .size_full()
                 .items_start()
-                .child(div().w_64().flex_none().h_full().border_r_1().border_color(theme.border).child(self.render_files(cx)))
-                .child(div().flex_1().min_w_0().h_full().child(self.render_diff(false, cx)))
+                .child(
+                    div()
+                        .w_64()
+                        .flex_none()
+                        .h_full()
+                        .border_r_1()
+                        .border_color(theme.border)
+                        .child(self.render_files(cx)),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .child(self.render_diff(false, cx)),
+                )
                 .into_any_element()
         };
         v_flex()
             .size_full()
             .key_context(CONTEXT)
             .track_focus(&self.focus)
-            .on_action(cx.listener(|this, _: &CursorDown, _, cx| this.move_cursor(this.cursor + 1, cx)))
-            .on_action(cx.listener(|this, _: &CursorUp, _, cx| this.move_cursor(this.cursor.saturating_sub(1), cx)))
-            .on_action(cx.listener(|this, _: &PageDown, _, cx| this.move_cursor(this.cursor + PAGE, cx)))
-            .on_action(cx.listener(|this, _: &PageUp, _, cx| this.move_cursor(this.cursor.saturating_sub(PAGE), cx)))
-            .on_action(cx.listener(|this, _: &NextFile, window, cx| this.step_file(true, window, cx)))
-            .on_action(cx.listener(|this, _: &PreviousFile, window, cx| this.step_file(false, window, cx)))
+            .on_action(
+                cx.listener(|this, _: &CursorDown, _, cx| this.move_cursor(this.cursor + 1, cx)),
+            )
+            .on_action(cx.listener(|this, _: &CursorUp, _, cx| {
+                this.move_cursor(this.cursor.saturating_sub(1), cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &PageDown, _, cx| this.move_cursor(this.cursor + PAGE, cx)),
+            )
+            .on_action(cx.listener(|this, _: &PageUp, _, cx| {
+                this.move_cursor(this.cursor.saturating_sub(PAGE), cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &NextFile, window, cx| this.step_file(true, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &PreviousFile, window, cx| this.step_file(false, window, cx)),
+            )
             .on_action(cx.listener(|this, _: &NextHunk, _, cx| this.move_hunk(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousHunk, _, cx| this.move_hunk(false, cx)))
             .on_action(cx.listener(|this, _: &Annotate, window, cx| this.annotate(window, cx)))
-            .on_action(cx.listener(|this, _: &AnnotateFile, window, cx| this.annotate_file(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &AnnotateFile, window, cx| this.annotate_file(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &DeleteAnnotation, _, cx| this.delete_annotation(cx)))
             .on_action(cx.listener(|this, _: &ToggleReviewed, _, cx| this.toggle_reviewed(cx)))
             .on_action(cx.listener(|this, _: &Reload, _, cx| this.load(cx)))

@@ -8,8 +8,9 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use aiddiction_api::{
-    Agent, AgentInput, Instance, InstanceId, NewProject, NewWorktree, PermissionAnswer, Project, ProjectId, ServerEvent, ServerInfo,
-    Task, TaskId, TaskInput, TaskStatus, SharedFile, Worktree, WorktreeId,
+    Agent, AgentInput, Instance, InstanceId, NewProject, NewWorktree, PermissionAnswer, Project,
+    ProjectId, ServerEvent, ServerInfo, SharedFile, Task, TaskId, TaskInput, TaskStatus, Worktree,
+    WorktreeId,
 };
 use aiddiction_client::{Error, ServerClient};
 use gpui_kit::{App, Context};
@@ -73,7 +74,9 @@ impl ServerConnection {
 
     /// Checks the server, reads everything, and listens for changes.
     pub fn connect(&mut self, cx: &mut Context<Self>) {
-        let Some(client) = self.client.clone() else { return };
+        let Some(client) = self.client.clone() else {
+            return;
+        };
         self.generation += 1;
         let generation = self.generation;
         self.status = Status::Connecting;
@@ -91,7 +94,8 @@ impl ServerConnection {
                         this.refresh_projects(cx);
                         this.refresh_agents(cx);
                         this.refresh_all_instances(cx);
-                        this.listen(generation, cx);                    }
+                        this.listen(generation, cx);
+                    }
                     Err(error) => this.went_offline(error, generation, cx),
                 }
                 cx.notify();
@@ -117,13 +121,19 @@ impl ServerConnection {
     }
 
     fn listen(&mut self, generation: u64, cx: &mut Context<Self>) {
-        let Some(client) = self.client.clone() else { return };
+        let Some(client) = self.client.clone() else {
+            return;
+        };
         let this = cx.entity().downgrade();
         runtime::spawn(async move { client.events().await }, move |result, cx| {
             let Ok(events) = result else {
                 let _ = this.update(cx, |this, cx| {
                     if this.generation == generation {
-                        this.went_offline(Error::Network("the event socket closed".into()), generation, cx);
+                        this.went_offline(
+                            Error::Network("the event socket closed".into()),
+                            generation,
+                            cx,
+                        );
                     }
                 });
                 return;
@@ -145,7 +155,11 @@ impl ServerConnection {
                 move |cx| {
                     let _ = this.update(cx, |this, cx| {
                         if this.generation == generation {
-                            this.went_offline(Error::Network("lost the server".into()), generation, cx);
+                            this.went_offline(
+                                Error::Network("lost the server".into()),
+                                generation,
+                                cx,
+                            );
                         }
                     });
                 },
@@ -191,67 +205,95 @@ impl ServerConnection {
     }
 
     pub fn refresh_projects(&mut self, cx: &mut Context<Self>) {
-        self.call(cx, |client| async move { client.projects().await }, |this, result, cx| match result {
-            Ok(mut projects) => {
-                projects.sort_by_key(|project| std::cmp::Reverse(project.created_at_ms));
-                this.projects = projects;
-                this.refresh_all_tasks(cx);
-                this.refresh_all_worktrees(cx);
-            }
-            Err(error) => tracing::warn!("could not read the projects: {error}"),
-        });
+        self.call(
+            cx,
+            |client| async move { client.projects().await },
+            |this, result, cx| match result {
+                Ok(mut projects) => {
+                    projects.sort_by_key(|project| std::cmp::Reverse(project.created_at_ms));
+                    this.projects = projects;
+                    this.refresh_all_tasks(cx);
+                    this.refresh_all_worktrees(cx);
+                }
+                Err(error) => tracing::warn!("could not read the projects: {error}"),
+            },
+        );
     }
 
     pub fn refresh_agents(&mut self, cx: &mut Context<Self>) {
-        self.call(cx, |client| async move { client.agents().await }, |this, result, _| match result {
-            Ok(agents) => this.agents = agents,
-            Err(error) => tracing::warn!("could not read the agents: {error}"),
-        });
+        self.call(
+            cx,
+            |client| async move { client.agents().await },
+            |this, result, _| match result {
+                Ok(agents) => this.agents = agents,
+                Err(error) => tracing::warn!("could not read the agents: {error}"),
+            },
+        );
     }
 
     /// Every project's instances, as on (re)connecting: events only say
     /// what changes after that.
     pub fn refresh_all_instances(&mut self, cx: &mut Context<Self>) {
-        self.call(cx, |client| async move { client.all_instances().await }, |this, result, _| match result {
-            Ok(instances) => {
-                this.instances.clear();
-                for instance in instances {
-                    this.instances.entry(instance.project_id).or_default().push(instance);
+        self.call(
+            cx,
+            |client| async move { client.all_instances().await },
+            |this, result, _| match result {
+                Ok(instances) => {
+                    this.instances.clear();
+                    for instance in instances {
+                        this.instances
+                            .entry(instance.project_id)
+                            .or_default()
+                            .push(instance);
+                    }
                 }
-            }
-            Err(error) => tracing::warn!("could not read the instances: {error}"),
-        });
+                Err(error) => tracing::warn!("could not read the instances: {error}"),
+            },
+        );
     }
 
     /// Answers an agent's question from a list, without its conversation.
-    pub fn answer_permission(&mut self, instance: InstanceId, answer: PermissionAnswer, cx: &mut Context<Self>) {
+    pub fn answer_permission(
+        &mut self,
+        instance: InstanceId,
+        answer: PermissionAnswer,
+        cx: &mut Context<Self>,
+    ) {
         // Shown answered at once; the server's event brings the truth.
         for instances in self.instances.values_mut() {
             for known in instances.iter_mut().filter(|known| known.id == instance) {
                 for session in &mut known.sessions {
-                    session.permissions.retain(|permission| permission.request_id != answer.request_id);
+                    session
+                        .permissions
+                        .retain(|permission| permission.request_id != answer.request_id);
                 }
             }
         }
         cx.notify();
-        self.call(cx, move |client| async move { client.answer_permission(instance, &answer).await }, |_, result, cx| {
-            if let Err(error) = result
-                && !matches!(error, Error::Api { status: 409, .. })
-            {
-                crate::ui::toast_error(format!("Could not answer the agent: {error}"), cx);
-            }
-        });
+        self.call(
+            cx,
+            move |client| async move { client.answer_permission(instance, &answer).await },
+            |_, result, cx| {
+                if let Err(error) = result
+                    && !matches!(error, Error::Api { status: 409, .. })
+                {
+                    crate::ui::toast_error(format!("Could not answer the agent: {error}"), cx);
+                }
+            },
+        );
     }
 
     pub fn refresh_instances(&mut self, project: ProjectId, cx: &mut Context<Self>) {
-        self.call(cx, move |client| async move { client.instances(project).await }, move |this, result, _| {
-            match result {
+        self.call(
+            cx,
+            move |client| async move { client.instances(project).await },
+            move |this, result, _| match result {
                 Ok(instances) => {
                     this.instances.insert(project, instances);
                 }
                 Err(error) => tracing::warn!("could not read the instances: {error}"),
-            }
-        });
+            },
+        );
     }
 
     /// Every known project's tasks: called once the projects are read, since
@@ -266,37 +308,56 @@ impl ServerConnection {
     }
 
     pub fn refresh_tasks(&mut self, project: ProjectId, cx: &mut Context<Self>) {
-        self.call(cx, move |client| async move { client.tasks(project).await }, move |this, result, _| match result {
-            Ok(mut tasks) => {
-                tasks.sort_by_key(|task| task.created_at_ms);
-                this.tasks.insert(project, tasks);
-            }
-            Err(error) => tracing::warn!("could not read the tasks: {error}"),
-        });
+        self.call(
+            cx,
+            move |client| async move { client.tasks(project).await },
+            move |this, result, _| match result {
+                Ok(mut tasks) => {
+                    tasks.sort_by_key(|task| task.created_at_ms);
+                    this.tasks.insert(project, tasks);
+                }
+                Err(error) => tracing::warn!("could not read the tasks: {error}"),
+            },
+        );
     }
 
     /// Every known project's checkouts: called once the projects are read.
     pub fn refresh_all_worktrees(&mut self, cx: &mut Context<Self>) {
-        let projects = self.projects.iter().map(|project| project.id).collect::<Vec<_>>();
-        self.worktrees.retain(|project, _| projects.contains(project));
+        let projects = self
+            .projects
+            .iter()
+            .map(|project| project.id)
+            .collect::<Vec<_>>();
+        self.worktrees
+            .retain(|project, _| projects.contains(project));
         for project in projects {
             self.refresh_worktrees(project, cx);
         }
     }
 
     pub fn refresh_files(&mut self, project: ProjectId, cx: &mut Context<Self>) {
-        self.call(cx, move |client| async move { client.files(project).await }, move |this, result, _| {
-            if let Ok(files) = result { this.files.insert(project, files); }
-        });
+        self.call(
+            cx,
+            move |client| async move { client.files(project).await },
+            move |this, result, _| {
+                if let Ok(files) = result {
+                    this.files.insert(project, files);
+                }
+            },
+        );
     }
 
     pub fn refresh_worktrees(&mut self, project: ProjectId, cx: &mut Context<Self>) {
-        self.call(cx, move |client| async move { client.worktrees(project).await }, move |this, result, _| match result {
-            Ok(worktrees) => {
-                this.worktrees.insert(project, worktrees);
-            }
-            Err(error) => tracing::warn!("could not read the worktrees: {error}"),
-        });
+        self.call(
+            cx,
+            move |client| async move { client.worktrees(project).await },
+            move |this, result, _| match result {
+                Ok(worktrees) => {
+                    this.worktrees.insert(project, worktrees);
+                }
+                Err(error) => tracing::warn!("could not read the worktrees: {error}"),
+            },
+        );
     }
 
     pub fn create_worktree(
@@ -306,19 +367,32 @@ impl ServerConnection {
         cx: &mut Context<Self>,
         done: impl FnOnce(Result<Worktree, Error>, &mut App) + 'static,
     ) {
-        self.call(cx, move |client| async move { client.create_worktree(project, &input).await }, move |this, result, cx| {
-            this.refresh_worktrees(project, cx);
-            cx.defer(move |cx| done(result, cx));
-        });
+        self.call(
+            cx,
+            move |client| async move { client.create_worktree(project, &input).await },
+            move |this, result, cx| {
+                this.refresh_worktrees(project, cx);
+                cx.defer(move |cx| done(result, cx));
+            },
+        );
     }
 
-    pub fn delete_worktree(&mut self, project: ProjectId, worktree: WorktreeId, cx: &mut Context<Self>) {
-        self.call(cx, move |client| async move { client.delete_worktree(project, worktree).await }, move |this, result, cx| {
-            if let Err(error) = result {
-                crate::ui::toast_error(format!("Could not remove the worktree: {error}"), cx);
-            }
-            this.refresh_worktrees(project, cx);
-        });
+    pub fn delete_worktree(
+        &mut self,
+        project: ProjectId,
+        worktree: WorktreeId,
+        cx: &mut Context<Self>,
+    ) {
+        self.call(
+            cx,
+            move |client| async move { client.delete_worktree(project, worktree).await },
+            move |this, result, cx| {
+                if let Err(error) = result {
+                    crate::ui::toast_error(format!("Could not remove the worktree: {error}"), cx);
+                }
+                this.refresh_worktrees(project, cx);
+            },
+        );
     }
 
     /// Creates a card (`id` is `None`) or replaces one's title, text and status.
@@ -355,7 +429,11 @@ impl ServerConnection {
 
     /// Moves a card to another column.
     pub fn move_task(&mut self, task: &Task, status: TaskStatus, cx: &mut Context<Self>) {
-        let input = TaskInput { title: task.title.clone(), markdown: task.markdown.clone(), status: Some(status) };
+        let input = TaskInput {
+            title: task.title.clone(),
+            markdown: task.markdown.clone(),
+            status: Some(status),
+        };
         self.save_task(task.project_id, Some(task.id), input, cx, |result, cx| {
             if let Err(error) = result {
                 crate::ui::toast_error(format!("Could not move the task: {error}"), cx);
@@ -364,16 +442,20 @@ impl ServerConnection {
     }
 
     pub fn delete_task(&mut self, project: ProjectId, id: TaskId, cx: &mut Context<Self>) {
-        self.call(cx, move |client| async move { client.delete_task(project, id).await }, move |this, result, cx| {
-            match result {
+        self.call(
+            cx,
+            move |client| async move { client.delete_task(project, id).await },
+            move |this, result, cx| match result {
                 Ok(()) => {
                     if let Some(tasks) = this.tasks.get_mut(&project) {
                         tasks.retain(|task| task.id != id);
                     }
                 }
-                Err(error) => crate::ui::toast_error(format!("Could not delete the task: {error}"), cx),
-            }
-        });
+                Err(error) => {
+                    crate::ui::toast_error(format!("Could not delete the task: {error}"), cx)
+                }
+            },
+        );
     }
 
     pub fn create_project(
@@ -382,23 +464,32 @@ impl ServerConnection {
         cx: &mut Context<Self>,
         done: impl FnOnce(Result<Project, Error>, &mut App) + 'static,
     ) {
-        self.call(cx, move |client| async move { client.create_project(&input).await }, move |this, result, cx| {
-            if let Ok(project) = &result
-                && !this.projects.iter().any(|known| known.id == project.id) {
+        self.call(
+            cx,
+            move |client| async move { client.create_project(&input).await },
+            move |this, result, cx| {
+                if let Ok(project) = &result
+                    && !this.projects.iter().any(|known| known.id == project.id)
+                {
                     this.projects.insert(0, project.clone());
                 }
-            // After this update, so `done` may update this entity again.
-            cx.defer(move |cx| done(result, cx));
-        });
+                // After this update, so `done` may update this entity again.
+                cx.defer(move |cx| done(result, cx));
+            },
+        );
     }
 
     pub fn delete_project(&mut self, id: ProjectId, delete_files: bool, cx: &mut Context<Self>) {
-        self.call(cx, move |client| async move { client.delete_project(id, delete_files).await }, move |this, result, cx| {
-            match result {
+        self.call(
+            cx,
+            move |client| async move { client.delete_project(id, delete_files).await },
+            move |this, result, cx| match result {
                 Ok(()) => this.projects.retain(|project| project.id != id),
-                Err(error) => crate::ui::toast_error(format!("Could not delete the project: {error}"), cx),
-            }
-        });
+                Err(error) => {
+                    crate::ui::toast_error(format!("Could not delete the project: {error}"), cx)
+                }
+            },
+        );
     }
 
     pub fn save_agent(
@@ -419,18 +510,22 @@ impl ServerConnection {
             move |this, result, cx| {
                 this.refresh_agents(cx);
                 // After this update, so `done` may update this entity again.
-            cx.defer(move |cx| done(result, cx));
+                cx.defer(move |cx| done(result, cx));
             },
         );
     }
 
     pub fn remove_agent(&mut self, id: String, cx: &mut Context<Self>) {
-        self.call(cx, move |client| async move { client.remove_agent(&id).await }, |this, result, cx| {
-            if let Err(error) = result {
-                crate::ui::toast_error(format!("Could not remove the agent: {error}"), cx);
-            }
-            this.refresh_agents(cx);
-        });
+        self.call(
+            cx,
+            move |client| async move { client.remove_agent(&id).await },
+            |this, result, cx| {
+                if let Err(error) = result {
+                    crate::ui::toast_error(format!("Could not remove the agent: {error}"), cx);
+                }
+                this.refresh_agents(cx);
+            },
+        );
     }
 
     pub fn start_instance(
@@ -447,18 +542,22 @@ impl ServerConnection {
             move |this, result, cx| {
                 this.refresh_instances(project, cx);
                 // After this update, so `done` may update this entity again.
-            cx.defer(move |cx| done(result, cx));
+                cx.defer(move |cx| done(result, cx));
             },
         );
     }
 
     pub fn stop_instance(&mut self, instance: &Instance, cx: &mut Context<Self>) {
         let (id, project) = (instance.id, instance.project_id);
-        self.call(cx, move |client| async move { client.stop_instance(id).await }, move |this, result, cx| {
-            if let Err(error) = result {
-                crate::ui::toast_error(format!("Could not stop the agent: {error}"), cx);
-            }
-            this.refresh_instances(project, cx);
-        });
+        self.call(
+            cx,
+            move |client| async move { client.stop_instance(id).await },
+            move |this, result, cx| {
+                if let Err(error) = result {
+                    crate::ui::toast_error(format!("Could not stop the agent: {error}"), cx);
+                }
+                this.refresh_instances(project, cx);
+            },
+        );
     }
 }

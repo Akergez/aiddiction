@@ -7,7 +7,9 @@
 use std::rc::Rc;
 
 use gpui_adaptive::prim::{Surface, column, pressable, row, spinner, surface};
-use gpui_adaptive::{ActiveColors, ActiveScale, Handler, Icon, IconName, Meter, Note, Sizable as _, Text};
+use gpui_adaptive::{
+    ActiveColors, ActiveScale, Handler, Icon, IconName, Meter, Note, Sizable as _, Text,
+};
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, App, ElementId, RenderOnce, SharedString, Window, div};
 
@@ -24,10 +26,19 @@ impl StepStatus {
     fn mark(self, cx: &App) -> AnyElement {
         let colors = cx.colors();
         match self {
-            StepStatus::Pending => Icon::new(IconName::Ellipsis).small().text_color(colors.muted).into_any_element(),
+            StepStatus::Pending => Icon::new(IconName::Ellipsis)
+                .small()
+                .text_color(colors.muted)
+                .into_any_element(),
             StepStatus::Running => spinner(),
-            StepStatus::Done => Icon::new(IconName::CircleCheck).small().text_color(colors.success).into_any_element(),
-            StepStatus::Failed => Icon::new(IconName::CircleX).small().text_color(colors.danger).into_any_element(),
+            StepStatus::Done => Icon::new(IconName::CircleCheck)
+                .small()
+                .text_color(colors.success)
+                .into_any_element(),
+            StepStatus::Failed => Icon::new(IconName::CircleX)
+                .small()
+                .text_color(colors.danger)
+                .into_any_element(),
         }
     }
 }
@@ -46,8 +57,20 @@ pub struct Step {
 }
 
 impl Step {
-    pub fn new(id: impl Into<ElementId>, title: impl Into<SharedString>, status: StepStatus) -> Self {
-        Step { id: id.into(), title: title.into(), icon: None, status, open: false, on_toggle: None, children: Vec::new() }
+    pub fn new(
+        id: impl Into<ElementId>,
+        title: impl Into<SharedString>,
+        status: StepStatus,
+    ) -> Self {
+        Step {
+            id: id.into(),
+            title: title.into(),
+            icon: None,
+            status,
+            open: false,
+            on_toggle: None,
+            children: Vec::new(),
+        }
     }
 
     /// What kind of step it is. With an icon the state goes at the end;
@@ -92,14 +115,32 @@ impl RenderOnce for Step {
         .min_h(scale.target)
         .rounded(scale.radius_container);
         let head = match self.icon {
-            Some(icon) => head.child(Icon::new(icon).small().text_color(colors.muted)).child(title).child(mark),
+            Some(icon) => head
+                .child(Icon::new(icon).small().text_color(colors.muted))
+                .child(title)
+                .child(mark),
             None => head.child(mark).child(title).child(
-                Icon::new(if self.open { IconName::ChevronUp } else { IconName::ChevronDown }).xsmall().text_color(colors.muted),
+                Icon::new(if self.open {
+                    IconName::ChevronUp
+                } else {
+                    IconName::ChevronDown
+                })
+                .xsmall()
+                .text_color(colors.muted),
             ),
         };
-        surface(Surface::Card, cx).child(head).when(self.open && !self.children.is_empty(), |card| {
-            card.child(column().gap(scale.space_s).px(scale.space_m).pb(scale.space_m).children(self.children))
-        })
+        surface(Surface::Card, cx).child(head).when(
+            self.open && !self.children.is_empty(),
+            |card| {
+                card.child(
+                    column()
+                        .gap(scale.space_s)
+                        .px(scale.space_m)
+                        .pb(scale.space_m)
+                        .children(self.children),
+                )
+            },
+        )
     }
 }
 
@@ -114,7 +155,11 @@ pub struct Plan {
 
 impl Plan {
     pub fn new(open: bool, on_toggle: impl Fn(&mut Window, &mut App) + 'static) -> Self {
-        Plan { items: Vec::new(), open, on_toggle: Rc::new(on_toggle) }
+        Plan {
+            items: Vec::new(),
+            open,
+            on_toggle: Rc::new(on_toggle),
+        }
     }
 
     pub fn item(mut self, text: impl Into<SharedString>, status: StepStatus) -> Self {
@@ -127,12 +172,20 @@ impl RenderOnce for Plan {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let (colors, scale) = (cx.colors(), cx.scale());
         let total = self.items.len();
-        let done = self.items.iter().filter(|(_, status)| *status == StepStatus::Done).count();
+        let done = self
+            .items
+            .iter()
+            .filter(|(_, status)| *status == StepStatus::Done)
+            .count();
         let current = self
             .items
             .iter()
             .find(|(_, status)| *status == StepStatus::Running)
-            .or_else(|| self.items.iter().find(|(_, status)| *status != StepStatus::Done))
+            .or_else(|| {
+                self.items
+                    .iter()
+                    .find(|(_, status)| *status != StepStatus::Done)
+            })
             .map(|(text, _)| text.clone())
             .unwrap_or_default();
         let on_toggle = self.on_toggle.clone();
@@ -142,11 +195,31 @@ impl RenderOnce for Plan {
             .py(scale.space_s)
             .min_h(scale.target)
             .on_click(move |_, window, cx| on_toggle(window, cx))
-            .child(Icon::new(IconName::CircleCheck).xsmall().text_color(if done == total { colors.success } else { colors.accent }))
+            .child(
+                Icon::new(IconName::CircleCheck)
+                    .xsmall()
+                    .text_color(if done == total {
+                        colors.success
+                    } else {
+                        colors.accent
+                    }),
+            )
             .child(Text::small(format!("Plan {done}/{total}")).strong())
             .child(Text::small(current).muted().truncate().grow())
-            .child(Meter::new(if total == 0 { 0. } else { done as f32 / total as f32 }))
-            .child(Icon::new(if self.open { IconName::ChevronDown } else { IconName::ChevronUp }).xsmall().text_color(colors.muted));
+            .child(Meter::new(if total == 0 {
+                0.
+            } else {
+                done as f32 / total as f32
+            }))
+            .child(
+                Icon::new(if self.open {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronUp
+                })
+                .xsmall()
+                .text_color(colors.muted),
+            );
         if !self.open {
             return line.into_any_element();
         }
@@ -157,7 +230,10 @@ impl RenderOnce for Plan {
                 StepStatus::Failed => (IconName::CircleX, colors.danger),
                 StepStatus::Pending => (IconName::Dash, colors.muted),
             };
-            row().gap(scale.space_s).child(Icon::new(icon).xsmall().text_color(color)).child(Text::small(text).truncate())
+            row()
+                .gap(scale.space_s)
+                .child(Icon::new(icon).xsmall().text_color(color))
+                .child(Text::small(text).truncate())
         });
         column()
             .child(line)
@@ -189,22 +265,42 @@ pub struct Diff {
 
 impl Diff {
     pub fn new(path: impl Into<SharedString>, old: Option<String>, new: String) -> Self {
-        Diff { path: path.into(), old, new }
+        Diff {
+            path: path.into(),
+            old,
+            new,
+        }
     }
 }
 
 impl RenderOnce for Diff {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let (colors, scale) = (cx.colors(), cx.scale());
-        let line = |sign: char, text: &str, bg| div().bg(bg).child(Text::mono(format!("{sign} {text}")));
+        let line =
+            |sign: char, text: &str, bg| div().bg(bg).child(Text::mono(format!("{sign} {text}")));
         let removed = colors.danger.opacity(0.12);
         let added = colors.success.opacity(0.12);
-        let old: Vec<_> = self.old.iter().flat_map(|old| old.lines().take(OLD_LINES)).map(|text| line('-', text, removed)).collect();
-        let new: Vec<_> = self.new.lines().take(NEW_LINES).map(|text| line('+', text, added)).collect();
+        let old: Vec<_> = self
+            .old
+            .iter()
+            .flat_map(|old| old.lines().take(OLD_LINES))
+            .map(|text| line('-', text, removed))
+            .collect();
+        let new: Vec<_> = self
+            .new
+            .lines()
+            .take(NEW_LINES)
+            .map(|text| line('+', text, added))
+            .collect();
         column()
             .w_full()
             .gap(scale.space_xs)
             .child(Note::new(self.path).truncate())
-            .child(surface(Surface::Well, cx).p(scale.space_s).children(old).children(new))
+            .child(
+                surface(Surface::Well, cx)
+                    .p(scale.space_s)
+                    .children(old)
+                    .children(new),
+            )
     }
 }

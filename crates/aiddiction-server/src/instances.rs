@@ -6,7 +6,10 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use aiddiction_api::{Agent, AgentProfile, Instance as InstanceInfo, InstanceId, InstanceState, ProjectId, ServerEvent, WorktreeId};
+use aiddiction_api::{
+    Agent, AgentProfile, Instance as InstanceInfo, InstanceId, InstanceState, ProjectId,
+    ServerEvent, WorktreeId,
+};
 use anyhow::Context as _;
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::process::Command;
@@ -85,10 +88,15 @@ impl Instance {
 
     /// Starts one of the agent's terminal sign-ins, in place of any other.
     pub fn start_login(&self, method_id: &str) -> Result<Arc<TerminalLogin>, String> {
-        let init = self.proxy.init_result().ok_or("the agent has not started yet")?;
+        let init = self
+            .proxy
+            .init_result()
+            .ok_or("the agent has not started yet")?;
         self.stop_login();
         let proxy = self.proxy.clone();
-        let login = TerminalLogin::start(&self.agent, &self.root, &init, method_id, move || proxy.forget_auth_status())?;
+        let login = TerminalLogin::start(&self.agent, &self.root, &init, method_id, move || {
+            proxy.forget_auth_status()
+        })?;
         *self.login.lock().unwrap() = Some(login.clone());
         Ok(login)
     }
@@ -121,7 +129,12 @@ impl Supervisor {
             tracing::warn!("could not read the agents' profiles: {error:#}");
             BTreeMap::new()
         });
-        Self { instances: Mutex::new(HashMap::new()), events, profiles: Arc::new(Mutex::new(profiles)), store }
+        Self {
+            instances: Mutex::new(HashMap::new()),
+            events,
+            profiles: Arc::new(Mutex::new(profiles)),
+            store,
+        }
     }
 
     /// What the agent said of itself when it last initialized, whatever
@@ -172,7 +185,10 @@ impl Supervisor {
 
     pub fn stop_project(&self, project: ProjectId) {
         let mut instances = self.instances.lock().unwrap();
-        for instance in instances.values().filter(|instance| instance.project_id == project) {
+        for instance in instances
+            .values()
+            .filter(|instance| instance.project_id == project)
+        {
             instance.stop();
         }
         instances.retain(|_, instance| instance.project_id != project);
@@ -207,10 +223,14 @@ impl Supervisor {
         // An exited instance of the same agent in the same checkout is
         // replaced.
         instances.retain(|_, instance| {
-            !(instance.project_id == project && instance.worktree_id == worktree && instance.agent.id == agent.id)
+            !(instance.project_id == project
+                && instance.worktree_id == worktree
+                && instance.agent.id == agent.id)
         });
 
-        let root = root.canonicalize().with_context(|| format!("opening {}", root.display()))?;
+        let root = root
+            .canonicalize()
+            .with_context(|| format!("opening {}", root.display()))?;
         let mut command = shell_command(&agent);
         command
             .current_dir(&root)
@@ -221,13 +241,17 @@ impl Supervisor {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .process_group(0);
-        let mut child = command.spawn().with_context(|| format!("starting {}", agent.name))?;
+        let mut child = command
+            .spawn()
+            .with_context(|| format!("starting {}", agent.name))?;
 
         let (to_agent, mut agent_rx) = mpsc::unbounded_channel::<String>();
         let id = uuid::Uuid::now_v7();
         let events = self.events.clone();
         let proxy = Arc::new(Proxy::new(root.clone(), to_agent, move || {
-            let _ = events.send(ServerEvent::InstancesChanged { project_id: project });
+            let _ = events.send(ServerEvent::InstancesChanged {
+                project_id: project,
+            });
         }));
         let instance = Arc::new(Instance {
             id,
@@ -249,7 +273,9 @@ impl Supervisor {
         let mut stdin = child.stdin.take().expect("piped");
         tokio::spawn(async move {
             while let Some(line) = agent_rx.recv().await {
-                if stdin.write_all(line.as_bytes()).await.is_err() || stdin.write_all(b"\n").await.is_err() {
+                if stdin.write_all(line.as_bytes()).await.is_err()
+                    || stdin.write_all(b"\n").await.is_err()
+                {
                     break;
                 }
                 let _ = stdin.flush().await;
@@ -294,7 +320,10 @@ impl Supervisor {
                 Ok(Ok(Ok(result))) => Ok(result),
                 Ok(Ok(Err(error))) => Err(format!(
                     "the agent refused to initialize: {}",
-                    error.get("message").and_then(|m| m.as_str()).unwrap_or("unknown error")
+                    error
+                        .get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("unknown error")
                 )),
                 Ok(Err(_)) => Err("the agent exited before it initialized".to_owned()),
                 Err(_) => Err("the agent did not initialize in time".to_owned()),
@@ -312,7 +341,9 @@ impl Supervisor {
                 }
             }
             init_instance.proxy.initialized(outcome);
-            let _ = init_events.send(ServerEvent::InstancesChanged { project_id: project });
+            let _ = init_events.send(ServerEvent::InstancesChanged {
+                project_id: project,
+            });
         });
 
         let exit_instance = instance.clone();
@@ -330,10 +361,14 @@ impl Supervisor {
                 exit_instance.set_state(InstanceState::Exited, Some(message.clone()));
             }
             exit_instance.proxy.agent_exited(&message);
-            let _ = exit_events.send(ServerEvent::InstancesChanged { project_id: project });
+            let _ = exit_events.send(ServerEvent::InstancesChanged {
+                project_id: project,
+            });
         });
 
-        let _ = self.events.send(ServerEvent::InstancesChanged { project_id: project });
+        let _ = self.events.send(ServerEvent::InstancesChanged {
+            project_id: project,
+        });
         Ok(instance)
     }
 }
@@ -348,9 +383,18 @@ fn remember_profile(
 ) {
     let profile = AgentProfile {
         command: agent.command.clone(),
-        agent_info: init.get("agentInfo").cloned().unwrap_or(serde_json::Value::Null),
-        capabilities: init.get("agentCapabilities").cloned().unwrap_or(serde_json::Value::Null),
-        auth_methods: init.get("authMethods").cloned().unwrap_or(serde_json::Value::Null),
+        agent_info: init
+            .get("agentInfo")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        capabilities: init
+            .get("agentCapabilities")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        auth_methods: init
+            .get("authMethods")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
         learned_at_ms: now_ms(),
     };
     let all = {

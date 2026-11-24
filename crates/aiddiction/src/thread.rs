@@ -97,7 +97,10 @@ impl ConfigOption {
     /// Whether it is one of the choices the composer shows as a menu: the
     /// model, how hard it thinks, a model's own setting.
     pub fn is_choice(&self) -> bool {
-        matches!(self.category.as_str(), "model" | "model_config" | "thought_level") && !self.values.is_empty()
+        matches!(
+            self.category.as_str(),
+            "model" | "model_config" | "thought_level"
+        ) && !self.values.is_empty()
     }
 }
 
@@ -688,7 +691,11 @@ mod tests {
         }]));
         assert_eq!(
             thread.config_options[0].values,
-            vec![("a".into(), "A".into()), ("b".into(), "B".into()), ("c".into(), "C".into())]
+            vec![
+                ("a".into(), "A".into()),
+                ("b".into(), "B".into()),
+                ("c".into(), "C".into())
+            ]
         );
     }
 

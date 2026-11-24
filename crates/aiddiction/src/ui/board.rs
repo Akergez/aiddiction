@@ -18,7 +18,9 @@ pub struct Board {
 
 impl Board {
     pub fn new() -> Self {
-        Board { columns: Vec::new() }
+        Board {
+            columns: Vec::new(),
+        }
     }
 
     pub fn column(mut self, column: BoardColumn) -> Self {
@@ -36,7 +38,11 @@ pub struct BoardColumn {
 
 impl BoardColumn {
     pub fn new(title: impl Into<SharedString>, adds: Command) -> Self {
-        BoardColumn { title: title.into(), adds, cards: Vec::new() }
+        BoardColumn {
+            title: title.into(),
+            adds,
+            cards: Vec::new(),
+        }
     }
 
     pub fn card(mut self, card: Card) -> Self {
@@ -62,7 +68,13 @@ impl Card {
         body: impl Into<SharedString>,
         on_activate: impl Fn(&mut Window, &mut App) + 'static,
     ) -> Self {
-        Card { id: id.into(), title: title.into(), body: body.into(), on_activate: Rc::new(on_activate), actions: ItemActions::new() }
+        Card {
+            id: id.into(),
+            title: title.into(),
+            body: body.into(),
+            on_activate: Rc::new(on_activate),
+            actions: ItemActions::new(),
+        }
     }
 
     pub fn actions(mut self, actions: ItemActions) -> Self {
@@ -82,10 +94,14 @@ impl RenderOnce for Card {
             .gap(scale.space_xs)
             .p(scale.space_m)
             .cursor_pointer()
-            .when(!env.is_touch(), |card| card.hover(move |style| style.bg(hover)))
+            .when(!env.is_touch(), |card| {
+                card.hover(move |style| style.bg(hover))
+            })
             .active(move |style| style.bg(pressed))
             .child(Text::title(self.title))
-            .when(!self.body.is_empty(), |card| card.child(Text::small(self.body).muted().clamp(4)))
+            .when(!self.body.is_empty(), |card| {
+                card.child(Text::small(self.body).muted().clamp(4))
+            })
             .on_click(move |_, window, cx| on_activate(window, cx));
         self.actions.attach(card, env, cx)
     }
@@ -109,7 +125,11 @@ impl RenderOnce for Board {
                 .child(head)
                 .children(column_of.cards)
         });
-        let board = row().items_start().gap(scale.space_m).w_full().children(columns);
+        let board = row()
+            .items_start()
+            .gap(scale.space_m)
+            .w_full()
+            .children(columns);
         column().w_full().child(scroll_x("board", cx, board))
     }
 }

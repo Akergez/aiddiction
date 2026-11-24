@@ -3,7 +3,9 @@
 //! can be added, edited and removed.
 
 use aiddiction_api::{Agent, AgentSource};
-use gpui_adaptive::{Collection, Command, Icon, IconName, ItemActions, ListRow, Note, Screen, Stack};
+use gpui_adaptive::{
+    Collection, Command, Icon, IconName, ItemActions, ListRow, Note, Screen, Stack,
+};
 use gpui_kit::prelude::*;
 use gpui_kit::{AppContext, Context, SharedString, Window};
 
@@ -12,8 +14,15 @@ use super::shell::Shell;
 
 impl Shell {
     pub(super) fn render_agents(&mut self, cx: &mut Context<Self>) -> Screen {
-        let agents = self.server.as_ref().map(|server| server.read(cx).agents.clone()).unwrap_or_default();
-        let rows: Vec<ListRow> = agents.into_iter().map(|agent| self.agent_row(agent, cx)).collect();
+        let agents = self
+            .server
+            .as_ref()
+            .map(|server| server.read(cx).agents.clone())
+            .unwrap_or_default();
+        let rows: Vec<ListRow> = agents
+            .into_iter()
+            .map(|agent| self.agent_row(agent, cx))
+            .collect();
         let shell = cx.entity().downgrade();
         Screen::new("agents", "Agents")
             .when(self.server.is_some(), |screen| {
@@ -41,10 +50,13 @@ impl Shell {
             AgentSource::Config => "server config",
             AgentSource::Custom => "custom",
         };
-        let row = ListRow::new(SharedString::from(format!("agent-{}", agent.id)), agent.name.clone())
-            .leading(Icon::new(IconName::Bot))
-            .subtitle(source)
-            .supporting(command);
+        let row = ListRow::new(
+            SharedString::from(format!("agent-{}", agent.id)),
+            agent.name.clone(),
+        )
+        .leading(Icon::new(IconName::Bot))
+        .subtitle(source)
+        .supporting(command);
         if agent.source != AgentSource::Custom {
             return row;
         }
@@ -53,23 +65,34 @@ impl Shell {
         let removed = agent.id.clone();
         let open = (edit.clone(), agent.clone());
         row.on_activate(move |window, cx| {
-            open.0.update(cx, |shell, cx| shell.edit_agent(Some(open.1.clone()), window, cx)).ok();
+            open.0
+                .update(cx, |shell, cx| {
+                    shell.edit_agent(Some(open.1.clone()), window, cx)
+                })
+                .ok();
         })
         .actions(
             ItemActions::new()
                 .title(agent.name.clone())
-                .quick(Command::new(SharedString::from(format!("edit-{}", agent.id)), "Edit").icon(IconName::Settings2).on_trigger(
-                    move |window, cx| {
-                        edit.update(cx, |shell, cx| shell.edit_agent(Some(edited.clone()), window, cx)).ok();
-                    },
-                ))
+                .quick(
+                    Command::new(SharedString::from(format!("edit-{}", agent.id)), "Edit")
+                        .icon(IconName::Settings2)
+                        .on_trigger(move |window, cx| {
+                            edit.update(cx, |shell, cx| {
+                                shell.edit_agent(Some(edited.clone()), window, cx)
+                            })
+                            .ok();
+                        }),
+                )
                 .command(
                     Command::new(SharedString::from(format!("remove-{}", agent.id)), "Remove")
                         .icon(IconName::Delete)
                         .destructive()
                         .on_trigger(move |_, cx| {
                             if let Some(server) = &server {
-                                server.update(cx, |server, cx| server.remove_agent(removed.clone(), cx));
+                                server.update(cx, |server, cx| {
+                                    server.remove_agent(removed.clone(), cx)
+                                });
                             }
                         }),
                 ),
@@ -77,21 +100,37 @@ impl Shell {
     }
 
     fn edit_agent(&mut self, agent: Option<Agent>, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(server) = self.server.clone() else { return };
+        let Some(server) = self.server.clone() else {
+            return;
+        };
         let editing = agent.is_some();
         let form = cx.new(|cx| AgentForm::new(agent.as_ref(), window, cx));
         let first = form.read(cx).first(cx);
-        open_form(if editing { "Edit agent" } else { "Custom agent" }, "Save", form, Some(first), move |form, _, cx| {
-            let Some(input) = form.input(cx) else { return false };
-            let id = form.id.clone();
-            server.update(cx, |server, cx| {
-                server.save_agent(id, input, cx, |result, cx| {
-                    if let Err(error) = result {
-                        super::toast_error(format!("Could not save the agent: {error}"), cx);
-                    }
-                })
-            });
-            true
-        }, window, cx);
+        open_form(
+            if editing {
+                "Edit agent"
+            } else {
+                "Custom agent"
+            },
+            "Save",
+            form,
+            Some(first),
+            move |form, _, cx| {
+                let Some(input) = form.input(cx) else {
+                    return false;
+                };
+                let id = form.id.clone();
+                server.update(cx, |server, cx| {
+                    server.save_agent(id, input, cx, |result, cx| {
+                        if let Err(error) = result {
+                            super::toast_error(format!("Could not save the agent: {error}"), cx);
+                        }
+                    })
+                });
+                true
+            },
+            window,
+            cx,
+        );
     }
 }

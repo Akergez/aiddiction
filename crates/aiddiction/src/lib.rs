@@ -36,11 +36,14 @@ pub const APP_ID: &str = "app.akergez.Aiddiction";
 pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn,aiddiction=info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "warn,aiddiction=info".into()),
         )
         .init();
 
-    gpui_kit::application().with_assets(gpui_kit::assets::Assets).run(start);
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::Assets)
+        .run(start);
 }
 
 /// What every platform does once the toolkit is running.
@@ -81,5 +84,10 @@ fn input_mode() -> gpui_adaptive::InputMode {
 #[unsafe(no_mangle)]
 fn android_main(app: gpui_android_glue::launch::AndroidApp) {
     use gpui_android_glue::launch::{Config, run};
-    run(app, Config::new("aiddiction").filter("warn,aiddiction=info"), gpui_kit::assets::Assets, start);
+    run(
+        app,
+        Config::new("aiddiction").filter("warn,aiddiction=info"),
+        gpui_kit::assets::Assets,
+        start,
+    );
 }

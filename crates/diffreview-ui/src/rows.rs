@@ -77,10 +77,32 @@ mod tests {
     fn notes_follow_their_lines() {
         let file = file();
         let mut store = Store::default();
-        store.add(Annotation { file: "x".into(), anchor: Anchor::Line { line: 2, change: ChangeType::Add }, end_line: None, comment: "c".into() });
-        store.add(Annotation { file: "x".into(), anchor: Anchor::File, end_line: None, comment: "f".into() });
+        store.add(Annotation {
+            file: "x".into(),
+            anchor: Anchor::Line {
+                line: 2,
+                change: ChangeType::Add,
+            },
+            end_line: None,
+            comment: "c".into(),
+        });
+        store.add(Annotation {
+            file: "x".into(),
+            anchor: Anchor::File,
+            end_line: None,
+            comment: "f".into(),
+        });
         let rows = rows(&file, &store);
-        assert_eq!(&rows[..5], &[Row::FileNote, Row::Line(0), Row::Line(1), Row::Line(2), Row::Line(3)]);
+        assert_eq!(
+            &rows[..5],
+            &[
+                Row::FileNote,
+                Row::Line(0),
+                Row::Line(1),
+                Row::Line(2),
+                Row::Line(3)
+            ]
+        );
         assert_eq!(rows[5], Row::Note(3));
     }
 

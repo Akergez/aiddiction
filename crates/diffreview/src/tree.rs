@@ -19,8 +19,14 @@ pub struct Node {
 pub fn build(files: &[FileDiff]) -> Vec<Node> {
     let mut root: Vec<Node> = Vec::new();
     for (index, file) in files.iter().enumerate() {
-        let parts: Vec<&str> = file.path.split('/').filter(|part| !part.is_empty()).collect();
-        let Some((name, folders)) = parts.split_last() else { continue };
+        let parts: Vec<&str> = file
+            .path
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect();
+        let Some((name, folders)) = parts.split_last() else {
+            continue;
+        };
         let mut level = &mut root;
         let mut path = String::new();
         for folder in folders {
@@ -28,16 +34,29 @@ pub fn build(files: &[FileDiff]) -> Vec<Node> {
                 path.push('/');
             }
             path.push_str(folder);
-            let at = match level.iter().position(|node| node.file.is_none() && node.name == *folder) {
+            let at = match level
+                .iter()
+                .position(|node| node.file.is_none() && node.name == *folder)
+            {
                 Some(at) => at,
                 None => {
-                    level.push(Node { name: (*folder).to_owned(), path: path.clone(), file: None, children: Vec::new() });
+                    level.push(Node {
+                        name: (*folder).to_owned(),
+                        path: path.clone(),
+                        file: None,
+                        children: Vec::new(),
+                    });
                     level.len() - 1
                 }
             };
             level = &mut level[at].children;
         }
-        level.push(Node { name: (*name).to_owned(), path: file.path.clone(), file: Some(index), children: Vec::new() });
+        level.push(Node {
+            name: (*name).to_owned(),
+            path: file.path.clone(),
+            file: Some(index),
+            children: Vec::new(),
+        });
     }
     for node in &mut root {
         compress(node);
@@ -60,7 +79,12 @@ fn compress(node: &mut Node) {
 }
 
 fn sort(nodes: &mut [Node]) {
-    nodes.sort_by(|a, b| a.file.is_some().cmp(&b.file.is_some()).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    nodes.sort_by(|a, b| {
+        a.file
+            .is_some()
+            .cmp(&b.file.is_some())
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
     for node in nodes {
         sort(&mut node.children);
     }
@@ -81,7 +105,10 @@ mod tests {
     use super::*;
 
     fn files(paths: &[&str]) -> Vec<FileDiff> {
-        let text: String = paths.iter().map(|path| format!("diff --git a/{path} b/{path}\n")).collect();
+        let text: String = paths
+            .iter()
+            .map(|path| format!("diff --git a/{path} b/{path}\n"))
+            .collect();
         crate::diff::parse(&text)
     }
 
@@ -91,7 +118,13 @@ mod tests {
 
     #[test]
     fn folders_first_and_single_child_chains_folded() {
-        let files = files(&["README.md", "crates/a/src/lib.rs", "crates/a/src/view.rs", "crates/b/Cargo.toml", "build.rs"]);
+        let files = files(&[
+            "README.md",
+            "crates/a/src/lib.rs",
+            "crates/a/src/view.rs",
+            "crates/b/Cargo.toml",
+            "build.rs",
+        ]);
         let tree = build(&files);
         assert_eq!(names(&tree), ["crates", "build.rs", "README.md"]);
         let crates = &tree[0].children;

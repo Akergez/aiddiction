@@ -5,7 +5,10 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use aiddiction_api::{DirEntry, DirListing, NewProject, Project, ProjectId, ProjectSource, ProjectState, ServerEvent, Task, TaskId, TaskInput, TaskSession, TaskStatus};
+use aiddiction_api::{
+    DirEntry, DirListing, NewProject, Project, ProjectId, ProjectSource, ProjectState, ServerEvent,
+    Task, TaskId, TaskInput, TaskSession, TaskStatus,
+};
 use anyhow::Context as _;
 use tokio::io::AsyncReadExt as _;
 use tokio::process::Command;
@@ -39,7 +42,12 @@ pub enum ProjectError {
 }
 
 impl Projects {
-    pub fn open(root: &Path, data_dir: &Path, store: Arc<Store>, events: broadcast::Sender<ServerEvent>) -> anyhow::Result<Self> {
+    pub fn open(
+        root: &Path,
+        data_dir: &Path,
+        store: Arc<Store>,
+        events: broadcast::Sender<ServerEvent>,
+    ) -> anyhow::Result<Self> {
         std::fs::create_dir_all(root).with_context(|| format!("creating {}", root.display()))?;
         let mut list = store.projects()?;
         // A clone the server was killed in the middle of will not finish.
@@ -51,7 +59,13 @@ impl Projects {
         }
         let askpass = data_dir.join("askpass.sh");
         write_askpass(&askpass)?;
-        Ok(Self { root: root.to_path_buf(), store, list: Mutex::new(list), events, askpass })
+        Ok(Self {
+            root: root.to_path_buf(),
+            store,
+            list: Mutex::new(list),
+            events,
+            askpass,
+        })
     }
 
     pub fn root(&self) -> &Path {
@@ -63,42 +77,101 @@ impl Projects {
     }
 
     pub fn get(&self, id: ProjectId) -> Option<Project> {
-        self.list.lock().unwrap().iter().find(|project| project.id == id).cloned()
+        self.list
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|project| project.id == id)
+            .cloned()
     }
 
     pub fn tasks(&self, project: ProjectId) -> Result<Vec<Task>, ProjectError> {
         self.get(project).ok_or(ProjectError::NotFound)?;
-        Ok(self.store.tasks()?.into_iter().filter(|task| task.project_id == project).collect())
+        Ok(self
+            .store
+            .tasks()?
+            .into_iter()
+            .filter(|task| task.project_id == project)
+            .collect())
     }
 
     pub fn create_task(&self, project: ProjectId, input: TaskInput) -> Result<Task, ProjectError> {
         self.get(project).ok_or(ProjectError::NotFound)?;
         let title = input.title.trim();
-        if title.is_empty() { return Err(ProjectError::Invalid("the task needs a title".into())); }
+        if title.is_empty() {
+            return Err(ProjectError::Invalid("the task needs a title".into()));
+        }
         let now = now_ms();
-        let task = Task { id: uuid::Uuid::now_v7(), project_id: project, title: title.into(), markdown: input.markdown, status: input.status.unwrap_or(TaskStatus::Todo), session: None, created_at_ms: now, updated_at_ms: now };
-        let mut tasks = self.store.tasks()?; tasks.push(task.clone()); self.store.save_tasks(&tasks)?;
-        let _ = self.events.send(ServerEvent::TasksChanged { project_id: project });
+        let task = Task {
+            id: uuid::Uuid::now_v7(),
+            project_id: project,
+            title: title.into(),
+            markdown: input.markdown,
+            status: input.status.unwrap_or(TaskStatus::Todo),
+            session: None,
+            created_at_ms: now,
+            updated_at_ms: now,
+        };
+        let mut tasks = self.store.tasks()?;
+        tasks.push(task.clone());
+        self.store.save_tasks(&tasks)?;
+        let _ = self.events.send(ServerEvent::TasksChanged {
+            project_id: project,
+        });
         Ok(task)
     }
 
-    pub fn update_task(&self, project: ProjectId, id: TaskId, input: TaskInput) -> Result<Task, ProjectError> {
+    pub fn update_task(
+        &self,
+        project: ProjectId,
+        id: TaskId,
+        input: TaskInput,
+    ) -> Result<Task, ProjectError> {
         self.get(project).ok_or(ProjectError::NotFound)?;
         let mut tasks = self.store.tasks()?;
-        let task = tasks.iter_mut().find(|task| task.id == id && task.project_id == project).ok_or(ProjectError::NotFound)?;
-        if input.title.trim().is_empty() { return Err(ProjectError::Invalid("the task needs a title".into())); }
-        task.title = input.title.trim().into(); task.markdown = input.markdown; if let Some(status) = input.status { task.status = status; } task.updated_at_ms = now_ms();
-        let updated = task.clone(); self.store.save_tasks(&tasks)?; let _ = self.events.send(ServerEvent::TasksChanged { project_id: project }); Ok(updated)
+        let task = tasks
+            .iter_mut()
+            .find(|task| task.id == id && task.project_id == project)
+            .ok_or(ProjectError::NotFound)?;
+        if input.title.trim().is_empty() {
+            return Err(ProjectError::Invalid("the task needs a title".into()));
+        }
+        task.title = input.title.trim().into();
+        task.markdown = input.markdown;
+        if let Some(status) = input.status {
+            task.status = status;
+        }
+        task.updated_at_ms = now_ms();
+        let updated = task.clone();
+        self.store.save_tasks(&tasks)?;
+        let _ = self.events.send(ServerEvent::TasksChanged {
+            project_id: project,
+        });
+        Ok(updated)
     }
 
     pub fn delete_task(&self, project: ProjectId, id: TaskId) -> Result<(), ProjectError> {
         self.get(project).ok_or(ProjectError::NotFound)?;
-        let mut tasks = self.store.tasks()?; let before = tasks.len(); tasks.retain(|task| !(task.id == id && task.project_id == project));
-        if tasks.len() == before { return Err(ProjectError::NotFound); } self.store.save_tasks(&tasks)?; let _ = self.events.send(ServerEvent::TasksChanged { project_id: project }); Ok(())
+        let mut tasks = self.store.tasks()?;
+        let before = tasks.len();
+        tasks.retain(|task| !(task.id == id && task.project_id == project));
+        if tasks.len() == before {
+            return Err(ProjectError::NotFound);
+        }
+        self.store.save_tasks(&tasks)?;
+        let _ = self.events.send(ServerEvent::TasksChanged {
+            project_id: project,
+        });
+        Ok(())
     }
 
     /// Remembers which conversation was started on a card.
-    pub fn link_session(&self, project: ProjectId, id: TaskId, session: TaskSession) -> Result<(), ProjectError> {
+    pub fn link_session(
+        &self,
+        project: ProjectId,
+        id: TaskId,
+        session: TaskSession,
+    ) -> Result<(), ProjectError> {
         let mut tasks = self.store.tasks()?;
         let task = tasks
             .iter_mut()
@@ -107,7 +180,9 @@ impl Projects {
         task.session = Some(session);
         task.updated_at_ms = now_ms();
         self.store.save_tasks(&tasks)?;
-        let _ = self.events.send(ServerEvent::TasksChanged { project_id: project });
+        let _ = self.events.send(ServerEvent::TasksChanged {
+            project_id: project,
+        });
         Ok(())
     }
 
@@ -134,7 +209,9 @@ impl Projects {
         let base = slug(name, "project");
         let mut dir_name = base.clone();
         let mut n = 2;
-        while list.iter().any(|project| project.dir_name == dir_name) || self.root.join(&dir_name).exists() {
+        while list.iter().any(|project| project.dir_name == dir_name)
+            || self.root.join(&dir_name).exists()
+        {
             dir_name = format!("{base}-{n}");
             n += 1;
         }
@@ -150,7 +227,8 @@ impl Projects {
         };
         match input.source {
             ProjectSource::Empty => {
-                std::fs::create_dir(self.dir(&project)).context("creating the project directory")?;
+                std::fs::create_dir(self.dir(&project))
+                    .context("creating the project directory")?;
             }
             ProjectSource::Existing { .. } => unreachable!("adopted above"),
             ProjectSource::Git { url, branch, token } => {
@@ -161,7 +239,9 @@ impl Projects {
                 let id = project.id;
                 let target = self.dir(&project);
                 tokio::spawn(async move {
-                    let outcome = this.run_clone(id, &url, branch.as_deref(), token.as_deref(), &target).await;
+                    let outcome = this
+                        .run_clone(id, &url, branch.as_deref(), token.as_deref(), &target)
+                        .await;
                     this.finish_clone(id, outcome);
                 });
             }
@@ -178,24 +258,46 @@ impl Projects {
     fn adopt(&self, name: &str, path: &str) -> Result<Project, ProjectError> {
         let path = aiddiction_paths::expand_home(path.trim());
         if !path.is_absolute() {
-            return Err(ProjectError::Invalid(format!("not a full path: {}", path.display())));
+            return Err(ProjectError::Invalid(format!(
+                "not a full path: {}",
+                path.display()
+            )));
         }
-        let path = path.canonicalize().map_err(|error| ProjectError::Invalid(format!("{}: {error}", path.display())))?;
+        let path = path
+            .canonicalize()
+            .map_err(|error| ProjectError::Invalid(format!("{}: {error}", path.display())))?;
         if !path.is_dir() {
-            return Err(ProjectError::Invalid(format!("not a folder: {}", path.display())));
+            return Err(ProjectError::Invalid(format!(
+                "not a folder: {}",
+                path.display()
+            )));
         }
         if path.parent().is_none() || self.root.canonicalize().is_ok_and(|root| root == path) {
-            return Err(ProjectError::Invalid(format!("{} cannot be a project", path.display())));
+            return Err(ProjectError::Invalid(format!(
+                "{} cannot be a project",
+                path.display()
+            )));
         }
-        let folder = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        let folder = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let name = match name.trim() {
             "" => folder.clone(),
             name => name.to_owned(),
         };
 
         let mut list = self.list.lock().unwrap();
-        if let Some(known) = list.iter().find(|project| self.dir(project).canonicalize().is_ok_and(|dir| dir == path)) {
-            return Err(ProjectError::Invalid(format!("{} is already the project “{}”", path.display(), known.name)));
+        if let Some(known) = list.iter().find(|project| {
+            self.dir(project)
+                .canonicalize()
+                .is_ok_and(|dir| dir == path)
+        }) {
+            return Err(ProjectError::Invalid(format!(
+                "{} is already the project “{}”",
+                path.display(),
+                known.name
+            )));
         }
         let project = Project {
             id: uuid::Uuid::now_v7(),
@@ -220,7 +322,10 @@ impl Projects {
             return Err(ProjectError::Invalid("the project needs a name".into()));
         }
         let mut list = self.list.lock().unwrap();
-        let project = list.iter_mut().find(|project| project.id == id).ok_or(ProjectError::NotFound)?;
+        let project = list
+            .iter_mut()
+            .find(|project| project.id == id)
+            .ok_or(ProjectError::NotFound)?;
         project.name = name.to_owned();
         let renamed = project.clone();
         self.store.save_projects(&list)?;
@@ -233,7 +338,10 @@ impl Projects {
     /// Nothing changes when its record cannot be written.
     pub fn forget(&self, id: ProjectId) -> Result<Project, ProjectError> {
         let mut list = self.list.lock().unwrap();
-        let index = list.iter().position(|project| project.id == id).ok_or(ProjectError::NotFound)?;
+        let index = list
+            .iter()
+            .position(|project| project.id == id)
+            .ok_or(ProjectError::NotFound)?;
         let project = list[index].clone();
         let mut next = list.clone();
         next.remove(index);
@@ -312,7 +420,10 @@ impl Projects {
     ) -> anyhow::Result<()> {
         let partial = target.with_file_name(format!(
             ".{}.cloning",
-            target.file_name().and_then(|name| name.to_str()).unwrap_or("project")
+            target
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("project")
         ));
         let _ = std::fs::remove_dir_all(&partial);
 
@@ -332,7 +443,9 @@ impl Projects {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         if let Some(token) = token.filter(|token| !token.is_empty()) {
-            command.env("GIT_ASKPASS", &self.askpass).env("AIDDICTION_GIT_TOKEN", token);
+            command
+                .env("GIT_ASKPASS", &self.askpass)
+                .env("AIDDICTION_GIT_TOKEN", token);
         }
         let mut child = command.spawn().context("starting git")?;
         let mut stderr = child.stderr.take().expect("piped");
@@ -373,9 +486,17 @@ impl Projects {
         let status = child.wait().await.context("waiting for git")?;
         if !status.success() {
             let _ = std::fs::remove_dir_all(&partial);
-            anyhow::bail!("{}", if last_line.is_empty() { format!("git failed ({status})") } else { last_line });
+            anyhow::bail!(
+                "{}",
+                if last_line.is_empty() {
+                    format!("git failed ({status})")
+                } else {
+                    last_line
+                }
+            );
         }
-        std::fs::rename(&partial, target).with_context(|| format!("moving the clone to {}", target.display()))?;
+        std::fs::rename(&partial, target)
+            .with_context(|| format!("moving the clone to {}", target.display()))?;
         Ok(())
     }
 }
@@ -387,12 +508,18 @@ pub fn list_dirs(path: Option<&str>, hidden: bool) -> Result<DirListing, Project
         Some(path) => aiddiction_paths::expand_home(path),
         None => aiddiction_paths::home_dir(),
     };
-    let path = path.canonicalize().map_err(|error| ProjectError::Invalid(format!("{}: {error}", path.display())))?;
-    let entries = std::fs::read_dir(&path).map_err(|error| ProjectError::Invalid(format!("{}: {error}", path.display())))?;
+    let path = path
+        .canonicalize()
+        .map_err(|error| ProjectError::Invalid(format!("{}: {error}", path.display())))?;
+    let entries = std::fs::read_dir(&path)
+        .map_err(|error| ProjectError::Invalid(format!("{}: {error}", path.display())))?;
     let mut dirs: Vec<DirEntry> = entries
         .filter_map(Result::ok)
         .filter(|entry| entry.path().is_dir())
-        .map(|entry| DirEntry { name: entry.file_name().to_string_lossy().into_owned(), path: entry.path().display().to_string() })
+        .map(|entry| DirEntry {
+            name: entry.file_name().to_string_lossy().into_owned(),
+            path: entry.path().display().to_string(),
+        })
         .filter(|entry| hidden || !entry.name.starts_with('.'))
         .collect();
     dirs.sort_by_key(|entry| entry.name.to_lowercase());
@@ -407,10 +534,14 @@ pub fn list_dirs(path: Option<&str>, hidden: bool) -> Result<DirListing, Project
 /// copy anything the server can read into a project.
 fn check_git_url(url: &str) -> Result<(), ProjectError> {
     let url = url.trim();
-    let remote = ["https://", "http://", "ssh://", "git://"].iter().any(|scheme| url.starts_with(scheme))
+    let remote = ["https://", "http://", "ssh://", "git://"]
+        .iter()
+        .any(|scheme| url.starts_with(scheme))
         || (url.contains('@') && url.contains(':') && !url.contains("://"));
     if url.starts_with('-') || !remote {
-        return Err(ProjectError::Invalid(format!("not a remote repository address: {url}")));
+        return Err(ProjectError::Invalid(format!(
+            "not a remote repository address: {url}"
+        )));
     }
     Ok(())
 }
@@ -438,13 +569,37 @@ mod tests {
 
     #[test]
     fn an_existing_folder_is_adopted_once_and_never_deleted() {
-        let (root, data, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (root, data, outside) = (
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+        );
         let projects = projects(root.path(), data.path());
-        let source = || ProjectSource::Existing { path: outside.path().display().to_string() };
-        let project = projects.create(NewProject { name: String::new(), source: source() }).unwrap();
-        assert_eq!(project.name, outside.path().file_name().unwrap().to_string_lossy());
-        assert_eq!(projects.dir(&project), outside.path().canonicalize().unwrap());
-        assert!(projects.create(NewProject { name: "again".into(), source: source() }).is_err());
+        let source = || ProjectSource::Existing {
+            path: outside.path().display().to_string(),
+        };
+        let project = projects
+            .create(NewProject {
+                name: String::new(),
+                source: source(),
+            })
+            .unwrap();
+        assert_eq!(
+            project.name,
+            outside.path().file_name().unwrap().to_string_lossy()
+        );
+        assert_eq!(
+            projects.dir(&project),
+            outside.path().canonicalize().unwrap()
+        );
+        assert!(
+            projects
+                .create(NewProject {
+                    name: "again".into(),
+                    source: source()
+                })
+                .is_err()
+        );
         projects.delete(project.id, true).unwrap();
         assert!(outside.path().exists(), "an adopted folder stays");
     }
@@ -453,7 +608,12 @@ mod tests {
     fn a_project_whose_record_cannot_be_kept_stays() {
         let (root, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let projects = projects(root.path(), data.path());
-        let project = projects.create(NewProject { name: "kept".into(), source: ProjectSource::Empty }).unwrap();
+        let project = projects
+            .create(NewProject {
+                name: "kept".into(),
+                source: ProjectSource::Empty,
+            })
+            .unwrap();
 
         // The store cannot write any more: its folder is a file now.
         let data_path = data.path().to_path_buf();
@@ -461,16 +621,28 @@ mod tests {
         std::fs::write(&data_path, b"not a folder").unwrap();
 
         assert!(projects.forget(project.id).is_err());
-        assert!(projects.get(project.id).is_some(), "the project is still there");
+        assert!(
+            projects.get(project.id).is_some(),
+            "the project is still there"
+        );
         assert!(projects.dir(&project).is_dir(), "and so is its folder");
     }
 
     #[test]
-    fn a_missing_or_relative_folder_is_refused() {        let (root, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    fn a_missing_or_relative_folder_is_refused() {
+        let (root, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let projects = projects(root.path(), data.path());
         for path in ["relative/path", "/no/such/folder"] {
             let source = ProjectSource::Existing { path: path.into() };
-            assert!(projects.create(NewProject { name: "x".into(), source }).is_err(), "{path}");
+            assert!(
+                projects
+                    .create(NewProject {
+                        name: "x".into(),
+                        source
+                    })
+                    .is_err(),
+                "{path}"
+            );
         }
     }
 
@@ -482,7 +654,11 @@ mod tests {
         }
         std::fs::write(dir.path().join("file"), "").unwrap();
         let listing = list_dirs(Some(&dir.path().display().to_string()), false).unwrap();
-        let names: Vec<_> = listing.dirs.iter().map(|entry| entry.name.as_str()).collect();
+        let names: Vec<_> = listing
+            .dirs
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
         assert_eq!(names, ["A", "b"]);
         assert!(listing.parent.is_some());
     }

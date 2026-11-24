@@ -16,7 +16,9 @@ pub struct Store {
 impl Store {
     pub fn open(dir: &Path) -> anyhow::Result<Self> {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-        Ok(Self { dir: dir.to_path_buf() })
+        Ok(Self {
+            dir: dir.to_path_buf(),
+        })
     }
 
     pub fn projects(&self) -> anyhow::Result<Vec<Project>> {
@@ -35,15 +37,22 @@ impl Store {
         self.write("agents.json", agents)
     }
 
-    pub fn tasks(&self) -> anyhow::Result<Vec<Task>> { self.read("tasks.json") }
-    pub fn save_tasks(&self, tasks: &[Task]) -> anyhow::Result<()> { self.write("tasks.json", tasks) }
+    pub fn tasks(&self) -> anyhow::Result<Vec<Task>> {
+        self.read("tasks.json")
+    }
+    pub fn save_tasks(&self, tasks: &[Task]) -> anyhow::Result<()> {
+        self.write("tasks.json", tasks)
+    }
 
     /// What each agent said about itself when it last initialized, by id.
     pub fn agent_profiles(&self) -> anyhow::Result<BTreeMap<String, AgentProfile>> {
         self.read("agent-profiles.json")
     }
 
-    pub fn save_agent_profiles(&self, profiles: &BTreeMap<String, AgentProfile>) -> anyhow::Result<()> {
+    pub fn save_agent_profiles(
+        &self,
+        profiles: &BTreeMap<String, AgentProfile>,
+    ) -> anyhow::Result<()> {
         self.write("agent-profiles.json", profiles)
     }
 
@@ -69,7 +78,11 @@ impl Store {
     }
 
     fn new_token(&self, path: &Path) -> anyhow::Result<(String, bool)> {
-        let token = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
+        let token = format!(
+            "{}{}",
+            uuid::Uuid::new_v4().simple(),
+            uuid::Uuid::new_v4().simple()
+        );
         write_private(path, token.as_bytes())?;
         Ok((token, true))
     }
@@ -77,7 +90,8 @@ impl Store {
     fn read<T: DeserializeOwned + Default>(&self, name: &str) -> anyhow::Result<T> {
         let path = self.dir.join(name);
         match std::fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).with_context(|| format!("reading {}", path.display())),
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .with_context(|| format!("reading {}", path.display())),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
             Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
         }

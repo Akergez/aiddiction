@@ -25,8 +25,10 @@ const STARTUP: Duration = Duration::from_secs(10);
 
 /// The demo servers: their id in the settings, their name, their directory
 /// under this installation's data, and their sample project's name.
-const SERVERS: [(&str, &str, &str, &str); 2] =
-    [("demo", "Demo server", "demo", "Sample repo"), ("demo-2", "Second server", "demo-2", "Second repo")];
+const SERVERS: [(&str, &str, &str, &str); 2] = [
+    ("demo", "Demo server", "demo", "Sample repo"),
+    ("demo-2", "Second server", "demo-2", "Second repo"),
+];
 
 struct DemoServers(Vec<Child>);
 
@@ -37,7 +39,10 @@ pub fn start_if_requested(cx: &mut App) {
         return;
     };
     let count = if demo.trim() == "2" { 2 } else { 1 };
-    let Some(dir) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(PathBuf::from)) else {
+    let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(PathBuf::from))
+    else {
         return;
     };
     cx.set_global(DemoServers(Vec::new()));
@@ -53,12 +58,19 @@ pub fn start_if_requested(cx: &mut App) {
     let mut entries = Vec::new();
     for (id, name, data, project) in &SERVERS[..count] {
         if let Some(url) = start(&dir, &crate::paths::data_dir().join(data), project, cx) {
-            entries.push(ServerEntry { id: (*id).into(), name: (*name).into(), url, token: TOKEN.into() });
+            entries.push(ServerEntry {
+                id: (*id).into(),
+                name: (*name).into(),
+                url,
+                token: TOKEN.into(),
+            });
         }
     }
     // The entries are rewritten every time: the ports are new every time.
     Settings::update(cx, |settings| {
-        settings.servers.retain(|server| SERVERS.iter().all(|(id, ..)| server.id != *id));
+        settings
+            .servers
+            .retain(|server| SERVERS.iter().all(|(id, ..)| server.id != *id));
         for (index, entry) in entries.into_iter().enumerate() {
             settings.servers.insert(index, entry);
         }
@@ -74,7 +86,10 @@ fn start(dir: &Path, data: &Path, project: &str, cx: &mut App) -> Option<String>
     let agent = dir.join("aiddiction-fake-agent");
     let _ = std::fs::write(
         &config,
-        format!("[[agents]]\nid = \"fake\"\nname = \"Fake agent\"\ncommand = {:?}\n", agent.display().to_string()),
+        format!(
+            "[[agents]]\nid = \"fake\"\nname = \"Fake agent\"\ncommand = {:?}\n",
+            agent.display().to_string()
+        ),
     );
     // A free port of its own every time: a demo server some earlier run left
     // behind must not be the one this run talks to.
@@ -132,7 +147,9 @@ fn start(dir: &Path, data: &Path, project: &str, cx: &mut App) -> Option<String>
 /// A port nothing listens on now. Another process could take it before the
 /// server does, which on one machine running one demo does not happen.
 fn free_port() -> std::io::Result<u16> {
-    Ok(std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?.port())
+    Ok(std::net::TcpListener::bind("127.0.0.1:0")?
+        .local_addr()?
+        .port())
 }
 
 /// Until the server answers, for at most [`STARTUP`].
@@ -152,11 +169,17 @@ fn wait_for(client: &aiddiction_client::ServerClient) -> Result<(), String> {
 /// A repository with a commit and changes on top of it — one file changed,
 /// one deleted, one new — made once and added to the demo server as a
 /// project.
-fn add_sample(data: &Path, name: &str, client: &aiddiction_client::ServerClient) -> Result<(), String> {
+fn add_sample(
+    data: &Path,
+    name: &str,
+    client: &aiddiction_client::ServerClient,
+) -> Result<(), String> {
     let repo = data.join("sample-repo");
     if !repo.join(".git").exists() {
         std::fs::create_dir_all(repo.join("src")).map_err(|error| error.to_string())?;
-        let write = |path: &str, text: &str| std::fs::write(repo.join(path), text).map_err(|error| error.to_string());
+        let write = |path: &str, text: &str| {
+            std::fs::write(repo.join(path), text).map_err(|error| error.to_string())
+        };
         write("src/lib.rs", SAMPLE_BEFORE)?;
         write("README.md", "# Sample\n\nA repository to review.\n")?;
         write("old.txt", "this file goes away\n")?;
@@ -168,14 +191,26 @@ fn add_sample(data: &Path, name: &str, client: &aiddiction_client::ServerClient)
         write("NOTES.md", "Things to look at:\n\n- the division by zero\n")?;
     }
     let client = client.clone();
-    let source = aiddiction_api::ProjectSource::Existing { path: repo.display().to_string() };
+    let source = aiddiction_api::ProjectSource::Existing {
+        path: repo.display().to_string(),
+    };
     crate::runtime::runtime().block_on(async move {
         let known = client.projects().await.map_err(|error| error.to_string())?;
-        if known.iter().any(|project| project.path.as_deref() == Some(repo.display().to_string().as_str())) {
+        if known
+            .iter()
+            .any(|project| project.path.as_deref() == Some(repo.display().to_string().as_str()))
+        {
             return Ok(());
         }
-        let project = aiddiction_api::NewProject { name: name.into(), source };
-        client.create_project(&project).await.map(|_| ()).map_err(|error| error.to_string())
+        let project = aiddiction_api::NewProject {
+            name: name.into(),
+            source,
+        };
+        client
+            .create_project(&project)
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     })
 }
 
@@ -189,7 +224,11 @@ fn git(dir: &Path, args: &[&str]) -> Result<(), String> {
         .env("GIT_COMMITTER_EMAIL", "demo@example.com")
         .status()
         .map_err(|error| error.to_string())?;
-    if status.success() { Ok(()) } else { Err(format!("git {args:?} failed")) }
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("git {args:?} failed"))
+    }
 }
 
 const SAMPLE_BEFORE: &str = "\

@@ -11,15 +11,36 @@ use crate::inbox::Group;
 impl Shell {
     /// How many conversations wait on the person: the inbox's count.
     pub(super) fn waiting(&self, cx: &App) -> usize {
-        self.listed(cx).iter().filter(|listed| listed.group == Group::NeedsYou).count()
+        self.listed(cx)
+            .iter()
+            .filter(|listed| listed.group == Group::NeedsYou)
+            .count()
     }
 
     /// The settings' pages.
     pub(super) fn render_settings_menu(&self, cx: &mut Context<Self>) -> Screen {
         let entries = [
-            (Page::Appearance, "appearance", IconName::Palette, "Appearance", "Mode, colour and theme"),
-            (Page::Agents, "agents", IconName::Bot, "Agents", "What the server can run"),
-            (Page::Servers, "servers", IconName::HardDrive, "Servers", "Where the projects live"),
+            (
+                Page::Appearance,
+                "appearance",
+                IconName::Palette,
+                "Appearance",
+                "Mode, colour and theme",
+            ),
+            (
+                Page::Agents,
+                "agents",
+                IconName::Bot,
+                "Agents",
+                "What the server can run",
+            ),
+            (
+                Page::Servers,
+                "servers",
+                IconName::HardDrive,
+                "Servers",
+                "Where the projects live",
+            ),
         ];
         let page = self.page(cx);
         let rows = entries.map(|(target, key, icon, title, subtitle)| {
@@ -35,6 +56,8 @@ impl Shell {
                     shell.update(cx, |shell, cx| shell.go(target, cx)).ok();
                 })
         });
-        Screen::new("settings-menu", "Settings").root(true).content(Collection::new("settings-list").children(rows))
+        Screen::new("settings-menu", "Settings")
+            .root(true)
+            .content(Collection::new("settings-list").children(rows))
     }
 }

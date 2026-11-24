@@ -32,7 +32,11 @@ pub struct DiffRequest {
 
 impl Default for DiffRequest {
     fn default() -> Self {
-        Self { source: DiffSource::Uncommitted, context: None, untracked: true }
+        Self {
+            source: DiffSource::Uncommitted,
+            context: None,
+            untracked: true,
+        }
     }
 }
 
@@ -72,7 +76,10 @@ impl DiffSource {
 
     pub fn validate(&self) -> Result<(), String> {
         for name in self.refs() {
-            if name.is_empty() || name.starts_with('-') || name.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            if name.is_empty()
+                || name.starts_with('-')
+                || name.chars().any(|c| c.is_whitespace() || c.is_control())
+            {
                 return Err(format!("not a ref: {name:?}"));
             }
         }
@@ -83,7 +90,11 @@ impl DiffSource {
 impl DiffRequest {
     /// `git diff …` arguments, after `diff`.
     pub fn git_args(&self) -> Vec<String> {
-        let mut args = vec!["--no-color".to_owned(), "--no-ext-diff".to_owned(), "-M".to_owned()];
+        let mut args = vec![
+            "--no-color".to_owned(),
+            "--no-ext-diff".to_owned(),
+            "-M".to_owned(),
+        ];
         args.push(match self.context {
             Some(lines) => format!("-U{lines}"),
             // As much context as any file has: the whole file.
@@ -106,7 +117,11 @@ impl DiffRequest {
     /// Whether untracked files belong in this diff: only one that ends at
     /// the working tree.
     pub fn includes_untracked(&self) -> bool {
-        self.untracked && matches!(self.source, DiffSource::Uncommitted | DiffSource::Against { .. })
+        self.untracked
+            && matches!(
+                self.source,
+                DiffSource::Uncommitted | DiffSource::Against { .. }
+            )
     }
 }
 
@@ -116,13 +131,37 @@ mod tests {
 
     #[test]
     fn arguments_for_each_source() {
-        let request = |source| DiffRequest { source, context: Some(3), untracked: false };
-        assert_eq!(request(DiffSource::Staged).git_args()[4..], ["--cached", "--"]);
+        let request = |source| DiffRequest {
+            source,
+            context: Some(3),
+            untracked: false,
+        };
         assert_eq!(
-            request(DiffSource::Since { base: "main".into(), head: "HEAD".into() }).git_args()[4..],
+            request(DiffSource::Staged).git_args()[4..],
+            ["--cached", "--"]
+        );
+        assert_eq!(
+            request(DiffSource::Since {
+                base: "main".into(),
+                head: "HEAD".into()
+            })
+            .git_args()[4..],
             ["main...HEAD", "--"]
         );
-        assert!(DiffSource::Against { base: "--output=/etc/x".into() }.validate().is_err());
-        assert!(DiffSource::Between { from: "HEAD~1".into(), to: "HEAD".into() }.validate().is_ok());
+        assert!(
+            DiffSource::Against {
+                base: "--output=/etc/x".into()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            DiffSource::Between {
+                from: "HEAD~1".into(),
+                to: "HEAD".into()
+            }
+            .validate()
+            .is_ok()
+        );
     }
 }

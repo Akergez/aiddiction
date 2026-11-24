@@ -53,7 +53,10 @@ pub struct Appearance {
 
 impl SettingsData {
     pub fn seen(&self, server: &str, session: &str) -> u64 {
-        self.seen.get(&format!("{server}/{session}")).copied().unwrap_or(0)
+        self.seen
+            .get(&format!("{server}/{session}"))
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Records that a conversation was shown up to `seq`. False when that
@@ -66,7 +69,14 @@ impl SettingsData {
         self.seen.insert(key, seq);
         // Forgets the smallest numbers first: roughly the oldest.
         while self.seen.len() > SEEN_LIMIT {
-            let Some(oldest) = self.seen.iter().min_by_key(|(_, seq)| **seq).map(|(key, _)| key.clone()) else { break };
+            let Some(oldest) = self
+                .seen
+                .iter()
+                .min_by_key(|(_, seq)| **seq)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
             self.seen.remove(&oldest);
         }
         true

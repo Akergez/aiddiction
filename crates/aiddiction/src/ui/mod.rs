@@ -28,12 +28,18 @@ impl Global for MainWindow {}
 
 pub fn open_window(cx: &mut App) {
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, initial_size(), cx))),
+        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+            None,
+            initial_size(),
+            cx,
+        ))),
         window_min_size: Some(size(px(360.), px(480.))),
         app_id: Some(crate::APP_ID.to_string()),
         ..AppFrame::window_options()
     };
-    match gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| shell::Shell::new(window, cx))) {
+    match gpui_kit::open_window(options, cx, |window, cx| {
+        cx.new(|cx| shell::Shell::new(window, cx))
+    }) {
         Ok((handle, shell)) => {
             cx.set_global(MainWindow(handle));
             let _ = handle.update(cx, |_, window, _| window.set_window_title("Aiddiction"));
@@ -58,8 +64,12 @@ fn initial_size() -> gpui_kit::Size<Pixels> {
 pub fn toast_error(message: impl Into<SharedString>, cx: &mut App) {
     let message = message.into();
     tracing::warn!("{message}");
-    let Some(handle) = cx.try_global::<MainWindow>().map(|window| window.0) else { return };
-    let _ = handle.update(cx, |_, window, cx| gpui_adaptive::Notice::error(message).push(window, cx));
+    let Some(handle) = cx.try_global::<MainWindow>().map(|window| window.0) else {
+        return;
+    };
+    let _ = handle.update(cx, |_, window, cx| {
+        gpui_adaptive::Notice::error(message).push(window, cx)
+    });
 }
 
 /// Hands a link to whatever the system opens links with. Everything goes

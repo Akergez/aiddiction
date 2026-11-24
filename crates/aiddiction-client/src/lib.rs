@@ -5,9 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aiddiction_api::{
-    Agent, AgentInput, DirListing, ErrorBody, Health, Instance, InstanceId, Login, LoginInput, NewProject, NewWorktree,
-    PermissionAnswer, Project, ProjectId, ServerEvent, ServerInfo, StartInstance, StartLogin, Task, TaskId, TaskInput, SharedFile, Worktree,
-    WorktreeId,
+    Agent, AgentInput, DirListing, ErrorBody, Health, Instance, InstanceId, Login, LoginInput,
+    NewProject, NewWorktree, PermissionAnswer, Project, ProjectId, ServerEvent, ServerInfo,
+    SharedFile, StartInstance, StartLogin, Task, TaskId, TaskInput, Worktree, WorktreeId,
 };
 use futures::{SinkExt as _, StreamExt as _};
 use reqwest::{Method, StatusCode};
@@ -21,7 +21,11 @@ pub enum Error {
     #[error("{0}")]
     Network(String),
     #[error("{message}")]
-    Api { status: u16, code: String, message: String },
+    Api {
+        status: u16,
+        code: String,
+        message: String,
+    },
     #[error("not a server address: {0}")]
     Address(String),
 }
@@ -66,14 +70,23 @@ impl ServerClient {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .build()?;
-        Ok(Self { http, base: base.into(), token: token.trim().into() })
+        Ok(Self {
+            http,
+            base: base.into(),
+            token: token.trim().into(),
+        })
     }
 
     pub fn base_url(&self) -> &str {
         &self.base
     }
 
-    async fn call<T: DeserializeOwned>(&self, method: Method, path: &str, body: Option<serde_json::Value>) -> Result<T> {
+    async fn call<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<serde_json::Value>,
+    ) -> Result<T> {
         let mut request = self
             .http
             .request(method, format!("{}/api/v1{path}", self.base))
@@ -87,13 +100,18 @@ impl ServerClient {
         let status = response.status();
         if status.is_success() {
             if status == StatusCode::NO_CONTENT {
-                return serde_json::from_value(serde_json::Value::Null).map_err(|e| Error::Network(e.to_string()));
+                return serde_json::from_value(serde_json::Value::Null)
+                    .map_err(|e| Error::Network(e.to_string()));
             }
             return Ok(response.json().await?);
         }
         let text = response.text().await.unwrap_or_default();
         Err(match serde_json::from_str::<ErrorBody>(&text) {
-            Ok(body) => Error::Api { status: status.as_u16(), code: body.error.code, message: body.error.message },
+            Ok(body) => Error::Api {
+                status: status.as_u16(),
+                code: body.error.code,
+                message: body.error.message,
+            },
             Err(_) => Error::Api {
                 status: status.as_u16(),
                 code: "http".into(),
@@ -110,7 +128,10 @@ impl ServerClient {
             .send()
             .await?;
         if !response.status().is_success() {
-            return Err(Error::Network(format!("the server answered {}", response.status())));
+            return Err(Error::Network(format!(
+                "the server answered {}",
+                response.status()
+            )));
         }
         Ok(response.json().await?)
     }
@@ -126,15 +147,26 @@ impl ServerClient {
     }
 
     pub async fn add_agent(&self, input: &AgentInput) -> Result<Agent> {
-        self.call(Method::POST, "/agents", Some(serde_json::to_value(input).unwrap())).await
+        self.call(
+            Method::POST,
+            "/agents",
+            Some(serde_json::to_value(input).unwrap()),
+        )
+        .await
     }
 
     pub async fn update_agent(&self, id: &str, input: &AgentInput) -> Result<Agent> {
-        self.call(Method::PUT, &format!("/agents/{id}"), Some(serde_json::to_value(input).unwrap())).await
+        self.call(
+            Method::PUT,
+            &format!("/agents/{id}"),
+            Some(serde_json::to_value(input).unwrap()),
+        )
+        .await
     }
 
     pub async fn remove_agent(&self, id: &str) -> Result<()> {
-        self.call(Method::DELETE, &format!("/agents/{id}"), None).await
+        self.call(Method::DELETE, &format!("/agents/{id}"), None)
+            .await
     }
 
     pub async fn projects(&self) -> Result<Vec<Project>> {
@@ -142,24 +174,76 @@ impl ServerClient {
     }
 
     pub async fn create_project(&self, input: &NewProject) -> Result<Project> {
-        self.call(Method::POST, "/projects", Some(serde_json::to_value(input).unwrap())).await
+        self.call(
+            Method::POST,
+            "/projects",
+            Some(serde_json::to_value(input).unwrap()),
+        )
+        .await
     }
-    pub async fn files(&self, project: ProjectId) -> Result<Vec<SharedFile>> { self.call(Method::GET, &format!("/projects/{project}/files"), None).await }
-    pub async fn tasks(&self, project: ProjectId) -> Result<Vec<Task>> { self.call(Method::GET, &format!("/projects/{project}/tasks"), None).await }
-    pub async fn create_task(&self, project: ProjectId, input: &TaskInput) -> Result<Task> { self.call(Method::POST, &format!("/projects/{project}/tasks"), Some(serde_json::to_value(input).unwrap())).await }
-    pub async fn update_task(&self, project: ProjectId, id: TaskId, input: &TaskInput) -> Result<Task> { self.call(Method::PATCH, &format!("/projects/{project}/tasks/{id}"), Some(serde_json::to_value(input).unwrap())).await }
-    pub async fn delete_task(&self, project: ProjectId, id: TaskId) -> Result<()> { self.call(Method::DELETE, &format!("/projects/{project}/tasks/{id}"), None).await }
+    pub async fn files(&self, project: ProjectId) -> Result<Vec<SharedFile>> {
+        self.call(Method::GET, &format!("/projects/{project}/files"), None)
+            .await
+    }
+    pub async fn tasks(&self, project: ProjectId) -> Result<Vec<Task>> {
+        self.call(Method::GET, &format!("/projects/{project}/tasks"), None)
+            .await
+    }
+    pub async fn create_task(&self, project: ProjectId, input: &TaskInput) -> Result<Task> {
+        self.call(
+            Method::POST,
+            &format!("/projects/{project}/tasks"),
+            Some(serde_json::to_value(input).unwrap()),
+        )
+        .await
+    }
+    pub async fn update_task(
+        &self,
+        project: ProjectId,
+        id: TaskId,
+        input: &TaskInput,
+    ) -> Result<Task> {
+        self.call(
+            Method::PATCH,
+            &format!("/projects/{project}/tasks/{id}"),
+            Some(serde_json::to_value(input).unwrap()),
+        )
+        .await
+    }
+    pub async fn delete_task(&self, project: ProjectId, id: TaskId) -> Result<()> {
+        self.call(
+            Method::DELETE,
+            &format!("/projects/{project}/tasks/{id}"),
+            None,
+        )
+        .await
+    }
 
     /// The unified diff of a project, as `request` asks for it.
-    pub async fn review_diff(&self, project: ProjectId, request: &diffreview::DiffRequest) -> Result<String> {
+    pub async fn review_diff(
+        &self,
+        project: ProjectId,
+        request: &diffreview::DiffRequest,
+    ) -> Result<String> {
         let body = serde_json::to_value(request).unwrap();
-        let answer: aiddiction_api::ReviewDiff = self.call(Method::POST, &format!("/projects/{project}/review/diff"), Some(body)).await?;
+        let answer: aiddiction_api::ReviewDiff = self
+            .call(
+                Method::POST,
+                &format!("/projects/{project}/review/diff"),
+                Some(body),
+            )
+            .await?;
         Ok(answer.diff)
     }
 
     /// A project's branches and recent commits.
     pub async fn review_refs(&self, project: ProjectId) -> Result<diffreview::Refs> {
-        self.call(Method::GET, &format!("/projects/{project}/review/refs"), None).await
+        self.call(
+            Method::GET,
+            &format!("/projects/{project}/review/refs"),
+            None,
+        )
+        .await
     }
 
     /// The folders in `path` on the server (its home when `None`).
@@ -168,31 +252,53 @@ impl ServerClient {
             Some(path) => format!("?path={}", encode_query(path)),
             None => String::new(),
         };
-        self.call(Method::GET, &format!("/fs/dirs{query}"), None).await
+        self.call(Method::GET, &format!("/fs/dirs{query}"), None)
+            .await
     }
 
     pub async fn delete_project(&self, id: ProjectId, delete_files: bool) -> Result<()> {
-        self.call(Method::DELETE, &format!("/projects/{id}?deleteFiles={delete_files}"), None).await
+        self.call(
+            Method::DELETE,
+            &format!("/projects/{id}?deleteFiles={delete_files}"),
+            None,
+        )
+        .await
     }
 
     pub async fn instances(&self, project: ProjectId) -> Result<Vec<Instance>> {
-        self.call(Method::GET, &format!("/projects/{project}/instances"), None).await
+        self.call(Method::GET, &format!("/projects/{project}/instances"), None)
+            .await
     }
 
     /// The project's checkouts: its own first, then the worktrees the server
     /// made.
     pub async fn worktrees(&self, project: ProjectId) -> Result<Vec<Worktree>> {
-        self.call(Method::GET, &format!("/projects/{project}/worktrees"), None).await
+        self.call(Method::GET, &format!("/projects/{project}/worktrees"), None)
+            .await
     }
 
     /// Makes a worktree on a new branch, outside the project's own checkout.
-    pub async fn create_worktree(&self, project: ProjectId, input: &NewWorktree) -> Result<Worktree> {
-        self.call(Method::POST, &format!("/projects/{project}/worktrees"), Some(serde_json::to_value(input).unwrap())).await
+    pub async fn create_worktree(
+        &self,
+        project: ProjectId,
+        input: &NewWorktree,
+    ) -> Result<Worktree> {
+        self.call(
+            Method::POST,
+            &format!("/projects/{project}/worktrees"),
+            Some(serde_json::to_value(input).unwrap()),
+        )
+        .await
     }
 
     /// Removes a worktree the server made; its branch stays.
     pub async fn delete_worktree(&self, project: ProjectId, worktree: WorktreeId) -> Result<()> {
-        self.call(Method::DELETE, &format!("/projects/{project}/worktrees/{worktree}"), None).await
+        self.call(
+            Method::DELETE,
+            &format!("/projects/{project}/worktrees/{worktree}"),
+            None,
+        )
+        .await
     }
 
     /// Every project's instances at once.
@@ -201,42 +307,89 @@ impl ServerClient {
     }
 
     /// Answers an agent's question without a conversation open.
-    pub async fn answer_permission(&self, instance: InstanceId, answer: &PermissionAnswer) -> Result<()> {
+    pub async fn answer_permission(
+        &self,
+        instance: InstanceId,
+        answer: &PermissionAnswer,
+    ) -> Result<()> {
         let body = serde_json::to_value(answer).unwrap();
-        self.call(Method::POST, &format!("/instances/{instance}/permission"), Some(body)).await
+        self.call(
+            Method::POST,
+            &format!("/instances/{instance}/permission"),
+            Some(body),
+        )
+        .await
     }
 
     /// Runs one of the agent's terminal sign-ins on the server.
     pub async fn start_login(&self, instance: InstanceId, method_id: &str) -> Result<Login> {
-        let body = serde_json::to_value(StartLogin { method_id: method_id.to_owned() }).unwrap();
-        self.call(Method::POST, &format!("/instances/{instance}/login"), Some(body)).await
+        let body = serde_json::to_value(StartLogin {
+            method_id: method_id.to_owned(),
+        })
+        .unwrap();
+        self.call(
+            Method::POST,
+            &format!("/instances/{instance}/login"),
+            Some(body),
+        )
+        .await
     }
 
     pub async fn login(&self, instance: InstanceId) -> Result<Login> {
-        self.call(Method::GET, &format!("/instances/{instance}/login"), None).await
+        self.call(Method::GET, &format!("/instances/{instance}/login"), None)
+            .await
     }
 
     /// A line for the sign-in to read: the code a sign-in page gave.
     pub async fn login_input(&self, instance: InstanceId, text: &str) -> Result<()> {
-        let body = serde_json::to_value(LoginInput { text: text.to_owned() }).unwrap();
-        self.call(Method::POST, &format!("/instances/{instance}/login/input"), Some(body)).await
+        let body = serde_json::to_value(LoginInput {
+            text: text.to_owned(),
+        })
+        .unwrap();
+        self.call(
+            Method::POST,
+            &format!("/instances/{instance}/login/input"),
+            Some(body),
+        )
+        .await
     }
 
     pub async fn stop_login(&self, instance: InstanceId) -> Result<()> {
-        self.call(Method::DELETE, &format!("/instances/{instance}/login"), None).await
+        self.call(
+            Method::DELETE,
+            &format!("/instances/{instance}/login"),
+            None,
+        )
+        .await
     }
 
-    pub async fn start_instance(&self, project: ProjectId, agent_id: &str, worktree: Option<WorktreeId>) -> Result<Instance> {
-        let body = serde_json::to_value(StartInstance { agent_id: agent_id.to_owned(), worktree_id: worktree }).unwrap();
-        self.call(Method::POST, &format!("/projects/{project}/instances"), Some(body)).await
+    pub async fn start_instance(
+        &self,
+        project: ProjectId,
+        agent_id: &str,
+        worktree: Option<WorktreeId>,
+    ) -> Result<Instance> {
+        let body = serde_json::to_value(StartInstance {
+            agent_id: agent_id.to_owned(),
+            worktree_id: worktree,
+        })
+        .unwrap();
+        self.call(
+            Method::POST,
+            &format!("/projects/{project}/instances"),
+            Some(body),
+        )
+        .await
     }
 
     pub async fn instance(&self, id: InstanceId) -> Result<Instance> {
-        self.call(Method::GET, &format!("/instances/{id}"), None).await
+        self.call(Method::GET, &format!("/instances/{id}"), None)
+            .await
     }
 
     pub async fn stop_instance(&self, id: InstanceId) -> Result<()> {
-        self.call(Method::DELETE, &format!("/instances/{id}"), None).await
+        self.call(Method::DELETE, &format!("/instances/{id}"), None)
+            .await
     }
 
     /// One JSON-RPC message to the server's MCP endpoint, as an agent sends
@@ -257,8 +410,16 @@ impl ServerClient {
         if !status.is_success() {
             let text = response.text().await.unwrap_or_default();
             return Err(match serde_json::from_str::<ErrorBody>(&text) {
-                Ok(body) => Error::Api { status: status.as_u16(), code: body.error.code, message: body.error.message },
-                Err(_) => Error::Api { status: status.as_u16(), code: "http".into(), message: format!("the server answered {status}") },
+                Ok(body) => Error::Api {
+                    status: status.as_u16(),
+                    code: body.error.code,
+                    message: body.error.message,
+                },
+                Err(_) => Error::Api {
+                    status: status.as_u16(),
+                    code: "http".into(),
+                    message: format!("the server answered {status}"),
+                },
             });
         }
         Ok(Some(response.json().await?))
@@ -266,22 +427,34 @@ impl ServerClient {
 
     async fn socket(&self, path: &str) -> Result<Socket> {
         let url = format!("{}/api/v1{path}", self.base.replacen("http", "ws", 1));
-        let mut request = url.into_client_request().map_err(|error| Error::Network(error.to_string()))?;
-        let header = HeaderValue::from_str(&format!("Bearer {}", self.token)).map_err(|_| Error::Address("token".into()))?;
+        let mut request = url
+            .into_client_request()
+            .map_err(|error| Error::Network(error.to_string()))?;
+        let header = HeaderValue::from_str(&format!("Bearer {}", self.token))
+            .map_err(|_| Error::Address("token".into()))?;
         request.headers_mut().insert("authorization", header);
         let mut config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default();
         config.max_message_size = Some(64 << 20);
         config.max_frame_size = Some(64 << 20);
-        let connect = tokio_tungstenite::connect_async_tls_with_config(request, Some(config), false, ws_connector());
+        let connect = tokio_tungstenite::connect_async_tls_with_config(
+            request,
+            Some(config),
+            false,
+            ws_connector(),
+        );
         let (socket, _) = tokio::time::timeout(Duration::from_secs(15), connect)
             .await
             .map_err(|_| Error::Network("the server did not answer in time".into()))?
             .map_err(|error| match error {
-                tokio_tungstenite::tungstenite::Error::Http(response) if response.status() == 401 => Error::Api {
-                    status: 401,
-                    code: "unauthorized".into(),
-                    message: "a valid token is required".into(),
-                },
+                tokio_tungstenite::tungstenite::Error::Http(response)
+                    if response.status() == 401 =>
+                {
+                    Error::Api {
+                        status: 401,
+                        code: "unauthorized".into(),
+                        message: "a valid token is required".into(),
+                    }
+                }
                 tokio_tungstenite::tungstenite::Error::Http(response) => {
                     Error::Network(format!("the server answered {}", response.status()))
                 }
@@ -362,7 +535,10 @@ impl Socket {
                 }
             }
         });
-        Self { outgoing: out_tx, incoming: in_rx }
+        Self {
+            outgoing: out_tx,
+            incoming: in_rx,
+        }
     }
 }
 
@@ -371,7 +547,9 @@ fn encode_query(value: &str) -> String {
     value
         .bytes()
         .map(|byte| match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => (byte as char).to_string(),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                (byte as char).to_string()
+            }
             _ => format!("%{byte:02X}"),
         })
         .collect()
@@ -407,7 +585,9 @@ fn ws_connector() -> Option<tokio_tungstenite::Connector> {
         .with_safe_default_protocol_versions()
         .and_then(|builder| builder.with_platform_verifier());
     match config {
-        Ok(config) => Some(tokio_tungstenite::Connector::Rustls(Arc::new(config.with_no_client_auth()))),
+        Ok(config) => Some(tokio_tungstenite::Connector::Rustls(Arc::new(
+            config.with_no_client_auth(),
+        ))),
         Err(error) => {
             tracing::error!(%error, "no system certificate verifier for the socket");
             None
@@ -421,7 +601,10 @@ mod tests {
 
     #[test]
     fn addresses_are_normalized() {
-        assert_eq!(normalize_url("10.0.0.2:7878").unwrap(), "http://10.0.0.2:7878");
+        assert_eq!(
+            normalize_url("10.0.0.2:7878").unwrap(),
+            "http://10.0.0.2:7878"
+        );
         assert_eq!(normalize_url("https://a.b/api/v1/").unwrap(), "https://a.b");
         assert!(normalize_url("ftp://x").is_err());
         assert!(normalize_url("").is_err());
