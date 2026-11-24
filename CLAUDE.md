@@ -145,8 +145,7 @@ in `session/new` are read from the running instance, not stored.
 
 `start_agent` (`orchestrate.rs`) starts or reuses the project's instance in
 the checkout asked for (`worktreeId`, the project's own when left out),
-waits for its `initialize`, opens a session as the server itself
-(`Proxy::open_session`), applies `settings` in the order given, sends the
+waits for its `initialize`, opens a session as the server itself(`Proxy::open_session`), applies `settings` in the order given, sends the
 prompt and returns the ids — not the turn. A setting the agent refuses is
 named and no prompt is sent. `requestId` makes a retry the same start.
 The prompt carries the card's id and title and says to write the result on
@@ -155,6 +154,14 @@ session in the common list (`SessionSummary::task_id` says which card), so
 the person opens it from the inbox or from the card's "Open conversation",
 answers permissions and stops it as usual; the caller only gets metadata
 and reads the card for the result.
+
+A checkout the caller made itself is passed as `worktreePath` (absolute, or
+relative to the project): `Worktrees::adopt` checks that the folder is a git
+worktree of this project's repository (same `--git-common-dir`, not a
+subfolder, not another repository), keeps it under an id of its own with
+`managed: false` and answers with that id. The same folder is the same id on
+a second call. The server never takes an adopted checkout away: removing it
+forgets the id and leaves the folder and branch where they are.
 
 An agent started this way gets a token of its own (`Orchestrator::scope`):
 it reaches `/mcp` only and only its project's board, without `list_agents`,

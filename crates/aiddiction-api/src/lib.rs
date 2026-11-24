@@ -163,7 +163,9 @@ pub struct Project {
 pub enum ProjectSource {
     Empty,
     /// A folder that already exists on the server (`~` is its user's home).
-    Existing { path: String },
+    Existing {
+        path: String,
+    },
     Git {
         url: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -185,6 +187,11 @@ pub struct Worktree {
     pub project_id: ProjectId,
     /// The folder the project was made in, rather than one made for it.
     pub main: bool,
+    /// Whether the server made it and may take it away again. A checkout the
+    /// person made (see `Worktrees::adopt`) is only kept under an id, and
+    /// removing it forgets the id without touching the folder or the branch.
+    #[serde(default = "managed_by_default")]
+    pub managed: bool,
     /// Its name in a list: the checkout's folder name, or the one chosen.
     pub name: String,
     /// The branch it has checked out; `None` when git cannot say.
@@ -196,6 +203,11 @@ pub struct Worktree {
     /// Its folder on the server.
     pub path: String,
     pub created_at_ms: u64,
+}
+
+/// Records written before adoption existed were all the server's own.
+fn managed_by_default() -> bool {
+    true
 }
 
 /// Body of `POST /projects/{id}/worktrees`. A worktree is made from a new
@@ -248,7 +260,11 @@ pub struct NewProject {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum TaskStatus { Todo, InProgress, Done }
+pub enum TaskStatus {
+    Todo,
+    InProgress,
+    Done,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -505,4 +521,9 @@ mod tests {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SharedFile { pub name: String, pub size: u64, pub token: String, pub url: String }
+pub struct SharedFile {
+    pub name: String,
+    pub size: u64,
+    pub token: String,
+    pub url: String,
+}

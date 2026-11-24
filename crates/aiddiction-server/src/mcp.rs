@@ -42,12 +42,25 @@ pub async fn handle(
         "initialize" => Ok(initialize(&params)),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tools(is_agent(caller)) })),
-        "tools/call" => call(projects, catalog, supervisor, orchestration, worktrees, caller, &params).await,
+        "tools/call" => {
+            call(
+                projects,
+                catalog,
+                supervisor,
+                orchestration,
+                worktrees,
+                caller,
+                &params,
+            )
+            .await
+        }
         _ => Err((-32601, format!("method not found: {method}"))),
     };
     Some(match outcome {
         Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-        Err((code, message)) => json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }),
+        Err((code, message)) => {
+            json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
+        }
     })
 }
 
@@ -57,7 +70,9 @@ fn is_agent(caller: &Caller) -> bool {
 
 fn initialize(params: &Value) -> Value {
     let asked = params.get("protocolVersion").and_then(Value::as_str);
-    let version = asked.filter(|asked| VERSIONS.contains(asked)).unwrap_or(VERSIONS[0]);
+    let version = asked
+        .filter(|asked| VERSIONS.contains(asked))
+        .unwrap_or(VERSIONS[0]);
     json!({
         "protocolVersion": version,
         "capabilities": { "tools": {} },
@@ -144,7 +159,9 @@ fn tools(for_agent: bool) -> Value {
             "description": "Start an ACP agent on a task card. The agent gets a token for the project's board, is \
                 prompted, and works in its own conversation, visible to the person in the common list. Answers \
                 once the prompt is sent, not when the turn ends: follow it with list_subagents, read the result on \
-                the card.",
+                the card. It works in the project's own checkout unless a worktree is given: one the server made \
+                (worktreeId) or one you made yourself with git worktree add (worktreePath), which is then kept \
+                under an id of its own.",
             "inputSchema": {
                 "type": "object",
                 "required": ["projectId", "agentId", "prompt"],
@@ -152,7 +169,8 @@ fn tools(for_agent: bool) -> Value {
                     "projectId": { "type": "string" },
                     "agentId": { "type": "string", "description": "An id from list_agents" },
                     "taskId": { "type": "string", "description": "The card to work on; it is linked to the thread" },
-                    "worktreeId": { "type": "string", "description": "A checkout to work in; the project's main one when left out" },
+                    "worktreeId": { "type": "string", "description": "A checkout the server made, by id; the project's main one when neither is given" },
+                    "worktreePath": { "type": "string", "description": "A git worktree of this project you made yourself, by folder (absolute, or relative to the project); it is adopted and the answer gives its id" },
                     "prompt": { "type": "string", "description": "What to do, on top of the card" },
                     "settings": {
                         "type": "array",
@@ -182,7 +200,10 @@ async fn call(
     params: &Value,
 ) -> Result<Value, (i64, String)> {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
-    let arguments = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+    let arguments = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     if is_agent(caller) && matches!(name, "list_agents" | "list_subagents" | "start_agent") {
         return Err((-32602, format!("{name} is not open to an agent")));
     }
@@ -288,7 +309,9 @@ async fn call(
     };
     Ok(match output {
         Ok(value) => json!({ "content": [{ "type": "text", "text": value.to_string() }] }),
-        Err(ToolError(message)) => json!({ "content": [{ "type": "text", "text": message }], "isError": true }),
+        Err(ToolError(message)) => {
+            json!({ "content": [{ "type": "text", "text": message }], "isError": true })
+        }
     })
 }
 
@@ -303,24 +326,39 @@ async fn start(
     arguments: &Value,
 ) -> Result<Value, ToolError> {
     let project = project_of(arguments, caller)?;
-    let agent_id = text(arguments, "agentId").ok_or_else(|| ToolError("agentId is required".into()))?;
+    let agent_id =
+        text(arguments, "agentId").ok_or_else(|| ToolError("agentId is required".into()))?;
     let prompt = text(arguments, "prompt").unwrap_or_default();
     if prompt.trim().is_empty() {
         return Err(ToolError("prompt is required".into()));
     }
     let task_id = match arguments.get("taskId").and_then(Value::as_str) {
-        Some(task) => Some(task.parse().map_err(|_| ToolError("taskId is not an id".into()))?),
+        Some(task) => Some(
+            task.parse()
+                .map_err(|_| ToolError("taskId is not an id".into()))?,
+        ),
         None => None,
     };
     let worktree_id = match arguments.get("worktreeId").and_then(Value::as_str) {
-        Some(worktree) => Some(worktree.parse().map_err(|_| ToolError("worktreeId is not an id".into()))?),
+        Some(worktree) => Some(
+            worktree
+                .parse()
+                .map_err(|_| ToolError("worktreeId is not an id".into()))?,
+        ),
         None => None,
     };
+    let worktree_path = text(arguments, "worktreePath").filter(|path| !path.trim().is_empty());
+    if worktree_id.is_some() && worktree_path.is_some() {
+        return Err(ToolError(
+            "give either worktreeId or worktreePath, not both".into(),
+        ));
+    }
     let request = StartRequest {
         project,
         agent_id,
         task_id,
         worktree_id,
+        worktree_path,
         prompt,
         settings: settings(arguments)?,
         request_id: text(arguments, "requestId"),
@@ -329,10 +367,24 @@ async fn start(
         Caller::User => "user".to_owned(),
         Caller::Agent(scope) => scope.token.clone(),
     };
-    orchestration.start(projects, catalog, supervisor, worktrees, &caller_key, request).await.map_err(ToolError)
+    orchestration
+        .start(
+            projects,
+            catalog,
+            supervisor,
+            worktrees,
+            &caller_key,
+            request,
+        )
+        .await
+        .map_err(ToolError)
 }
 
-fn agent_summary(agent: Agent, profile: Option<AgentProfile>, choices: Option<(Value, Value, u64)>) -> Value {
+fn agent_summary(
+    agent: Agent,
+    profile: Option<AgentProfile>,
+    choices: Option<(Value, Value, u64)>,
+) -> Value {
     let mut summary = json!({ "id": agent.id, "name": agent.name, "source": agent.source, "command": agent.command.command });
     if let Some(profile) = profile {
         summary["profile"] = json!({
@@ -345,7 +397,8 @@ fn agent_summary(agent: Agent, profile: Option<AgentProfile>, choices: Option<(V
         });
     }
     if let Some((modes, config_options, at)) = choices {
-        summary["lastChoices"] = json!({ "modes": modes, "configOptions": config_options, "learnedAtMs": at });
+        summary["lastChoices"] =
+            json!({ "modes": modes, "configOptions": config_options, "learnedAtMs": at });
     }
     summary
 }
@@ -371,12 +424,20 @@ impl From<ProjectError> for ToolError {
 }
 
 fn text(arguments: &Value, key: &str) -> Option<String> {
-    arguments.get(key).and_then(Value::as_str).map(str::to_owned)
+    arguments
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
 }
 
 fn id(arguments: &Value, key: &str) -> Result<uuid::Uuid, ToolError> {
-    let value = arguments.get(key).and_then(Value::as_str).ok_or_else(|| ToolError(format!("{key} is required")))?;
-    value.parse().map_err(|_| ToolError(format!("{key} is not an id: {value}")))
+    let value = arguments
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| ToolError(format!("{key} is required")))?;
+    value
+        .parse()
+        .map_err(|_| ToolError(format!("{key} is not an id: {value}")))
 }
 
 /// The project a tool works in: the one asked for, which for an agent's
@@ -386,7 +447,9 @@ fn project_of(arguments: &Value, caller: &Caller) -> Result<ProjectId, ToolError
     if let Caller::Agent(scope) = caller
         && scope.project != project
     {
-        return Err(ToolError("this agent's token is for another project".into()));
+        return Err(ToolError(
+            "this agent's token is for another project".into(),
+        ));
     }
     Ok(project)
 }
@@ -396,7 +459,11 @@ fn status(arguments: &Value) -> Result<Option<TaskStatus>, ToolError> {
         None | Some(Value::Null) => Ok(None),
         Some(value) => serde_json::from_value(value.clone())
             .map(Some)
-            .map_err(|_| ToolError(format!("status is one of todo, inProgress, done, not {value}"))),
+            .map_err(|_| {
+                ToolError(format!(
+                    "status is one of todo, inProgress, done, not {value}"
+                ))
+            }),
     }
 }
 
@@ -413,11 +480,19 @@ fn settings(arguments: &Value) -> Result<Vec<(String, Value)>, ToolError> {
                     .or_else(|| item.get("id"))
                     .and_then(Value::as_str)
                     .ok_or_else(|| ToolError("each setting needs a configId".into()))?;
-                Ok((id.to_owned(), item.get("value").cloned().unwrap_or(Value::Null)))
+                Ok((
+                    id.to_owned(),
+                    item.get("value").cloned().unwrap_or(Value::Null),
+                ))
             })
             .collect(),
-        Some(Value::Object(map)) => Ok(map.iter().map(|(id, value)| (id.clone(), value.clone())).collect()),
-        Some(_) => Err(ToolError("settings is a list of {configId, value}, or an object".into())),
+        Some(Value::Object(map)) => Ok(map
+            .iter()
+            .map(|(id, value)| (id.clone(), value.clone()))
+            .collect()),
+        Some(_) => Err(ToolError(
+            "settings is a list of {configId, value}, or an object".into(),
+        )),
     }
 }
 
@@ -436,8 +511,21 @@ mod tests {
     fn projects() -> (Arc<Projects>, ProjectId, Arc<Store>, [tempfile::TempDir; 2]) {
         let (root, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let store = Arc::new(Store::open(data.path()).unwrap());
-        let projects = Arc::new(Projects::open(root.path(), data.path(), store.clone(), broadcast::channel(8).0).unwrap());
-        let project = projects.create(NewProject { name: "web".into(), source: ProjectSource::Empty }).unwrap();
+        let projects = Arc::new(
+            Projects::open(
+                root.path(),
+                data.path(),
+                store.clone(),
+                broadcast::channel(8).0,
+            )
+            .unwrap(),
+        );
+        let project = projects
+            .create(NewProject {
+                name: "web".into(),
+                source: ProjectSource::Empty,
+            })
+            .unwrap();
         (projects, project.id, store, [root, data])
     }
 
@@ -446,18 +534,43 @@ mod tests {
         let data = tempfile::tempdir().unwrap().keep();
         let store = Arc::new(Store::open(&data).unwrap());
         let supervisor = Supervisor::new(broadcast::channel(1).0, store.clone());
-        let orchestration = Orchestrator::new("http://127.0.0.1:1/api/v1/mcp".into());
-        let worktrees = Worktrees::open(&tempfile::tempdir().unwrap().keep(), store, broadcast::channel(1).0).unwrap();
-        handle(projects, &catalog, &supervisor, &orchestration, &worktrees, caller, &json!({ "jsonrpc": "2.0", "id": 7, "method": method, "params": params }))
-            .await
-            .unwrap()
+        let orchestration =
+            Orchestrator::new("http://127.0.0.1:1/api/v1/mcp".into(), Default::default());
+        let worktrees = Worktrees::open(
+            &tempfile::tempdir().unwrap().keep(),
+            store,
+            broadcast::channel(1).0,
+        )
+        .unwrap();
+        handle(
+            projects,
+            &catalog,
+            &supervisor,
+            &orchestration,
+            &worktrees,
+            caller,
+            &json!({ "jsonrpc": "2.0", "id": 7, "method": method, "params": params }),
+        )
+        .await
+        .unwrap()
     }
 
     /// A tool's output, parsed, or its error text.
     async fn tool(projects: &Projects, name: &str, arguments: Value) -> Result<Value, String> {
-        let result = request(projects, &Caller::User, "tools/call", json!({ "name": name, "arguments": arguments })).await["result"].clone();
+        let result = request(
+            projects,
+            &Caller::User,
+            "tools/call",
+            json!({ "name": name, "arguments": arguments }),
+        )
+        .await["result"]
+            .clone();
         let text = result["content"][0]["text"].as_str().unwrap().to_owned();
-        if result["isError"] == true { Err(text) } else { Ok(serde_json::from_str(&text).unwrap()) }
+        if result["isError"] == true {
+            Err(text)
+        } else {
+            Ok(serde_json::from_str(&text).unwrap())
+        }
     }
 
     #[tokio::test]
@@ -467,21 +580,50 @@ mod tests {
         let data = tempfile::tempdir().unwrap().keep();
         let store = Arc::new(Store::open(&data).unwrap());
         let supervisor = Supervisor::new(broadcast::channel(1).0, store.clone());
-        let orchestration = Orchestrator::new("http://127.0.0.1:1/api/v1/mcp".into());
-        let worktrees = Worktrees::open(&tempfile::tempdir().unwrap().keep(), store, broadcast::channel(1).0).unwrap();
+        let orchestration =
+            Orchestrator::new("http://127.0.0.1:1/api/v1/mcp".into(), Default::default());
+        let worktrees = Worktrees::open(
+            &tempfile::tempdir().unwrap().keep(),
+            store,
+            broadcast::channel(1).0,
+        )
+        .unwrap();
         assert_eq!(
-            handle(&projects, &catalog, &supervisor, &orchestration, &worktrees, &Caller::User, &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))
-                .await,
+            handle(
+                &projects,
+                &catalog,
+                &supervisor,
+                &orchestration,
+                &worktrees,
+                &Caller::User,
+                &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })
+            )
+            .await,
             None
         );
         let version = |asked: &'static str| {
             let projects = &projects;
-            async move { request(projects, &Caller::User, "initialize", json!({ "protocolVersion": asked })).await["result"]["protocolVersion"].clone() }
+            async move {
+                request(
+                    projects,
+                    &Caller::User,
+                    "initialize",
+                    json!({ "protocolVersion": asked }),
+                )
+                .await["result"]["protocolVersion"]
+                    .clone()
+            }
         };
         assert_eq!(version("2025-03-26").await, "2025-03-26");
         assert_eq!(version("1999-01-01").await, VERSIONS[0]);
-        assert_eq!(request(&projects, &Caller::User, "ping", json!({})).await["result"], json!({}));
-        assert_eq!(request(&projects, &Caller::User, "resources/list", json!({})).await["error"]["code"], -32601);
+        assert_eq!(
+            request(&projects, &Caller::User, "ping", json!({})).await["result"],
+            json!({})
+        );
+        assert_eq!(
+            request(&projects, &Caller::User, "resources/list", json!({})).await["error"]["code"],
+            -32601
+        );
     }
 
     #[tokio::test]
@@ -489,29 +631,105 @@ mod tests {
         let (projects, project, _, _dirs) = projects();
         let listed = tool(&projects, "list_projects", json!({})).await.unwrap();
         assert_eq!(listed[0]["id"], json!(project));
-        let card = tool(&projects, "create_task", json!({ "projectId": project, "title": "Docs", "markdown": "all of them" })).await.unwrap();
+        let card = tool(
+            &projects,
+            "create_task",
+            json!({ "projectId": project, "title": "Docs", "markdown": "all of them" }),
+        )
+        .await
+        .unwrap();
         assert_eq!(card["status"], "todo");
         // Moving a card is its status alone: the rest stays.
-        let moved = tool(&projects, "update_task", json!({ "projectId": project, "taskId": card["id"], "status": "inProgress" })).await.unwrap();
-        assert_eq!((moved["title"].as_str(), moved["markdown"].as_str(), moved["status"].as_str()), (Some("Docs"), Some("all of them"), Some("inProgress")));
-        tool(&projects, "delete_task", json!({ "projectId": project, "taskId": card["id"] })).await.unwrap();
-        assert_eq!(tool(&projects, "list_tasks", json!({ "projectId": project })).await.unwrap(), json!([]));
+        let moved = tool(
+            &projects,
+            "update_task",
+            json!({ "projectId": project, "taskId": card["id"], "status": "inProgress" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (
+                moved["title"].as_str(),
+                moved["markdown"].as_str(),
+                moved["status"].as_str()
+            ),
+            (Some("Docs"), Some("all of them"), Some("inProgress"))
+        );
+        tool(
+            &projects,
+            "delete_task",
+            json!({ "projectId": project, "taskId": card["id"] }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            tool(&projects, "list_tasks", json!({ "projectId": project }))
+                .await
+                .unwrap(),
+            json!([])
+        );
     }
 
     #[tokio::test]
     async fn what_goes_wrong_in_a_tool_is_its_result_not_a_protocol_error() {
         let (projects, project, _, _dirs) = projects();
-        assert!(tool(&projects, "list_tasks", json!({})).await.unwrap_err().contains("projectId is required"));
-        assert!(tool(&projects, "list_tasks", json!({ "projectId": uuid::Uuid::nil() })).await.unwrap_err().contains("no such project"));
-        assert!(tool(&projects, "create_task", json!({ "projectId": project, "title": " " })).await.unwrap_err().contains("title"));
-        assert!(tool(&projects, "create_task", json!({ "projectId": project, "title": "x", "status": "later" })).await.unwrap_err().contains("status"));
-        assert_eq!(request(&projects, &Caller::User, "tools/call", json!({ "name": "nope" })).await["error"]["code"], -32602);
+        assert!(
+            tool(&projects, "list_tasks", json!({}))
+                .await
+                .unwrap_err()
+                .contains("projectId is required")
+        );
+        assert!(
+            tool(
+                &projects,
+                "list_tasks",
+                json!({ "projectId": uuid::Uuid::nil() })
+            )
+            .await
+            .unwrap_err()
+            .contains("no such project")
+        );
+        assert!(
+            tool(
+                &projects,
+                "create_task",
+                json!({ "projectId": project, "title": " " })
+            )
+            .await
+            .unwrap_err()
+            .contains("title")
+        );
+        assert!(
+            tool(
+                &projects,
+                "create_task",
+                json!({ "projectId": project, "title": "x", "status": "later" })
+            )
+            .await
+            .unwrap_err()
+            .contains("status")
+        );
+        assert_eq!(
+            request(
+                &projects,
+                &Caller::User,
+                "tools/call",
+                json!({ "name": "nope" })
+            )
+            .await["error"]["code"],
+            -32602
+        );
     }
 
     #[tokio::test]
     async fn an_agents_token_reaches_its_own_board_and_no_further() {
         let (projects, project, _, _dirs) = projects();
-        let other = projects.create(NewProject { name: "other".into(), source: ProjectSource::Empty }).unwrap();
+        let other = projects
+            .create(NewProject {
+                name: "other".into(),
+                source: ProjectSource::Empty,
+            })
+            .unwrap();
         let scope = AgentScope {
             token: "t".into(),
             project,
@@ -522,25 +740,60 @@ mod tests {
         let agent = Caller::Agent(scope);
 
         let listed = request(&projects, &agent, "tools/list", json!({})).await;
-        let names: Vec<_> = listed["result"]["tools"].as_array().unwrap().iter().filter_map(|tool| tool["name"].as_str()).collect();
+        let names: Vec<_> = listed["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
         assert!(names.contains(&"list_tasks"));
-        assert!(!names.contains(&"start_agent"), "an agent cannot start further agents: {names:?}");
+        assert!(
+            !names.contains(&"start_agent"),
+            "an agent cannot start further agents: {names:?}"
+        );
         assert!(!names.contains(&"list_subagents"));
 
-        let seen = request(&projects, &agent, "tools/call", json!({ "name": "list_projects", "arguments": {} })).await;
-        let seen: Value = serde_json::from_str(seen["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        let seen = request(
+            &projects,
+            &agent,
+            "tools/call",
+            json!({ "name": "list_projects", "arguments": {} }),
+        )
+        .await;
+        let seen: Value =
+            serde_json::from_str(seen["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(seen.as_array().unwrap().len(), 1);
         assert_eq!(seen[0]["id"], json!(project));
 
-        let refused = request(&projects, &agent, "tools/call", json!({ "name": "list_tasks", "arguments": { "projectId": other.id } })).await;
+        let refused = request(
+            &projects,
+            &agent,
+            "tools/call",
+            json!({ "name": "list_tasks", "arguments": { "projectId": other.id } }),
+        )
+        .await;
         assert_eq!(refused["result"]["isError"], true);
-        assert!(refused["result"]["content"][0]["text"].as_str().unwrap().contains("another project"));
+        assert!(
+            refused["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("another project")
+        );
 
         // The card on its own board is open to it.
         let card = json!({ "projectId": project, "title": "Child", "status": "inProgress" });
-        let made = request(&projects, &agent, "tools/call", json!({ "name": "create_task", "arguments": card })).await;
+        let made = request(
+            &projects,
+            &agent,
+            "tools/call",
+            json!({ "name": "create_task", "arguments": card }),
+        )
+        .await;
         assert!(made["result"]["isError"].is_null(), "{made}");
-        assert_eq!(task_status(&projects, project).await, TaskStatus::InProgress);
+        assert_eq!(
+            task_status(&projects, project).await,
+            TaskStatus::InProgress
+        );
     }
 
     async fn task_status(projects: &Projects, project: ProjectId) -> TaskStatus {

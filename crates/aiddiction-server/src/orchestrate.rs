@@ -50,8 +50,11 @@ pub struct StartRequest {
     pub project: ProjectId,
     pub agent_id: String,
     pub task_id: Option<TaskId>,
-    /// The checkout to work in; none for the project's own.
+    /// The checkout to work in: one the server made, by id.
     pub worktree_id: Option<WorktreeId>,
+    /// Or a checkout the person made, by folder: it is adopted on the way
+    /// and the answer names the id it got.
+    pub worktree_path: Option<String>,
     pub prompt: String,
     /// ACP configuration option ids and values, applied in this order.
     pub settings: Vec<(String, Value)>,
@@ -127,18 +130,37 @@ impl Orchestrator {
             .get(&request.agent_id)
             .ok_or_else(|| format!("unknown agent: {}", request.agent_id))?;
         let dir = projects.dir(&project);
-        let worktree = match request.worktree_id {
-            Some(worktree) => worktrees
-                .get(&project, &dir, worktree)
+        let worktree = match (request.worktree_id, request.worktree_path.as_deref()) {
+            (Some(_), Some(_)) => {
+                return Err("give either worktreeId or worktreePath, not both".to_owned());
+            }
+            (Some(id), None) => match worktrees.get(&project, &dir, id).await {
+                Ok(worktree) => worktree,
+                Err(WorktreeError::NotFound) => {
+                    let known = worktrees
+                        .list_for(&project, &dir)
+                        .await
+                        .iter()
+                        .map(|worktree| format!("{} ({})", worktree.id, worktree.name))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return Err(format!(
+                        "no such worktree in the project; its checkouts are: {known}"
+                    ));
+                }
+                Err(error) => return Err(format!("{error}")),
+            },
+            (None, Some(path)) => worktrees
+                .adopt(&project, &dir, path)
                 .await
                 .map_err(|error| match error {
                     WorktreeError::NotFound => "no such worktree in the project".to_owned(),
-                    error => format!("{error:#}"),
+                    error => format!("{error}"),
                 })?,
-            None => worktrees
+            (None, None) => worktrees
                 .get(&project, &dir, project.id)
                 .await
-                .map_err(|error| format!("{error:#}"))?,
+                .map_err(|error| format!("{error}"))?,
         };
 
         let instance = supervisor
