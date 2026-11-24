@@ -1191,6 +1191,56 @@ async fn worktrees_are_made_listed_and_removed_from_the_board() {
     assert_eq!(made["name"], json!("coder"));
     let path = std::path::PathBuf::from(made["path"].as_str().unwrap());
     assert!(path.is_dir());
+    assert_eq!(made["clone"], json!(true));
+    // A clone is a checkout of its own: a commit there is in the project
+    // only once the board fetches it.
+    std::fs::write(path.join("b.txt"), "two\n").unwrap();
+    assert!(git_in(&path, &["add", "."]).status.success());
+    assert!(
+        git_in(
+            &path,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "-m",
+                "second"
+            ]
+        )
+        .status
+        .success()
+    );
+    let sha = String::from_utf8_lossy(&git_in(&path, &["rev-parse", "HEAD"]).stdout)
+        .trim()
+        .to_owned();
+    assert!(
+        !git_in(
+            repo.path(),
+            &["rev-parse", "--verify", "refs/heads/aiddiction/coder"]
+        )
+        .status
+        .success()
+    );
+    let synced = board(
+        &client,
+        "sync_worktree",
+        json!({ "projectId": project.id, "worktreeId": id }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(synced["branch"], json!("aiddiction/coder"));
+    assert_eq!(synced["commit"], json!(sha));
+    assert!(
+        git_in(
+            repo.path(),
+            &["rev-parse", "--verify", "refs/heads/aiddiction/coder"]
+        )
+        .status
+        .success()
+    );
 
     let listed = board(
         &client,

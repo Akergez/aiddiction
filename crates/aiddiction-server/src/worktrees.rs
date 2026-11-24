@@ -113,76 +113,7 @@ impl Worktrees {
         input: NewWorktree,
     ) -> Result<Worktree, WorktreeError> {
         let _changing = self.changing.lock().await;
-        let name = match (
-            input
-                .name
-                .as_deref()
-                .map(str::trim)
-                .filter(|name| !name.is_empty()),
-            input.branch.as_deref(),
-        ) {
-            (Some(name), _) => slug(name, "worktree"),
-            (None, Some(branch)) => slug(branch, "worktree"),
-            (None, None) => format!("worktree-{}", &uuid::Uuid::now_v7().to_string()[..8]),
-        };
-        let branch = input
-            .branch
-            .as_deref()
-            .map(str::trim)
-            .filter(|branch| !branch.is_empty())
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!("aiddiction/{name}"));
-        checkout_branch(&branch)?;
-
-        if self
-            .list
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|worktree| worktree.project_id == project.id && worktree.name == name)
-        {
-            return Err(WorktreeError::Invalid(format!(
-                "the project already has a worktree called {name}"
-            )));
-        }
-        if let Ok(output) = git(
-            dir,
-            &[
-                "rev-parse",
-                "--verify",
-                "--quiet",
-                &format!("refs/heads/{branch}"),
-            ],
-        )
-        .await
-            && output.status.success()
-        {
-            return Err(WorktreeError::Invalid(format!(
-                "the branch {branch} already exists"
-            )));
-        }
-        let base = input
-            .base
-            .as_deref()
-            .map(str::trim)
-            .filter(|base| !base.is_empty())
-            .unwrap_or("HEAD")
-            .to_owned();
-        let base_commit = match git(
-            dir,
-            &["rev-parse", "--verify", &format!("{base}^{{commit}}")],
-        )
-        .await
-        {
-            Ok(output) if output.status.success() => {
-                String::from_utf8_lossy(&output.stdout).trim().to_owned()
-            }
-            _ => {
-                return Err(WorktreeError::Invalid(format!(
-                    "{base} is not a commit here"
-                )));
-            }
-        };
+        let (name, branch, base_commit) = self.prepare(project, dir, &input).await?;
 
         let path = self.path_of(project.id, &name);
         if path.exists() {
@@ -197,11 +128,12 @@ impl Worktrees {
             })?;
         }
         let path_text = path.to_string_lossy().into_owned();
-        let output = git(dir, &["worktree", "add", "-b", &branch, &path_text, &base])
-            .await
-            .map_err(|error| {
-                WorktreeError::Invalid(format!("could not make the worktree: {error}"))
-            })?;
+        let output = git(
+            dir,
+            &["worktree", "add", "-b", &branch, &path_text, &base_commit],
+        )
+        .await
+        .map_err(|error| WorktreeError::Invalid(format!("could not make the worktree: {error}")))?;
         if !output.status.success() {
             return Err(WorktreeError::Invalid(format!(
                 "could not make the worktree: {}",
@@ -265,6 +197,210 @@ impl Worktrees {
             project_id: project.id,
         });
         Ok(worktree)
+    }
+
+    /// A name, a branch and the commit a new checkout starts from, checked
+    /// against the project; both kinds of checkout share them.
+    async fn prepare(
+        &self,
+        project: &Project,
+        dir: &Path,
+        input: &NewWorktree,
+    ) -> Result<(String, String, String), WorktreeError> {
+        let name = match (
+            input
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty()),
+            input.branch.as_deref(),
+        ) {
+            (Some(name), _) => slug(name, "worktree"),
+            (None, Some(branch)) => slug(branch, "worktree"),
+            (None, None) => format!("worktree-{}", &uuid::Uuid::now_v7().to_string()[..8]),
+        };
+        let branch = input
+            .branch
+            .as_deref()
+            .map(str::trim)
+            .filter(|branch| !branch.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("aiddiction/{name}"));
+        checkout_branch(&branch)?;
+        if self
+            .list
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|worktree| worktree.project_id == project.id && worktree.name == name)
+        {
+            return Err(WorktreeError::Invalid(format!(
+                "the project already has a worktree called {name}"
+            )));
+        }
+        if let Ok(output) = git(
+            dir,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{branch}"),
+            ],
+        )
+        .await
+            && output.status.success()
+        {
+            return Err(WorktreeError::Invalid(format!(
+                "the branch {branch} already exists"
+            )));
+        }
+        let base = input
+            .base
+            .as_deref()
+            .map(str::trim)
+            .filter(|base| !base.is_empty())
+            .unwrap_or("HEAD")
+            .to_owned();
+        let base_commit = match git(
+            dir,
+            &["rev-parse", "--verify", &format!("{base}^{{commit}}")],
+        )
+        .await
+        {
+            Ok(output) if output.status.success() => {
+                String::from_utf8_lossy(&output.stdout).trim().to_owned()
+            }
+            _ => {
+                return Err(WorktreeError::Invalid(format!(
+                    "{base} is not a commit here"
+                )));
+            }
+        };
+        Ok((name, branch, base_commit))
+    }
+
+    /// Makes a clone of the project on a new branch. Unlike a worktree it is
+    /// self-contained — its `.git` is its own — so it can be handed to an
+    /// agent in a container that never sees the project's checkout. Its
+    /// commits reach the project by `sync`.
+    pub async fn create_clone(
+        &self,
+        project: &Project,
+        dir: &Path,
+        input: NewWorktree,
+    ) -> Result<Worktree, WorktreeError> {
+        let _changing = self.changing.lock().await;
+        let (name, branch, base_commit) = self.prepare(project, dir, &input).await?;
+        let path = self.path_of(project.id, &name);
+        if path.exists() {
+            return Err(WorktreeError::Invalid(format!(
+                "{} already exists",
+                path.display()
+            )));
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                WorktreeError::Invalid(format!("{}: {error}", parent.display()))
+            })?;
+        }
+        let path_text = path.to_string_lossy().into_owned();
+        let output = git(dir, &["clone", "--local", "--quiet", ".", &path_text])
+            .await
+            .map_err(|error| {
+                WorktreeError::Invalid(format!("could not make the clone: {error}"))
+            })?;
+        if !output.status.success() {
+            return Err(WorktreeError::Invalid(format!(
+                "could not make the clone: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        let switched = git(&path, &["switch", "--quiet", "-c", &branch, &base_commit]).await?;
+        if !switched.status.success() {
+            let _ = std::fs::remove_dir_all(&path);
+            return Err(WorktreeError::Invalid(format!(
+                "could not make the branch {branch}: {}",
+                String::from_utf8_lossy(&switched.stderr).trim()
+            )));
+        }
+        let worktree = Worktree {
+            id: uuid::Uuid::now_v7(),
+            project_id: project.id,
+            main: false,
+            managed: true,
+            name,
+            branch: Some(branch),
+            base_commit: Some(base_commit),
+            path: path_text,
+            created_at_ms: now_ms(),
+        };
+        {
+            let mut list = self.list.lock().unwrap();
+            let mut next = list.clone();
+            next.push(worktree.clone());
+            match self.store.save_worktrees(&next) {
+                Ok(()) => *list = next,
+                Err(error) => {
+                    let _ = std::fs::remove_dir_all(&worktree.path);
+                    return Err(WorktreeError::Io(error));
+                }
+            }
+        }
+        let _ = self.events.send(ServerEvent::WorktreesChanged {
+            project_id: project.id,
+        });
+        Ok(worktree)
+    }
+
+    /// Whether a checkout is a clone of its own rather than a worktree: its
+    /// `.git` is a folder, not a file pointing into the project's checkout.
+    pub fn is_clone(worktree: &Worktree) -> bool {
+        Path::new(&worktree.path).join(".git").is_dir()
+    }
+
+    /// Brings the commits of a clone into the project's repository: the
+    /// branch lands there, so the person merges it in the main checkout like
+    /// any other. A worktree shares the repository already and needs nothing.
+    pub async fn sync(
+        &self,
+        project: &Project,
+        dir: &Path,
+        id: WorktreeId,
+    ) -> Result<(String, String), WorktreeError> {
+        let worktree = self.get(project, dir, id).await?;
+        if !Self::is_clone(&worktree) {
+            return Err(WorktreeError::Invalid(
+                "this checkout shares the project's repository already".into(),
+            ));
+        }
+        let Some(branch) = worktree.branch.clone() else {
+            return Err(WorktreeError::Invalid(
+                "the checkout is on no branch".into(),
+            ));
+        };
+        let output = git(
+            dir,
+            &[
+                "fetch",
+                "--quiet",
+                &worktree.path,
+                &format!("+{branch}:{branch}"),
+            ],
+        )
+        .await?;
+        if !output.status.success() {
+            return Err(WorktreeError::Invalid(format!(
+                "could not fetch {branch}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        let head = git(Path::new(&worktree.path), &["rev-parse", "HEAD"]).await?;
+        let commit = if head.status.success() {
+            String::from_utf8_lossy(&head.stdout).trim().to_owned()
+        } else {
+            String::new()
+        };
+        Ok((branch, commit))
     }
 
     /// A checkout the person made — a git worktree of this project's
@@ -387,6 +523,21 @@ impl Worktrees {
         if !worktree.managed {
             // The person's own checkout: the id goes, the folder and its
             // branch are left as they are.
+            self.forget(&[worktree.id]);
+            let _ = self.events.send(ServerEvent::WorktreesChanged {
+                project_id: project.id,
+            });
+            return Ok(());
+        }
+        if Self::is_clone(&worktree) {
+            // A clone is the server's own as well: its folder goes, and the
+            // project keeps whatever was fetched from it.
+            let path = PathBuf::from(&worktree.path);
+            if path.is_dir() {
+                std::fs::remove_dir_all(&path).map_err(|error| {
+                    WorktreeError::Invalid(format!("{}: {error}", path.display()))
+                })?;
+            }
             self.forget(&[worktree.id]);
             let _ = self.events.send(ServerEvent::WorktreesChanged {
                 project_id: project.id,

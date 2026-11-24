@@ -182,7 +182,12 @@ The board also makes, lists and removes checkouts itself: `list_worktrees`
 gives ids, names, branches and paths, `create_worktree` makes one on a new
 branch, `remove_worktree` takes one away (refused while an agent works in it;
 an adopted checkout is only forgotten). An orchestrator that cannot see the
-server's files works with ids alone.
+server's files works with ids alone. `create_worktree` makes a **clone** by
+default (`mode: "clone"`): its `.git` is its own, so an agent in a container
+can work and commit in it without reaching the project's checkout. Its branch
+reaches the project by `sync_worktree`, which fetches the clone into the main
+checkout, where it is merged like any other branch; `mode: "worktree"` keeps
+the old shared-`.git` worktree.
 
 An agent started this way gets a token of its own (`Orchestrator::scope`):
 it reaches `/mcp` only and only its project's board, without `list_agents`,

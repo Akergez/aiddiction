@@ -207,6 +207,17 @@ fn tools(for_agent: bool) -> Value {
                 "name": { "type": "string", "description": "Its name in a list; also the folder when there is no branch" },
                 "branch": { "type": "string", "description": "The branch to make; aiddiction/<name> when left out" },
                 "base": { "type": "string", "description": "The commit or branch to start from; the project's HEAD when left out" },
+                "mode": { "type": "string", "enum": ["clone", "worktree"], "description": "clone (default) is a checkout of its own, .git and all, that an agent elsewhere can work in without seeing the project's checkout; worktree shares the project's .git and needs it within reach" },
+            }},
+        }));
+        tools.push(json!({
+            "name": "sync_worktree",
+            "description": "Bring the commits of a clone checkout into the project's repository, branch and all, so it \
+                can be merged in the main checkout like any other branch. A worktree shares the repository already \
+                and needs nothing.",
+            "inputSchema": { "type": "object", "required": ["projectId", "worktreeId"], "properties": {
+                "projectId": { "type": "string" },
+                "worktreeId": { "type": "string", "description": "An id from list_worktrees" },
             }},
         }));
         tools.push(json!({
@@ -319,6 +330,7 @@ async fn call(
         "list_worktrees" => list_worktrees(projects, worktrees, caller, &arguments).await,
         "create_worktree" => create_worktree(projects, worktrees, caller, &arguments).await,
         "remove_worktree" => remove_worktree(projects, supervisor, worktrees, caller, &arguments).await,
+        "sync_worktree" => sync_worktree(projects, worktrees, caller, &arguments).await,
         "list_tasks" => project_of(&arguments, caller).and_then(|project| Ok(json!(projects.tasks(project)?))),
         "share_file" => (|| { let project=project_of(&arguments, caller)?; let path=text(&arguments,"path").ok_or_else(||ToolError("path is required".into()))?; let name=text(&arguments,"name"); let p=projects.list().into_iter().find(|x|x.id==project).ok_or_else(||ToolError("project not found".into()))?; let file=crate::files::share(&projects.dir(&p), &path, name.as_deref(), "").map_err(ToolError)?; Ok(json!(file)) })(),
         "create_task" => (|| {
@@ -464,6 +476,7 @@ async fn list_worktrees(
                 "path": worktree.path,
                 "main": worktree.main,
                 "managed": worktree.managed,
+                "clone": Worktrees::is_clone(worktree),
             }))
             .collect::<Vec<_>>()
     ))
@@ -482,16 +495,25 @@ async fn create_worktree(
         branch: text(arguments, "branch"),
         base: text(arguments, "base"),
     };
-    let made = worktrees
-        .create(&project, &dir, input)
-        .await
-        .map_err(|error| ToolError(format!("{error}")))?;
+    let clone = match text(arguments, "mode").as_deref() {
+        None | Some("clone") => true,
+        Some("worktree") => false,
+        Some(other) => {
+            return Err(ToolError(format!("mode is clone or worktree, not {other}")));
+        }
+    };
+    let made = match clone {
+        true => worktrees.create_clone(&project, &dir, input).await,
+        false => worktrees.create(&project, &dir, input).await,
+    }
+    .map_err(|error| ToolError(format!("{error}")))?;
     Ok(json!({
         "worktreeId": made.id,
         "name": made.name,
         "branch": made.branch,
         "baseCommit": made.base_commit,
         "path": made.path,
+        "clone": Worktrees::is_clone(&made),
     }))
 }
 
@@ -526,6 +548,25 @@ async fn remove_worktree(
         .await
         .map_err(|error| ToolError(format!("{error}")))?;
     Ok(json!({ "worktreeId": worktree, "removed": true }))
+}
+
+/// `sync_worktree`: a clone's branch into the project's repository.
+async fn sync_worktree(
+    projects: &Projects,
+    worktrees: &Worktrees,
+    caller: &Caller,
+    arguments: &Value,
+) -> Result<Value, ToolError> {
+    let (project, dir) = seen_project(projects, caller, arguments)?;
+    let worktree: WorktreeId = text(arguments, "worktreeId")
+        .ok_or_else(|| ToolError("worktreeId is required".into()))?
+        .parse()
+        .map_err(|_| ToolError("worktreeId is not an id".into()))?;
+    let (branch, commit) = worktrees
+        .sync(&project, &dir, worktree)
+        .await
+        .map_err(|error| ToolError(format!("{error}")))?;
+    Ok(json!({ "worktreeId": worktree, "branch": branch, "commit": commit }))
 }
 
 fn agent_summary(
