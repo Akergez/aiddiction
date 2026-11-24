@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use aiddiction_api::{
-    API_VERSION, AgentInput, ApiError, ErrorBody, Health, InstanceId, InstanceState, LoginInput, NewProject, NewWorktree,
-    PermissionAnswer, ProjectId, ProjectState, ServerEvent, ServerInfo, StartInstance, StartLogin, TaskId, TaskInput,
-    WorktreeId,
+    API_VERSION, AgentInput, ApiError, ErrorBody, Health, InstanceId, InstanceState, LoginInput,
+    NewProject, NewWorktree, PermissionAnswer, ProjectId, ProjectState, ServerEvent, ServerInfo,
+    StartInstance, StartLogin, TaskId, TaskInput, WorktreeId,
 };
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Extension, Path, Query, Request, State};
@@ -47,22 +47,52 @@ pub fn router(state: Arc<AppState>) -> Router {
     let api = Router::new()
         .route("/server", get(server_info))
         .route("/agents", get(list_agents).post(add_agent))
-        .route("/agents/{id}", axum::routing::put(update_agent).delete(remove_agent))
+        .route(
+            "/agents/{id}",
+            axum::routing::put(update_agent).delete(remove_agent),
+        )
         .route("/projects", get(list_projects).post(create_project))
         .route("/fs/dirs", get(list_dirs))
-        .route("/projects/{id}/review/diff", axum::routing::post(review_diff))
+        .route(
+            "/projects/{id}/review/diff",
+            axum::routing::post(review_diff),
+        )
         .route("/projects/{id}/review/refs", get(review_refs))
-        .route("/projects/{id}", axum::routing::patch(rename_project).delete(delete_project))
-        .route("/projects/{id}/instances", get(list_instances).post(start_instance))
-        .route("/projects/{id}/worktrees", get(list_worktrees).post(create_worktree))
-        .route("/projects/{id}/worktrees/{worktree_id}", axum::routing::delete(delete_worktree))
+        .route(
+            "/projects/{id}",
+            axum::routing::patch(rename_project).delete(delete_project),
+        )
+        .route(
+            "/projects/{id}/instances",
+            get(list_instances).post(start_instance),
+        )
+        .route(
+            "/projects/{id}/worktrees",
+            get(list_worktrees).post(create_worktree),
+        )
+        .route(
+            "/projects/{id}/worktrees/{worktree_id}",
+            axum::routing::delete(delete_worktree),
+        )
         .route("/projects/{id}/tasks", get(list_tasks).post(create_task))
-        .route("/projects/{id}/tasks/{task_id}", axum::routing::patch(update_task).delete(delete_task))
+        .route(
+            "/projects/{id}/tasks/{task_id}",
+            axum::routing::patch(update_task).delete(delete_task),
+        )
         .route("/instances", get(list_all_instances))
         .route("/instances/{id}", get(get_instance).delete(stop_instance))
-        .route("/instances/{id}/permission", axum::routing::post(answer_permission))
-        .route("/instances/{id}/login", get(get_login).post(start_login).delete(stop_login))
-        .route("/instances/{id}/login/input", axum::routing::post(login_input))
+        .route(
+            "/instances/{id}/permission",
+            axum::routing::post(answer_permission),
+        )
+        .route(
+            "/instances/{id}/login",
+            get(get_login).post(start_login).delete(stop_login),
+        )
+        .route(
+            "/instances/{id}/login/input",
+            axum::routing::post(login_input),
+        )
         .route("/instances/{id}/acp", get(acp_socket))
         .route("/events", get(event_socket))
         .route("/mcp", axum::routing::post(mcp))
@@ -79,7 +109,12 @@ pub struct Failure(StatusCode, &'static str, String);
 
 impl IntoResponse for Failure {
     fn into_response(self) -> Response {
-        let body = ErrorBody { error: ApiError { code: self.1.into(), message: self.2 } };
+        let body = ErrorBody {
+            error: ApiError {
+                code: self.1.into(),
+                message: self.2,
+            },
+        };
         (self.0, Json(body)).into_response()
     }
 }
@@ -87,9 +122,17 @@ impl IntoResponse for Failure {
 impl From<ProjectError> for Failure {
     fn from(error: ProjectError) -> Self {
         match error {
-            ProjectError::NotFound => Failure(StatusCode::NOT_FOUND, "project_not_found", error.to_string()),
+            ProjectError::NotFound => Failure(
+                StatusCode::NOT_FOUND,
+                "project_not_found",
+                error.to_string(),
+            ),
             ProjectError::Invalid(message) => Failure(StatusCode::BAD_REQUEST, "invalid", message),
-            ProjectError::Io(error) => Failure(StatusCode::INTERNAL_SERVER_ERROR, "io", format!("{error:#}")),
+            ProjectError::Io(error) => Failure(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "io",
+                format!("{error:#}"),
+            ),
         }
     }
 }
@@ -134,7 +177,9 @@ async fn authorize(State(state): Shared, mut request: Request, next: Next) -> Re
         .and_then(|value| value.strip_prefix("Bearer "))
         .map(str::to_owned);
     let from_query = request.uri().query().and_then(|query| {
-        query.split('&').find_map(|pair| pair.strip_prefix("token=").map(str::to_owned))
+        query
+            .split('&')
+            .find_map(|pair| pair.strip_prefix("token=").map(str::to_owned))
     });
     let given = from_header.or(from_query).unwrap_or_default();
     let caller = if constant_time_eq(given.as_bytes(), state.token.as_bytes()) {
@@ -151,13 +196,27 @@ async fn authorize(State(state): Shared, mut request: Request, next: Next) -> Re
     };
     match caller {
         Some(caller) => {
-            if !matches!(caller, Caller::User) && request.uri().path() != "/api/v1/mcp" {
-                return Failure(StatusCode::UNAUTHORIZED, "unauthorized", "an agent's token reaches the board only".into()).into_response();
+            // Middleware on the nested API router sees `/mcp`, while an
+            // outer middleware or test may still expose `/api/v1/mcp`.
+            if !matches!(caller, Caller::User)
+                && !matches!(request.uri().path(), "/mcp" | "/api/v1/mcp")
+            {
+                return Failure(
+                    StatusCode::UNAUTHORIZED,
+                    "unauthorized",
+                    "an agent's token reaches the board only".into(),
+                )
+                .into_response();
             }
             request.extensions_mut().insert(caller);
             next.run(request).await
         }
-        None => Failure(StatusCode::UNAUTHORIZED, "unauthorized", "a valid token is required".into()).into_response(),
+        None => Failure(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "a valid token is required".into(),
+        )
+        .into_response(),
     }
 }
 
@@ -166,7 +225,11 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 async fn health() -> Json<Health> {
-    Json(Health { ok: true, version: env!("CARGO_PKG_VERSION").into(), api_version: API_VERSION })
+    Json(Health {
+        ok: true,
+        version: env!("CARGO_PKG_VERSION").into(),
+        api_version: API_VERSION,
+    })
 }
 
 async fn server_info(State(state): Shared) -> Json<ServerInfo> {
@@ -190,13 +253,20 @@ async fn list_agents(State(state): Shared) -> impl IntoResponse {
     Json(state.catalog.public_list())
 }
 
-async fn add_agent(State(state): Shared, Json(input): Json<AgentInput>) -> Result<impl IntoResponse> {
+async fn add_agent(
+    State(state): Shared,
+    Json(input): Json<AgentInput>,
+) -> Result<impl IntoResponse> {
     let agent = state.catalog.add(input, &state.store)?;
     let _ = state.events.send(ServerEvent::AgentsChanged);
     Ok((StatusCode::CREATED, Json(agent)))
 }
 
-async fn update_agent(State(state): Shared, Path(id): Path<String>, Json(input): Json<AgentInput>) -> Result<impl IntoResponse> {
+async fn update_agent(
+    State(state): Shared,
+    Path(id): Path<String>,
+    Json(input): Json<AgentInput>,
+) -> Result<impl IntoResponse> {
     let agent = state.catalog.update(&id, input, &state.store)?;
     let _ = state.events.send(ServerEvent::AgentsChanged);
     Ok(Json(agent))
@@ -212,20 +282,60 @@ async fn list_projects(State(state): Shared) -> impl IntoResponse {
     Json(state.projects.list())
 }
 
-async fn create_project(State(state): Shared, Json(input): Json<NewProject>) -> Result<impl IntoResponse> {
+async fn create_project(
+    State(state): Shared,
+    Json(input): Json<NewProject>,
+) -> Result<impl IntoResponse> {
     let project = state.projects.create(input)?;
     Ok((StatusCode::CREATED, Json(project)))
 }
 
-async fn list_tasks(State(state): Shared, Path(id): Path<ProjectId>) -> Result<impl IntoResponse> { Ok(Json(state.projects.tasks(id)?)) }
-async fn create_task(State(state): Shared, Path(id): Path<ProjectId>, Json(input): Json<TaskInput>) -> Result<impl IntoResponse> { Ok((StatusCode::CREATED, Json(state.projects.create_task(id, input)?))) }
-async fn update_task(State(state): Shared, Path((id, task_id)): Path<(ProjectId, TaskId)>, Json(input): Json<TaskInput>) -> Result<impl IntoResponse> { Ok(Json(state.projects.update_task(id, task_id, input)?)) }
-async fn delete_task(State(state): Shared, Path((id, task_id)): Path<(ProjectId, TaskId)>) -> Result<impl IntoResponse> { state.projects.delete_task(id, task_id)?; Ok(StatusCode::NO_CONTENT) }
+async fn list_tasks(State(state): Shared, Path(id): Path<ProjectId>) -> Result<impl IntoResponse> {
+    Ok(Json(state.projects.tasks(id)?))
+}
+async fn create_task(
+    State(state): Shared,
+    Path(id): Path<ProjectId>,
+    Json(input): Json<TaskInput>,
+) -> Result<impl IntoResponse> {
+    Ok((
+        StatusCode::CREATED,
+        Json(state.projects.create_task(id, input)?),
+    ))
+}
+async fn update_task(
+    State(state): Shared,
+    Path((id, task_id)): Path<(ProjectId, TaskId)>,
+    Json(input): Json<TaskInput>,
+) -> Result<impl IntoResponse> {
+    Ok(Json(state.projects.update_task(id, task_id, input)?))
+}
+async fn delete_task(
+    State(state): Shared,
+    Path((id, task_id)): Path<(ProjectId, TaskId)>,
+) -> Result<impl IntoResponse> {
+    state.projects.delete_task(id, task_id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
 
 /// The MCP server agents use (`crate::mcp`): a notification is taken with
 /// 202 and no body, as Streamable HTTP wants.
-async fn mcp(State(state): Shared, Extension(caller): Extension<Caller>, Json(message): Json<Value>) -> Response {
-    match crate::mcp::handle(&state.projects, &state.catalog, &state.supervisor, &state.orchestration, &state.worktrees, &caller, &message).await {
+async fn mcp(
+    State(state): Shared,
+    Extension(caller): Extension<Caller>,
+    Json(message): Json<Value>,
+) -> Response {
+    match crate::mcp::handle(
+        &state.projects,
+        &state.catalog,
+        &state.supervisor,
+        &state.orchestration,
+        &state.worktrees,
+        &caller,
+        &message,
+    )
+    .await
+    {
         Some(answer) => Json(answer).into_response(),
         None => StatusCode::ACCEPTED.into_response(),
     }
@@ -271,9 +381,11 @@ struct DirQuery {
 /// Anyone with the token can run commands here anyway, so the listing is not
 /// confined to the projects root.
 async fn list_dirs(Query(query): Query<DirQuery>) -> Result<impl IntoResponse> {
-    let listing = tokio::task::spawn_blocking(move || crate::projects::list_dirs(query.path.as_deref(), query.hidden))
-        .await
-        .map_err(|error| Failure(StatusCode::INTERNAL_SERVER_ERROR, "io", error.to_string()))??;
+    let listing = tokio::task::spawn_blocking(move || {
+        crate::projects::list_dirs(query.path.as_deref(), query.hidden)
+    })
+    .await
+    .map_err(|error| Failure(StatusCode::INTERNAL_SERVER_ERROR, "io", error.to_string()))??;
     Ok(Json(listing))
 }
 
@@ -282,7 +394,11 @@ struct Rename {
     name: String,
 }
 
-async fn rename_project(State(state): Shared, Path(id): Path<ProjectId>, Json(input): Json<Rename>) -> Result<impl IntoResponse> {
+async fn rename_project(
+    State(state): Shared,
+    Path(id): Path<ProjectId>,
+    Json(input): Json<Rename>,
+) -> Result<impl IntoResponse> {
     Ok(Json(state.projects.rename(id, &input.name)?))
 }
 
@@ -312,7 +428,10 @@ async fn delete_project(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn list_worktrees(State(state): Shared, Path(id): Path<ProjectId>) -> Result<impl IntoResponse> {
+async fn list_worktrees(
+    State(state): Shared,
+    Path(id): Path<ProjectId>,
+) -> Result<impl IntoResponse> {
     let project = state.projects.get(id).ok_or(ProjectError::NotFound)?;
     let dir = state.projects.dir(&project);
     Ok(Json(state.worktrees.list_for(&project, &dir).await))
@@ -325,7 +444,11 @@ async fn create_worktree(
 ) -> Result<impl IntoResponse> {
     let project = state.projects.get(id).ok_or(ProjectError::NotFound)?;
     if project.state != ProjectState::Ready {
-        return Err(Failure(StatusCode::CONFLICT, "project_not_ready", "the project is not ready yet".into()));
+        return Err(Failure(
+            StatusCode::CONFLICT,
+            "project_not_ready",
+            "the project is not ready yet".into(),
+        ));
     }
     let dir = state.projects.dir(&project);
     let worktree = state.worktrees.create(&project, &dir, input).await?;
@@ -343,7 +466,12 @@ async fn delete_worktree(
         .supervisor
         .for_worktree(id, worktree)
         .iter()
-        .any(|instance| matches!(instance.state(), InstanceState::Starting | InstanceState::Ready));
+        .any(|instance| {
+            matches!(
+                instance.state(),
+                InstanceState::Starting | InstanceState::Ready
+            )
+        });
     if busy {
         return Err(WorktreeError::Busy.into());
     }
@@ -352,15 +480,28 @@ async fn delete_worktree(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn list_instances(State(state): Shared, Path(id): Path<ProjectId>) -> Result<impl IntoResponse> {
+async fn list_instances(
+    State(state): Shared,
+    Path(id): Path<ProjectId>,
+) -> Result<impl IntoResponse> {
     state.projects.get(id).ok_or(ProjectError::NotFound)?;
-    let instances: Vec<_> = state.supervisor.for_project(id).iter().map(|instance| instance.info()).collect();
+    let instances: Vec<_> = state
+        .supervisor
+        .for_project(id)
+        .iter()
+        .map(|instance| instance.info())
+        .collect();
     Ok(Json(instances))
 }
 
 /// Every project's instances at once, for a list of all conversations.
 async fn list_all_instances(State(state): Shared) -> impl IntoResponse {
-    let instances: Vec<_> = state.supervisor.all().iter().map(|instance| instance.info()).collect();
+    let instances: Vec<_> = state
+        .supervisor
+        .all()
+        .iter()
+        .map(|instance| instance.info())
+        .collect();
     Json(instances)
 }
 
@@ -371,9 +512,16 @@ async fn start_instance(
 ) -> Result<impl IntoResponse> {
     let project = state.projects.get(id).ok_or(ProjectError::NotFound)?;
     if project.state != ProjectState::Ready {
-        return Err(Failure(StatusCode::CONFLICT, "project_not_ready", "the project is not ready yet".into()));
+        return Err(Failure(
+            StatusCode::CONFLICT,
+            "project_not_ready",
+            "the project is not ready yet".into(),
+        ));
     }
-    let agent = state.catalog.get(&input.agent_id).ok_or(CatalogError::NotFound)?;
+    let agent = state
+        .catalog
+        .get(&input.agent_id)
+        .ok_or(CatalogError::NotFound)?;
     let dir = state.projects.dir(&project);
     let worktree = match input.worktree_id {
         Some(worktree) => state.worktrees.get(&project, &dir, worktree).await?,
@@ -381,16 +529,35 @@ async fn start_instance(
     };
     let instance = state
         .supervisor
-        .start(id, worktree.id, worktree.name.clone(), std::path::PathBuf::from(&worktree.path), agent)
-        .map_err(|error| Failure(StatusCode::INTERNAL_SERVER_ERROR, "agent_start_failed", format!("{error:#}")))?;
+        .start(
+            id,
+            worktree.id,
+            worktree.name.clone(),
+            std::path::PathBuf::from(&worktree.path),
+            agent,
+        )
+        .map_err(|error| {
+            Failure(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "agent_start_failed",
+                format!("{error:#}"),
+            )
+        })?;
     Ok((StatusCode::CREATED, Json(instance.info())))
 }
 
 fn instance_not_found() -> Failure {
-    Failure(StatusCode::NOT_FOUND, "instance_not_found", "no such agent instance".into())
+    Failure(
+        StatusCode::NOT_FOUND,
+        "instance_not_found",
+        "no such agent instance".into(),
+    )
 }
 
-async fn get_instance(State(state): Shared, Path(id): Path<InstanceId>) -> Result<impl IntoResponse> {
+async fn get_instance(
+    State(state): Shared,
+    Path(id): Path<InstanceId>,
+) -> Result<impl IntoResponse> {
     let instance = state.supervisor.get(id).ok_or_else(instance_not_found)?;
     Ok(Json(instance.info()))
 }
@@ -403,22 +570,39 @@ async fn answer_permission(
     Json(answer): Json<PermissionAnswer>,
 ) -> Result<impl IntoResponse> {
     let instance = state.supervisor.get(id).ok_or_else(instance_not_found)?;
-    if instance.proxy.answer_permission(&answer.request_id, &answer.option_id) {
+    if instance
+        .proxy
+        .answer_permission(&answer.request_id, &answer.option_id)
+    {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(Failure(StatusCode::CONFLICT, "already_answered", "the agent is no longer asking".into()))
+        Err(Failure(
+            StatusCode::CONFLICT,
+            "already_answered",
+            "the agent is no longer asking".into(),
+        ))
     }
 }
 
 /// Runs one of the agent's terminal sign-ins for a client to read and answer.
-async fn start_login(State(state): Shared, Path(id): Path<InstanceId>, Json(input): Json<StartLogin>) -> Result<impl IntoResponse> {
+async fn start_login(
+    State(state): Shared,
+    Path(id): Path<InstanceId>,
+    Json(input): Json<StartLogin>,
+) -> Result<impl IntoResponse> {
     let instance = state.supervisor.get(id).ok_or_else(instance_not_found)?;
-    let login = instance.start_login(&input.method_id).map_err(|error| Failure(StatusCode::BAD_REQUEST, "login_failed", error))?;
+    let login = instance
+        .start_login(&input.method_id)
+        .map_err(|error| Failure(StatusCode::BAD_REQUEST, "login_failed", error))?;
     Ok((StatusCode::CREATED, Json(login.info())))
 }
 
 fn no_login() -> Failure {
-    Failure(StatusCode::NOT_FOUND, "login_not_found", "no sign-in was started".into())
+    Failure(
+        StatusCode::NOT_FOUND,
+        "login_not_found",
+        "no sign-in was started".into(),
+    )
 }
 
 async fn get_login(State(state): Shared, Path(id): Path<InstanceId>) -> Result<impl IntoResponse> {
@@ -426,7 +610,11 @@ async fn get_login(State(state): Shared, Path(id): Path<InstanceId>) -> Result<i
     Ok(Json(instance.login().ok_or_else(no_login)?.info()))
 }
 
-async fn login_input(State(state): Shared, Path(id): Path<InstanceId>, Json(input): Json<LoginInput>) -> Result<impl IntoResponse> {
+async fn login_input(
+    State(state): Shared,
+    Path(id): Path<InstanceId>,
+    Json(input): Json<LoginInput>,
+) -> Result<impl IntoResponse> {
     let instance = state.supervisor.get(id).ok_or_else(instance_not_found)?;
     instance.login().ok_or_else(no_login)?.write(&input.text);
     Ok(StatusCode::NO_CONTENT)
@@ -439,21 +627,37 @@ async fn stop_login(State(state): Shared, Path(id): Path<InstanceId>) -> Result<
 }
 
 /// Stops a running instance; one that already ended is forgotten.
-async fn stop_instance(State(state): Shared, Path(id): Path<InstanceId>) -> Result<impl IntoResponse> {
+async fn stop_instance(
+    State(state): Shared,
+    Path(id): Path<InstanceId>,
+) -> Result<impl IntoResponse> {
     let instance = state.supervisor.get(id).ok_or_else(instance_not_found)?;
-    if matches!(instance.state(), InstanceState::Starting | InstanceState::Ready) {
+    if matches!(
+        instance.state(),
+        InstanceState::Starting | InstanceState::Ready
+    ) {
         instance.stop();
     } else {
         state.supervisor.remove(id);
-        let _ = state.events.send(ServerEvent::InstancesChanged { project_id: instance.project_id });
+        let _ = state.events.send(ServerEvent::InstancesChanged {
+            project_id: instance.project_id,
+        });
     }
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn acp_socket(State(state): Shared, Path(id): Path<InstanceId>, upgrade: WebSocketUpgrade) -> Result<Response> {
+async fn acp_socket(
+    State(state): Shared,
+    Path(id): Path<InstanceId>,
+    upgrade: WebSocketUpgrade,
+) -> Result<Response> {
     let instance = state.supervisor.get(id).ok_or_else(instance_not_found)?;
     let Some((conn, mut outgoing)) = instance.proxy.connect() else {
-        return Err(Failure(StatusCode::GONE, "instance_exited", "the agent is not running".into()));
+        return Err(Failure(
+            StatusCode::GONE,
+            "instance_exited",
+            "the agent is not running".into(),
+        ));
     };
     Ok(upgrade
         .max_message_size(MAX_MESSAGE)
@@ -519,18 +723,32 @@ async fn event_socket(State(state): Shared, upgrade: WebSocketUpgrade) -> Respon
     })
 }
 
-
-async fn list_files(Path(id): Path<ProjectId>, State(state): Shared) -> Result<Json<Vec<crate::files::SharedFile>>> {
- let project=state.projects.get(id).ok_or(ProjectError::NotFound)?;
- Ok(Json(crate::files::list(&state.projects.dir(&project), "")))
+async fn list_files(
+    Path(id): Path<ProjectId>,
+    State(state): Shared,
+) -> Result<Json<Vec<crate::files::SharedFile>>> {
+    let project = state.projects.get(id).ok_or(ProjectError::NotFound)?;
+    Ok(Json(crate::files::list(&state.projects.dir(&project), "")))
 }
 
 async fn download_file(Path(token): Path<String>, State(state): Shared) -> Response {
- for project in state.projects.list() {
-  if let Some((path,name))=crate::files::find(&state.projects.dir(&project).join(".aiddiction-files"), &token) {
-   let Ok(body)=tokio::fs::read(path).await else { return StatusCode::NOT_FOUND.into_response() };
-   return ([(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}\""))], body).into_response();
-  }
- }
- StatusCode::NOT_FOUND.into_response()
+    for project in state.projects.list() {
+        if let Some((path, name)) = crate::files::find(
+            &state.projects.dir(&project).join(".aiddiction-files"),
+            &token,
+        ) {
+            let Ok(body) = tokio::fs::read(path).await else {
+                return StatusCode::NOT_FOUND.into_response();
+            };
+            return (
+                [(
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{name}\""),
+                )],
+                body,
+            )
+                .into_response();
+        }
+    }
+    StatusCode::NOT_FOUND.into_response()
 }
