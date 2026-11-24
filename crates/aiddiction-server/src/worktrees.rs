@@ -292,11 +292,10 @@ impl Worktrees {
         let _changing = self.changing.lock().await;
         let (name, branch, base_commit) = self.prepare(project, dir, &input).await?;
         let path = self.path_of(project.id, &name);
+        // A folder left by an attempt that failed is not a checkout of ours
+        // (a record would have stopped the name above): it goes.
         if path.exists() {
-            return Err(WorktreeError::Invalid(format!(
-                "{} already exists",
-                path.display()
-            )));
+            let _ = std::fs::remove_dir_all(&path);
         }
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|error| {
@@ -304,12 +303,24 @@ impl Worktrees {
             })?;
         }
         let path_text = path.to_string_lossy().into_owned();
-        let output = git(dir, &["clone", "--local", "--quiet", ".", &path_text])
-            .await
-            .map_err(|error| {
-                WorktreeError::Invalid(format!("could not make the clone: {error}"))
-            })?;
+        // Without a checkout of the default branch: only the base is brought
+        // out, so files of other commits (large ones, LFS ones that the
+        // remote may not have) do not block the clone.
+        let output = git(
+            dir,
+            &[
+                "clone",
+                "--local",
+                "--quiet",
+                "--no-checkout",
+                ".",
+                &path_text,
+            ],
+        )
+        .await
+        .map_err(|error| WorktreeError::Invalid(format!("could not make the clone: {error}")))?;
         if !output.status.success() {
+            let _ = std::fs::remove_dir_all(&path);
             return Err(WorktreeError::Invalid(format!(
                 "could not make the clone: {}",
                 String::from_utf8_lossy(&output.stderr).trim()

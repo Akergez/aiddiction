@@ -198,16 +198,15 @@ fn tools(for_agent: bool) -> Value {
         }));
         tools.push(json!({
             "name": "create_worktree",
-            "description": "Make a worktree of the project on a new branch, outside its own checkout, and answer \
-                with its id: agents started there work in their own files and branch. The branch is kept when the \
-                worktree goes. A worktree is not self-contained: its .git points into the project's own checkout, \
-                which the agent must reach at the same path.",
+            "description": "Make a clone of the project on a new branch, outside its own checkout, and answer \
+                with its id: agents started there work in their own files and branch. Its .git is its own, so it \
+                works where the project's checkout cannot be reached; its commits come back by sync_worktree. The \
+                branch is kept when the clone goes.",
             "inputSchema": { "type": "object", "required": ["projectId"], "properties": {
                 "projectId": { "type": "string" },
                 "name": { "type": "string", "description": "Its name in a list; also the folder when there is no branch" },
                 "branch": { "type": "string", "description": "The branch to make; aiddiction/<name> when left out" },
                 "base": { "type": "string", "description": "The commit or branch to start from; the project's HEAD when left out" },
-                "mode": { "type": "string", "enum": ["clone", "worktree"], "description": "clone (default) is a checkout of its own, .git and all, that an agent elsewhere can work in without seeing the project's checkout; worktree shares the project's .git and needs it within reach" },
             }},
         }));
         tools.push(json!({
