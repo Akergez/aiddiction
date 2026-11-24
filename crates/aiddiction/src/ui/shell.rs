@@ -340,6 +340,7 @@ impl Shell {
         &mut self,
         project: ProjectId,
         agent: String,
+        worktree: Option<aiddiction_api::WorktreeId>,
         prompt: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -349,7 +350,7 @@ impl Shell {
         let this = cx.entity().downgrade();
         let window_handle = window.window_handle();
         server.update(cx, |server, cx| {
-            server.start_instance(project, agent, cx, move |result, cx| match result {
+            server.start_instance(project, agent, worktree, cx, move |result, cx| match result {
                 Ok(instance) => {
                     let _ = window_handle.update(cx, |_, window, cx| {
                         let _ = this.update(cx, |shell, cx| {

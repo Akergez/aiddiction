@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use aiddiction_api::{Agent, Project, ProjectId};
+use aiddiction_api::{Agent, Project, ProjectId, Worktree, WorktreeId};
 use gpui_adaptive::{Choice, ChoiceEvent, ChoiceOption, ChoiceState, Fields, Note, TextField, TextFieldState, Tone};
 use gpui_kit::Focusable as _;
 use gpui_kit::prelude::*;
@@ -16,19 +16,21 @@ use super::shell::Shell;
 use crate::settings::Settings;
 
 /// A project to offer: which server it is on (by name, when there are
-/// several) and that server's agents.
+/// several), that server's agents, and its checkouts.
 pub struct Offered {
     pub project: Project,
     pub server: Option<String>,
     pub agents: Vec<Agent>,
+    pub worktrees: Vec<Worktree>,
 }
 
 pub struct NewSessionForm {
     project: Entity<ChoiceState>,
     agent: Entity<ChoiceState>,
-    /// Each project's id as its option's key, and its server's agents, for
-    /// when another project is picked.
-    projects: HashMap<SharedString, (ProjectId, Vec<Agent>)>,
+    worktree: Entity<ChoiceState>,
+    /// Each project's id as its option's key, and its server's agents and
+    /// checkouts, for when another project is picked.
+    projects: HashMap<SharedString, (ProjectId, Vec<Agent>, Vec<Worktree>)>,
     /// The agent to choose when there is a choice to make again.
     last_agent: Option<String>,
     prompt: Entity<TextFieldState>,
@@ -52,17 +54,31 @@ impl NewSessionForm {
             .map(|id| SharedString::from(id.to_string()))
             .filter(|key| options.iter().any(|option| option.key() == key))
             .or_else(|| options.first().map(|option| option.key().clone()));
-        let projects: HashMap<_, _> =
-            offered.into_iter().map(|offered| (SharedString::from(offered.project.id.to_string()), (offered.project.id, offered.agents))).collect();
-        let first_agents = chosen_project.as_ref().and_then(|key| projects.get(key)).map(|(_, agents)| agents.clone()).unwrap_or_default();
+        let projects: HashMap<_, _> = offered
+            .into_iter()
+            .map(|offered| (SharedString::from(offered.project.id.to_string()), (offered.project.id, offered.agents, offered.worktrees)))
+            .collect();
+        let (first_agents, first_worktrees) = chosen_project
+            .as_ref()
+            .and_then(|key| projects.get(key))
+            .map(|(_, agents, worktrees)| (agents.clone(), worktrees.clone()))
+            .unwrap_or_default();
         let (first_options, chosen_agent) = agent_options(&first_agents, last_agent.as_deref());
+        let (first_worktree_options, chosen_worktree) = worktree_options(&first_worktrees);
         let project = cx.new(|cx| ChoiceState::searchable(options, chosen_project, window, cx));
         let agent = cx.new(|cx| ChoiceState::searchable(first_options, chosen_agent, window, cx));
+        let worktree = cx.new(|cx| ChoiceState::new(first_worktree_options, chosen_worktree, window, cx));
         let project_chosen = cx.subscribe_in(&project, window, |form, _, event: &ChoiceEvent, window, cx| {
             let ChoiceEvent::Change(key) = event;
-            let agents = form.projects.get(key).map(|(_, agents)| agents.clone()).unwrap_or_default();
+            let (agents, worktrees) = form
+                .projects
+                .get(key)
+                .map(|(_, agents, worktrees)| (agents.clone(), worktrees.clone()))
+                .unwrap_or_default();
             let (options, chosen) = agent_options(&agents, form.last_agent.as_deref());
             form.agent.update(cx, |agent, cx| agent.set_options(options, chosen, window, cx));
+            let (options, chosen) = worktree_options(&worktrees);
+            form.worktree.update(cx, |worktree, cx| worktree.set_options(options, chosen, window, cx));
         });
         // On a pointer Enter starts, as in a conversation.
         let prompt = cx.new(|cx| {
@@ -70,20 +86,39 @@ impl NewSessionForm {
             prompt.set_placeholder("What should the agent do?", window, cx);
             prompt
         });
-        Self { project, agent, projects, last_agent, prompt, error: None, _project_chosen: project_chosen }
+        Self { project, agent, worktree, projects, last_agent, prompt, error: None, _project_chosen: project_chosen }
     }
 
     fn first(&self, cx: &App) -> FocusHandle {
         self.prompt.read(cx).focus_handle(cx)
     }
 
-    /// The project, the agent and the first message, or why there are none.
-    fn choice(&self, cx: &App) -> Result<(ProjectId, String, String), String> {
+    /// The project, the checkout, the agent and the first message, or why
+    /// there are none.
+    fn choice(&self, cx: &App) -> Result<(ProjectId, Option<WorktreeId>, String, String), String> {
         let key = self.project.read(cx).selected().ok_or("Pick a project.")?;
-        let project = self.projects.get(key).map(|(id, _)| *id).ok_or("Pick a project.")?;
+        let project = self.projects.get(key).map(|(id, _, _)| *id).ok_or("Pick a project.")?;
+        let worktree = self.worktree.read(cx).selected().and_then(|key| key.parse::<WorktreeId>().ok());
         let agent = self.agent.read(cx).selected().map(|key| key.to_string()).ok_or("Pick an agent.")?;
-        Ok((project, agent, self.prompt.read(cx).value(cx).trim().to_owned()))
+        Ok((project, worktree, agent, self.prompt.read(cx).value(cx).trim().to_owned()))
     }
+}
+
+/// A project's checkouts as options, the main one chosen.
+fn worktree_options(worktrees: &[Worktree]) -> (Vec<ChoiceOption>, Option<SharedString>) {
+    let options: Vec<_> = worktrees
+        .iter()
+        .map(|worktree| {
+            let detail = if worktree.main {
+                SharedString::from("the project's own folder")
+            } else {
+                SharedString::from(worktree.branch.clone().unwrap_or_else(|| worktree.path.clone()))
+            };
+            ChoiceOption::new(worktree.id.to_string(), worktree.name.clone()).detail(detail)
+        })
+        .collect();
+    let chosen = options.first().map(|option| option.key().clone());
+    (options, chosen)
 }
 
 /// A server's agents as options, and which of them to choose: `last` if it
@@ -102,6 +137,7 @@ impl Render for NewSessionForm {
         Fields::new()
             .child(Choice::new(&self.project).label("Project").placeholder("No projects yet"))
             .child(Choice::new(&self.agent).label("Agent").placeholder("No agents"))
+            .child(Choice::new(&self.worktree).label("Checkout").placeholder("The project's folder"))
             .child(TextField::new(&self.prompt).label("Message"))
             .children(self.error.clone().map(|error| Note::new(error).tone(Tone::Danger)))
     }
@@ -125,10 +161,12 @@ impl Shell {
         for server in &servers {
             let server = server.read(cx);
             for project in server.projects.iter().filter(|project| project.state == aiddiction_api::ProjectState::Ready) {
+                let worktrees = server.worktrees.get(&project.id).cloned().unwrap_or_else(|| vec![main_checkout(project)]);
                 offered.push(Offered {
                     project: project.clone(),
                     server: several.then(|| server.entry.name.clone()),
                     agents: server.agents.clone(),
+                    worktrees,
                 });
             }
         }
@@ -139,8 +177,8 @@ impl Shell {
         let shell = cx.entity().downgrade();
         open_form("New conversation", "Start", form, Some(first), move |form, window, cx| {
             match form.choice(cx) {
-                Ok((project, agent, prompt)) => {
-                    let _ = shell.update(cx, |shell, cx| shell.start_chat(project, agent, Some(prompt), window, cx));
+                Ok((project, worktree, agent, prompt)) => {
+                    let _ = shell.update(cx, |shell, cx| shell.start_chat(project, agent, worktree, Some(prompt), window, cx));
                     true
                 }
                 Err(error) => {
@@ -150,5 +188,20 @@ impl Shell {
                 }
             }
         }, window, cx);
+    }
+}
+
+/// The project's own checkout, for a project whose worktrees have not been
+/// read yet: it is always the one offered.
+pub(super) fn main_checkout(project: &aiddiction_api::Project) -> aiddiction_api::Worktree {
+    aiddiction_api::Worktree {
+        id: project.id,
+        project_id: project.id,
+        main: true,
+        name: "Main checkout".to_owned(),
+        branch: None,
+        base_commit: None,
+        path: String::new(),
+        created_at_ms: project.created_at_ms,
     }
 }

@@ -12,13 +12,14 @@
 //! the route answers with 202 and no body. A tool that fails says so in its
 //! result (`isError`), as MCP wants, rather than as a protocol error.
 
-use aiddiction_api::{Agent, AgentProfile, ProjectId, TaskId, TaskInput, TaskStatus};
+use aiddiction_api::{Agent, AgentProfile, ProjectId, TaskId, TaskInput, TaskStatus, WorktreeId};
 use serde_json::{Value, json};
 
 use crate::agents::Catalog;
 use crate::instances::Supervisor;
 use crate::orchestrate::{Caller, Orchestrator, StartRequest};
 use crate::projects::{ProjectError, Projects};
+use crate::worktrees::Worktrees;
 
 /// The protocol versions this server speaks, newest first.
 const VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
@@ -29,6 +30,7 @@ pub async fn handle(
     catalog: &Catalog,
     supervisor: &Supervisor,
     orchestration: &Orchestrator,
+    worktrees: &Worktrees,
     caller: &Caller,
     message: &Value,
 ) -> Option<Value> {
@@ -40,7 +42,7 @@ pub async fn handle(
         "initialize" => Ok(initialize(&params)),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tools(is_agent(caller)) })),
-        "tools/call" => call(projects, catalog, supervisor, orchestration, caller, &params).await,
+        "tools/call" => call(projects, catalog, supervisor, orchestration, worktrees, caller, &params).await,
         _ => Err((-32601, format!("method not found: {method}"))),
     };
     Some(match outcome {
@@ -120,15 +122,19 @@ fn tools(for_agent: bool) -> Value {
         tools.insert(1, json!({
             "name": "list_agents",
             "description": "List the ACP agents that can be started, with what each said about itself when it last \
-                initialized, and — for a project — the model and settings it last offered there.",
-            "inputSchema": { "type": "object", "properties": { "projectId": { "type": "string", "description": "A project id, for its last settings" } } },
+                initialized, and — for a project and its checkout — the model and settings it last offered there.",
+            "inputSchema": { "type": "object", "properties": {
+                "projectId": { "type": "string", "description": "A project id, for its last settings" },
+                "worktreeId": { "type": "string", "description": "A checkout id from the project's worktrees; the main one when left out" },
+            }},
         }));
         tools.insert(2, json!({
             "name": "list_subagents",
-            "description": "See the agents running for a project and their conversations, including the threads \
-                started by start_agent (a thread's taskId says which card it works on).",
+            "description": "See the agents running for a project (or one of its checkouts) and their conversations, \
+                including the threads started by start_agent (a thread's taskId says which card it works on).",
             "inputSchema": { "type": "object", "properties": {
                 "projectId": { "type": "string" },
+                "worktreeId": { "type": "string", "description": "Only agents working in this checkout" },
                 "taskId": { "type": "string", "description": "Only threads of this card" },
             }},
         }));
@@ -145,6 +151,7 @@ fn tools(for_agent: bool) -> Value {
                     "projectId": { "type": "string" },
                     "agentId": { "type": "string", "description": "An id from list_agents" },
                     "taskId": { "type": "string", "description": "The card to work on; it is linked to the thread" },
+                    "worktreeId": { "type": "string", "description": "A checkout to work in; the project's main one when left out" },
                     "prompt": { "type": "string", "description": "What to do, on top of the card" },
                     "settings": {
                         "type": "array",
@@ -169,6 +176,7 @@ async fn call(
     catalog: &Catalog,
     supervisor: &Supervisor,
     orchestration: &Orchestrator,
+    worktrees: &Worktrees,
     caller: &Caller,
     params: &Value,
 ) -> Result<Value, (i64, String)> {
@@ -195,18 +203,21 @@ async fn call(
                 .into_iter()
                 .map(|agent| {
                     let profile = supervisor.profile(&agent.id);
-                    let choices = arguments
-                        .get("projectId")
-                        .and_then(Value::as_str)
-                        .and_then(|project| project.parse::<ProjectId>().ok())
-                        .and_then(|project| {
-                            supervisor
-                                .for_project(project)
-                                .into_iter()
-                                .filter(|instance| instance.agent.id == agent.id)
-                                .filter_map(|instance| instance.proxy.latest_choices())
-                                .max_by_key(|(_, _, at)| *at)
-                        });
+                    let project = arguments.get("projectId").and_then(Value::as_str).and_then(|project| project.parse::<ProjectId>().ok());
+                    // The main checkout when no other is named.
+                    let worktree = match arguments.get("worktreeId").and_then(Value::as_str) {
+                        Some(worktree) => worktree.parse::<WorktreeId>().ok(),
+                        None => project,
+                    };
+                    let choices = project.and_then(|project| {
+                        supervisor
+                            .for_project(project)
+                            .into_iter()
+                            .filter(|instance| instance.agent.id == agent.id)
+                            .filter(|instance| worktree.is_none_or(|worktree| instance.worktree_id == worktree))
+                            .filter_map(|instance| instance.proxy.latest_choices())
+                            .max_by_key(|(_, _, at)| *at)
+                    });
                     agent_summary(agent, profile, choices)
                 })
                 .collect::<Vec<_>>()
@@ -216,6 +227,10 @@ async fn call(
                 Some(project) => Some(project.parse::<ProjectId>().map_err(|_| (-32602, "projectId is not an id".to_owned()))?),
                 None => None,
             };
+            let worktree = match arguments.get("worktreeId").and_then(Value::as_str) {
+                Some(worktree) => Some(worktree.parse::<WorktreeId>().map_err(|_| (-32602, "worktreeId is not an id".to_owned()))?),
+                None => None,
+            };
             let task = match arguments.get("taskId").and_then(Value::as_str) {
                 Some(task) => Some(task.parse::<TaskId>().map_err(|_| (-32602, "taskId is not an id".to_owned()))?),
                 None => None,
@@ -223,6 +238,7 @@ async fn call(
             let instances = project.map_or_else(|| supervisor.all(), |project| supervisor.for_project(project));
             let infos = instances
                 .into_iter()
+                .filter(|instance| worktree.is_none_or(|worktree| instance.worktree_id == worktree))
                 .map(|instance| {
                     let mut info = instance.info();
                     if let Some(task) = task {
@@ -234,7 +250,7 @@ async fn call(
                 .collect::<Vec<_>>();
             Ok(json!(infos))
         }
-        "start_agent" => start(projects, catalog, supervisor, orchestration, caller, &arguments).await,
+        "start_agent" => start(projects, catalog, supervisor, orchestration, worktrees, caller, &arguments).await,
         "list_tasks" => project_of(&arguments, caller).and_then(|project| Ok(json!(projects.tasks(project)?))),
         "create_task" => (|| {
             let project = project_of(&arguments, caller)?;
@@ -280,6 +296,7 @@ async fn start(
     catalog: &Catalog,
     supervisor: &Supervisor,
     orchestration: &Orchestrator,
+    worktrees: &Worktrees,
     caller: &Caller,
     arguments: &Value,
 ) -> Result<Value, ToolError> {
@@ -293,10 +310,15 @@ async fn start(
         Some(task) => Some(task.parse().map_err(|_| ToolError("taskId is not an id".into()))?),
         None => None,
     };
+    let worktree_id = match arguments.get("worktreeId").and_then(Value::as_str) {
+        Some(worktree) => Some(worktree.parse().map_err(|_| ToolError("worktreeId is not an id".into()))?),
+        None => None,
+    };
     let request = StartRequest {
         project,
         agent_id,
         task_id,
+        worktree_id,
         prompt,
         settings: settings(arguments)?,
         request_id: text(arguments, "requestId"),
@@ -305,7 +327,7 @@ async fn start(
         Caller::User => "user".to_owned(),
         Caller::Agent(scope) => scope.token.clone(),
     };
-    orchestration.start(projects, catalog, supervisor, &caller_key, request).await.map_err(ToolError)
+    orchestration.start(projects, catalog, supervisor, worktrees, &caller_key, request).await.map_err(ToolError)
 }
 
 fn agent_summary(agent: Agent, profile: Option<AgentProfile>, choices: Option<(Value, Value, u64)>) -> Value {
@@ -407,6 +429,7 @@ mod tests {
     use super::*;
     use crate::orchestrate::{AgentScope, Caller, Orchestrator};
     use crate::store::Store;
+    use crate::worktrees::Worktrees;
 
     fn projects() -> (Arc<Projects>, ProjectId, Arc<Store>, [tempfile::TempDir; 2]) {
         let (root, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
@@ -420,9 +443,10 @@ mod tests {
         let catalog = Catalog::new(&[], vec![]);
         let data = tempfile::tempdir().unwrap().keep();
         let store = Arc::new(Store::open(&data).unwrap());
-        let supervisor = Supervisor::new(broadcast::channel(1).0, store);
+        let supervisor = Supervisor::new(broadcast::channel(1).0, store.clone());
         let orchestration = Orchestrator::new("http://127.0.0.1:1/api/v1/mcp".into());
-        handle(projects, &catalog, &supervisor, &orchestration, caller, &json!({ "jsonrpc": "2.0", "id": 7, "method": method, "params": params }))
+        let worktrees = Worktrees::open(&tempfile::tempdir().unwrap().keep(), store, broadcast::channel(1).0).unwrap();
+        handle(projects, &catalog, &supervisor, &orchestration, &worktrees, caller, &json!({ "jsonrpc": "2.0", "id": 7, "method": method, "params": params }))
             .await
             .unwrap()
     }
@@ -440,10 +464,11 @@ mod tests {
         let catalog = Catalog::new(&[], vec![]);
         let data = tempfile::tempdir().unwrap().keep();
         let store = Arc::new(Store::open(&data).unwrap());
-        let supervisor = Supervisor::new(broadcast::channel(1).0, store);
+        let supervisor = Supervisor::new(broadcast::channel(1).0, store.clone());
         let orchestration = Orchestrator::new("http://127.0.0.1:1/api/v1/mcp".into());
+        let worktrees = Worktrees::open(&tempfile::tempdir().unwrap().keep(), store, broadcast::channel(1).0).unwrap();
         assert_eq!(
-            handle(&projects, &catalog, &supervisor, &orchestration, &Caller::User, &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))
+            handle(&projects, &catalog, &supervisor, &orchestration, &worktrees, &Caller::User, &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))
                 .await,
             None
         );

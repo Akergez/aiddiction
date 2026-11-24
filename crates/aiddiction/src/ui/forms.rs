@@ -6,7 +6,9 @@
 
 use std::collections::BTreeMap;
 
-use aiddiction_api::{Agent, AgentCommand, AgentInput, DirListing, NewProject, ProjectSource, Task, TaskId, TaskInput, TaskStatus};
+use aiddiction_api::{
+    Agent, AgentCommand, AgentInput, DirListing, NewProject, NewWorktree, ProjectSource, Task, TaskId, TaskInput, TaskStatus,
+};
 use aiddiction_client::ServerClient;
 use gpui_adaptive::{Collection, Fields, Form, Icon, IconName, ListRow, Note, Purpose, Segments, TextField, TextFieldState};
 use gpui_kit::Focusable as _;
@@ -417,6 +419,54 @@ impl TaskForm {
 impl Render for TaskForm {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         Fields::new().child(TextField::new(&self.title).label("Title")).child(TextField::new(&self.markdown).label("Details"))
+    }
+}
+
+/// A worktree of a project: a branch of its own, made from `base`, in a
+/// folder the server keeps outside the project's own checkout.
+pub struct WorktreeForm {
+    name: Entity<TextFieldState>,
+    branch: Entity<TextFieldState>,
+    base: Entity<TextFieldState>,
+}
+
+impl WorktreeForm {
+    pub fn new(window: &mut Window, cx: &mut App) -> Self {
+        Self {
+            name: line(Purpose::Message, "fix-login", "", window, cx),
+            branch: line(Purpose::Message, "aiddiction/fix-login", "", window, cx),
+            base: line(Purpose::Message, "HEAD", "", window, cx),
+        }
+    }
+
+    pub fn first(&self, cx: &App) -> FocusHandle {
+        self.name.read(cx).focus_handle(cx)
+    }
+
+    /// The worktree the fields describe; or none, with what is wrong said
+    /// under its field.
+    pub fn input(&self, cx: &mut App) -> Option<NewWorktree> {
+        let name = text(&self.name, cx);
+        if name.is_empty() {
+            wrong(&self.name, "The worktree needs a name.", cx);
+            return None;
+        }
+        let branch = text(&self.branch, cx);
+        let base = text(&self.base, cx);
+        Some(NewWorktree {
+            name: Some(name),
+            branch: (!branch.is_empty()).then_some(branch),
+            base: (!base.is_empty()).then_some(base),
+        })
+    }
+}
+
+impl Render for WorktreeForm {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Fields::new()
+            .child(TextField::new(&self.name).label("Name"))
+            .child(TextField::new(&self.branch).label("Branch"))
+            .child(TextField::new(&self.base).label("From"))
     }
 }
 

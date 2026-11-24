@@ -10,7 +10,7 @@ wait:400
 type:fake
 key:enter
 wait:300
-click:550,300
+click:550,350
 type:please make a file
 key:enter
 until:page=chat

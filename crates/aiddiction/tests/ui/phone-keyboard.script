@@ -12,14 +12,14 @@ until:dialog=open
 wait:800
 shot:phone-keyboard-dialog
 # The agent, from its own sheet.
-click:200,331
+click:200,275
 wait:800
 click:200,464
 wait:800
-click:200,432
+click:200,480
 type:please make a file
 # Start.
-click:354,142
+click:354,81
 until:page=chat
 until:permissions=1
 wait:500

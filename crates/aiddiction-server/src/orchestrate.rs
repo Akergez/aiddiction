@@ -11,13 +11,14 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use aiddiction_api::{InstanceId, Project, ProjectId, ProjectState, Task, TaskId, TaskSession};
+use aiddiction_api::{InstanceId, Project, ProjectId, ProjectState, Task, TaskId, TaskSession, WorktreeId};
 use serde_json::{Value, json};
 
 use crate::agents::Catalog;
 use crate::instances::Supervisor;
 use crate::projects::Projects;
 use crate::proxy::now_ms;
+use crate::worktrees::{WorktreeError, Worktrees};
 
 /// `npx` may fetch an adapter on first use, as when a client starts one.
 const READY_TIMEOUT: Duration = Duration::from_secs(180);
@@ -47,6 +48,8 @@ pub struct StartRequest {
     pub project: ProjectId,
     pub agent_id: String,
     pub task_id: Option<TaskId>,
+    /// The checkout to work in; none for the project's own.
+    pub worktree_id: Option<WorktreeId>,
     pub prompt: String,
     /// ACP configuration option ids and values, applied in this order.
     pub settings: Vec<(String, Value)>,
@@ -82,6 +85,7 @@ impl Orchestrator {
         projects: &Projects,
         catalog: &Catalog,
         supervisor: &Supervisor,
+        worktrees: &Worktrees,
         caller: &str,
         request: StartRequest,
     ) -> Result<Value, String> {
@@ -106,9 +110,17 @@ impl Orchestrator {
             None => None,
         };
         let agent = catalog.get(&request.agent_id).ok_or_else(|| format!("unknown agent: {}", request.agent_id))?;
+        let dir = projects.dir(&project);
+        let worktree = match request.worktree_id {
+            Some(worktree) => worktrees.get(&project, &dir, worktree).await.map_err(|error| match error {
+                WorktreeError::NotFound => "no such worktree in the project".to_owned(),
+                error => format!("{error:#}"),
+            })?,
+            None => worktrees.get(&project, &dir, project.id).await.map_err(|error| format!("{error:#}"))?,
+        };
 
         let instance = supervisor
-            .start(project.id, projects.dir(&project), agent.clone())
+            .start(project.id, worktree.id, worktree.name.clone(), std::path::PathBuf::from(&worktree.path), agent.clone())
             .map_err(|error| format!("could not start the agent: {error:#}"))?;
         let init = instance.proxy.wait_initialized(READY_TIMEOUT).await?;
 
@@ -186,6 +198,7 @@ impl Orchestrator {
             "agentId": agent.id,
             "instanceId": instance.id,
             "sessionId": session,
+            "worktreeId": worktree.id,
             "board": scoped,
         });
         if let Some(key) = repeat {

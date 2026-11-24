@@ -19,6 +19,7 @@ mod orchestrate;
 mod projects;
 mod proxy;
 mod store;
+mod worktrees;
 
 use std::sync::Arc;
 
@@ -105,8 +106,9 @@ async fn serve(config: Config, store: Arc<Store>, token: String, new_token: bool
         store: store.clone(),
         catalog,
         projects,
-        supervisor: Supervisor::new(events.clone(), store),
+        supervisor: Supervisor::new(events.clone(), store.clone()),
         orchestration: crate::orchestrate::Orchestrator::new(mcp_url),
+        worktrees: crate::worktrees::Worktrees::open(&config.projects_root, store, events.clone())?,
         events,
     });
     tracing::info!("listening on http://{address}, projects in {}", config.projects_root.display());

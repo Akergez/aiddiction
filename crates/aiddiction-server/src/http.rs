@@ -3,8 +3,9 @@
 use std::sync::Arc;
 
 use aiddiction_api::{
-    API_VERSION, AgentInput, ApiError, ErrorBody, Health, InstanceId, InstanceState, LoginInput, NewProject,
+    API_VERSION, AgentInput, ApiError, ErrorBody, Health, InstanceId, InstanceState, LoginInput, NewProject, NewWorktree,
     PermissionAnswer, ProjectId, ProjectState, ServerEvent, ServerInfo, StartInstance, StartLogin, TaskId, TaskInput,
+    WorktreeId,
 };
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Extension, Path, Query, Request, State};
@@ -23,6 +24,7 @@ use crate::instances::Supervisor;
 use crate::orchestrate::{Caller, Orchestrator};
 use crate::projects::{ProjectError, Projects};
 use crate::store::Store;
+use crate::worktrees::{WorktreeError, Worktrees};
 
 /// Big enough for any one ACP message seen in the wild (model catalogues,
 /// whole files in tool calls).
@@ -35,6 +37,7 @@ pub struct AppState {
     pub projects: Arc<Projects>,
     pub supervisor: Supervisor,
     pub orchestration: Orchestrator,
+    pub worktrees: Worktrees,
     pub events: broadcast::Sender<ServerEvent>,
 }
 
@@ -51,6 +54,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/projects/{id}/review/refs", get(review_refs))
         .route("/projects/{id}", axum::routing::patch(rename_project).delete(delete_project))
         .route("/projects/{id}/instances", get(list_instances).post(start_instance))
+        .route("/projects/{id}/worktrees", get(list_worktrees).post(create_worktree))
+        .route("/projects/{id}/worktrees/{worktree_id}", axum::routing::delete(delete_worktree))
         .route("/projects/{id}/tasks", get(list_tasks).post(create_task))
         .route("/projects/{id}/tasks/{task_id}", axum::routing::patch(update_task).delete(delete_task))
         .route("/instances", get(list_all_instances))
@@ -95,6 +100,20 @@ impl From<CatalogError> for Failure {
             CatalogError::Invalid(_) => (StatusCode::BAD_REQUEST, "invalid"),
         };
         Failure(status, code, error.to_string())
+    }
+}
+
+impl From<WorktreeError> for Failure {
+    fn from(error: WorktreeError) -> Self {
+        let (status, code) = match error {
+            WorktreeError::NotFound => (StatusCode::NOT_FOUND, "worktree_not_found"),
+            WorktreeError::Main => (StatusCode::BAD_REQUEST, "invalid"),
+            WorktreeError::Invalid(_) => (StatusCode::BAD_REQUEST, "invalid"),
+            WorktreeError::Busy => (StatusCode::CONFLICT, "worktree_busy"),
+            WorktreeError::Dirty => (StatusCode::CONFLICT, "worktree_dirty"),
+            WorktreeError::Io(_) => (StatusCode::INTERNAL_SERVER_ERROR, "io"),
+        };
+        Failure(status, code, format!("{error:#}"))
     }
 }
 
@@ -204,7 +223,7 @@ async fn delete_task(State(state): Shared, Path((id, task_id)): Path<(ProjectId,
 /// The MCP server agents use (`crate::mcp`): a notification is taken with
 /// 202 and no body, as Streamable HTTP wants.
 async fn mcp(State(state): Shared, Extension(caller): Extension<Caller>, Json(message): Json<Value>) -> Response {
-    match crate::mcp::handle(&state.projects, &state.catalog, &state.supervisor, &state.orchestration, &caller, &message).await {
+    match crate::mcp::handle(&state.projects, &state.catalog, &state.supervisor, &state.orchestration, &state.worktrees, &caller, &message).await {
         Some(answer) => Json(answer).into_response(),
         None => StatusCode::ACCEPTED.into_response(),
     }
@@ -277,8 +296,53 @@ async fn delete_project(
     Path(id): Path<ProjectId>,
     Query(options): Query<DeleteOptions>,
 ) -> Result<impl IntoResponse> {
+    let project = state.projects.get(id).ok_or(ProjectError::NotFound)?;
+    let dir = state.projects.dir(&project);
     state.supervisor.stop_project(id);
+    // The checkouts the server made for the project go with it; the branch
+    // stays in the repository.
+    state.worktrees.remove_project(&project, &dir);
     state.projects.delete(id, options.delete_files)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_worktrees(State(state): Shared, Path(id): Path<ProjectId>) -> Result<impl IntoResponse> {
+    let project = state.projects.get(id).ok_or(ProjectError::NotFound)?;
+    let dir = state.projects.dir(&project);
+    Ok(Json(state.worktrees.list_for(&project, &dir).await))
+}
+
+async fn create_worktree(
+    State(state): Shared,
+    Path(id): Path<ProjectId>,
+    Json(input): Json<NewWorktree>,
+) -> Result<impl IntoResponse> {
+    let project = state.projects.get(id).ok_or(ProjectError::NotFound)?;
+    if project.state != ProjectState::Ready {
+        return Err(Failure(StatusCode::CONFLICT, "project_not_ready", "the project is not ready yet".into()));
+    }
+    let dir = state.projects.dir(&project);
+    let worktree = state.worktrees.create(&project, &dir, input).await?;
+    Ok((StatusCode::CREATED, Json(worktree)))
+}
+
+/// Removes a worktree: not while an agent runs in it, not with changes in it;
+/// its branch is kept.
+async fn delete_worktree(
+    State(state): Shared,
+    Path((id, worktree)): Path<(ProjectId, WorktreeId)>,
+) -> Result<impl IntoResponse> {
+    let project = state.projects.get(id).ok_or(ProjectError::NotFound)?;
+    let busy = state
+        .supervisor
+        .for_worktree(id, worktree)
+        .iter()
+        .any(|instance| matches!(instance.state(), InstanceState::Starting | InstanceState::Ready));
+    if busy {
+        return Err(WorktreeError::Busy.into());
+    }
+    let dir = state.projects.dir(&project);
+    state.worktrees.remove(&project, &dir, worktree).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -304,9 +368,14 @@ async fn start_instance(
         return Err(Failure(StatusCode::CONFLICT, "project_not_ready", "the project is not ready yet".into()));
     }
     let agent = state.catalog.get(&input.agent_id).ok_or(CatalogError::NotFound)?;
+    let dir = state.projects.dir(&project);
+    let worktree = match input.worktree_id {
+        Some(worktree) => state.worktrees.get(&project, &dir, worktree).await?,
+        None => state.worktrees.get(&project, &dir, project.id).await?,
+    };
     let instance = state
         .supervisor
-        .start(id, state.projects.dir(&project), agent)
+        .start(id, worktree.id, worktree.name.clone(), std::path::PathBuf::from(&worktree.path), agent)
         .map_err(|error| Failure(StatusCode::INTERNAL_SERVER_ERROR, "agent_start_failed", format!("{error:#}")))?;
     Ok((StatusCode::CREATED, Json(instance.info())))
 }

@@ -12,14 +12,14 @@ click:356,676
 until:dialog=open
 wait:800
 # The agent: a sheet of the server's agents.
-click:200,643
+click:200,528
 wait:800
 click:200,764
 wait:800
 click:200,730
 type:please make a file
 # Start.
-click:354,442
+click:354,324
 until:page=chat
 until:permissions=1
 wait:500

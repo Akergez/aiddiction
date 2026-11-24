@@ -6,7 +6,7 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use aiddiction_api::{Agent, AgentProfile, Instance as InstanceInfo, InstanceId, InstanceState, ProjectId, ServerEvent};
+use aiddiction_api::{Agent, AgentProfile, Instance as InstanceInfo, InstanceId, InstanceState, ProjectId, ServerEvent, WorktreeId};
 use anyhow::Context as _;
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::process::Command;
@@ -33,6 +33,9 @@ pub struct Supervisor {
 pub struct Instance {
     pub id: InstanceId,
     pub project_id: ProjectId,
+    /// The checkout it works in: the project's own, or a worktree.
+    pub worktree_id: aiddiction_api::WorktreeId,
+    pub worktree_name: String,
     pub agent: Agent,
     pub proxy: Arc<Proxy>,
     root: PathBuf,
@@ -49,6 +52,8 @@ impl Instance {
         InstanceInfo {
             id: self.id,
             project_id: self.project_id,
+            worktree_id: self.worktree_id,
+            worktree_name: self.worktree_name.clone(),
             agent_id: self.agent.id.clone(),
             agent_name: self.agent.name.clone(),
             state,
@@ -142,6 +147,17 @@ impl Supervisor {
         found
     }
 
+    /// The instances working in one checkout, running or not.
+    pub fn for_worktree(&self, project: ProjectId, worktree: WorktreeId) -> Vec<Arc<Instance>> {
+        self.instances
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|instance| instance.project_id == project && instance.worktree_id == worktree)
+            .cloned()
+            .collect()
+    }
+
     /// Every instance, of every project.
     pub fn all(&self) -> Vec<Arc<Instance>> {
         let mut found: Vec<_> = self.instances.lock().unwrap().values().cloned().collect();
@@ -168,19 +184,31 @@ impl Supervisor {
         }
     }
 
-    /// The running instance of `agent` in the project, or a new one. A new
-    /// one answers at once in [`InstanceState::Starting`]; clients may
-    /// connect straight away, their `initialize` waits for the agent's.
-    pub fn start(&self, project: ProjectId, root: PathBuf, agent: Agent) -> anyhow::Result<Arc<Instance>> {
+    /// The running instance of `agent` in the project's checkout, or a new
+    /// one. A new one answers at once in [`InstanceState::Starting`]; clients
+    /// may connect straight away, their `initialize` waits for the agent's.
+    pub fn start(
+        &self,
+        project: ProjectId,
+        worktree: WorktreeId,
+        worktree_name: String,
+        root: PathBuf,
+        agent: Agent,
+    ) -> anyhow::Result<Arc<Instance>> {
         let mut instances = self.instances.lock().unwrap();
-        if let Some(running) = instances
-            .values()
-            .find(|instance| instance.project_id == project && instance.agent.id == agent.id && instance.running())
-        {
+        if let Some(running) = instances.values().find(|instance| {
+            instance.project_id == project
+                && instance.worktree_id == worktree
+                && instance.agent.id == agent.id
+                && instance.running()
+        }) {
             return Ok(running.clone());
         }
-        // An exited instance of the same agent is replaced.
-        instances.retain(|_, instance| !(instance.project_id == project && instance.agent.id == agent.id));
+        // An exited instance of the same agent in the same checkout is
+        // replaced.
+        instances.retain(|_, instance| {
+            !(instance.project_id == project && instance.worktree_id == worktree && instance.agent.id == agent.id)
+        });
 
         let root = root.canonicalize().with_context(|| format!("opening {}", root.display()))?;
         let mut command = shell_command(&agent);
@@ -204,6 +232,8 @@ impl Supervisor {
         let instance = Arc::new(Instance {
             id,
             project_id: project,
+            worktree_id: worktree,
+            worktree_name,
             agent: agent.clone(),
             proxy: proxy.clone(),
             root,

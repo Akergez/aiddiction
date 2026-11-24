@@ -129,7 +129,7 @@ async fn a_custom_agent_writes_a_file_and_the_session_replays() {
         .await
         .unwrap();
     assert_eq!(project.dir_name, "demo-project");
-    let instance = client.start_instance(project.id, &fake.id).await.unwrap();
+    let instance = client.start_instance(project.id, &fake.id, None).await.unwrap();
 
     let mut acp = Acp { socket: client.acp(instance.id).await.unwrap(), next_id: 0 };
     let init = acp.request("initialize", json!({ "protocolVersion": 1, "clientCapabilities": {} })).await;
@@ -203,7 +203,7 @@ async fn an_agent_is_signed_in_in_a_terminal_and_with_a_page() {
         .await
         .unwrap();
     let project = client.create_project(&NewProject { name: "Locked".into(), source: ProjectSource::Empty }).await.unwrap();
-    let instance = client.start_instance(project.id, &fake.id).await.unwrap();
+    let instance = client.start_instance(project.id, &fake.id, None).await.unwrap();
 
     let mut acp = Acp { socket: client.acp(instance.id).await.unwrap(), next_id: 0 };
     let init = acp.request("initialize", json!({ "protocolVersion": 1, "clientCapabilities": {} })).await;
@@ -399,4 +399,142 @@ async fn start_agent_puts_a_child_thread_in_the_common_list_on_its_card() {
     assert_eq!(agent["profile"]["stale"], false);
     assert_eq!(agent["profile"]["agentInfo"]["name"], "fake-agent");
     assert!(agent["lastChoices"]["configOptions"].is_array());
+}
+
+fn git_in(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
+    std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@t")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@t")
+        .output()
+        .unwrap()
+}
+
+/// A worktree is a checkout of its own on a new branch: agents work there,
+/// it cannot be removed under a running agent or with changes, and its
+/// branch stays when it goes.
+#[tokio::test(flavor = "multi_thread")]
+async fn agents_work_in_a_worktree_of_their_own_and_its_branch_outlives_it() {
+    aiddiction_client::install_crypto_provider();
+    let server = start_server().await;
+    let client = ServerClient::new(&server.url, "secret").unwrap();
+    let fake = fake_agent_on(&client, "Worktree agent").await;
+
+    let repo = tempfile::tempdir().unwrap();
+    assert!(git_in(repo.path(), &["init", "-q", "-b", "main"]).status.success());
+    std::fs::write(repo.path().join("a.txt"), "one\n").unwrap();
+    assert!(git_in(repo.path(), &["add", "."]).status.success());
+    assert!(git_in(repo.path(), &["commit", "-q", "-m", "first"]).status.success());
+    let project = client
+        .create_project(&NewProject { name: "With worktrees".into(), source: ProjectSource::Existing { path: repo.path().display().to_string() } })
+        .await
+        .unwrap();
+
+    let checkouts = client.worktrees(project.id).await.unwrap();
+    assert_eq!(checkouts.len(), 1);
+    assert!(checkouts[0].main);
+    assert_eq!(checkouts[0].branch.as_deref(), Some("main"));
+    assert_eq!(checkouts[0].id, project.id);
+
+    let made = client
+        .create_worktree(project.id, &aiddiction_api::NewWorktree { name: Some("Feature".into()), ..Default::default() })
+        .await
+        .unwrap();
+    assert_eq!(made.branch.as_deref(), Some("aiddiction/feature"));
+    assert_eq!(made.base_commit.as_deref().map(|commit| commit.len()), Some(40));
+    assert!(!std::path::Path::new(&made.path).starts_with(repo.path()));
+    assert!(std::path::Path::new(&made.path).join("a.txt").is_file());
+    assert_eq!(client.worktrees(project.id).await.unwrap().len(), 2);
+
+    // An agent in it is an agent of its own, and it is reused there.
+    let in_worktree = client.start_instance(project.id, &fake.id, Some(made.id)).await.unwrap();
+    assert_eq!(in_worktree.worktree_id, made.id);
+    assert_eq!(in_worktree.worktree_name, "feature");
+    assert_eq!(client.start_instance(project.id, &fake.id, Some(made.id)).await.unwrap().id, in_worktree.id);
+    let in_main = client.start_instance(project.id, &fake.id, None).await.unwrap();
+    assert_ne!(in_main.id, in_worktree.id);
+    assert_eq!(in_main.worktree_id, project.id);
+
+    // Not while it runs.
+    let busy = client.delete_worktree(project.id, made.id).await.unwrap_err();
+    assert!(matches!(busy, aiddiction_client::Error::Api { status: 409, .. }), "{busy}");
+    client.stop_instance(in_worktree.id).await.unwrap();
+    client.stop_instance(in_main.id).await.unwrap();
+
+    // Not with changes in it.
+    std::fs::write(std::path::Path::new(&made.path).join("b.txt"), "two\n").unwrap();
+    let dirty = client.delete_worktree(project.id, made.id).await.unwrap_err();
+    assert!(matches!(dirty, aiddiction_client::Error::Api { status: 409, .. }), "{dirty}");
+    std::fs::remove_file(std::path::Path::new(&made.path).join("b.txt")).unwrap();
+    client.delete_worktree(project.id, made.id).await.unwrap();
+    assert!(!std::path::Path::new(&made.path).exists());
+    assert!(git_in(repo.path(), &["rev-parse", "--verify", "refs/heads/aiddiction/feature"]).status.success());
+
+    // The project's own checkout is not one to remove.
+    let main = client.delete_worktree(project.id, project.id).await.unwrap_err();
+    assert!(matches!(main, aiddiction_client::Error::Api { status: 400, .. }), "{main}");
+}
+
+/// MCP starts an agent in a given checkout: the thread is in that worktree,
+/// and following the card shows it there.
+#[tokio::test(flavor = "multi_thread")]
+async fn start_agent_works_in_the_worktree_it_is_given() {
+    aiddiction_client::install_crypto_provider();
+    let server = start_server().await;
+    let client = ServerClient::new(&server.url, "secret").unwrap();
+    let fake = fake_agent_on(&client, "Checkout agent").await;
+    let repo = tempfile::tempdir().unwrap();
+    assert!(git_in(repo.path(), &["init", "-q", "-b", "main"]).status.success());
+    std::fs::write(repo.path().join("a.txt"), "one\n").unwrap();
+    assert!(git_in(repo.path(), &["add", "."]).status.success());
+    assert!(git_in(repo.path(), &["commit", "-q", "-m", "first"]).status.success());
+    let project = client
+        .create_project(&NewProject { name: "MCP worktrees".into(), source: ProjectSource::Existing { path: repo.path().display().to_string() } })
+        .await
+        .unwrap();
+    let made = client.create_worktree(project.id, &aiddiction_api::NewWorktree { name: Some("card".into()), ..Default::default() }).await.unwrap();
+    let task = client
+        .create_task(project.id, &TaskInput { title: "In a worktree".into(), markdown: String::new(), status: None })
+        .await
+        .unwrap();
+
+    let started = board(
+        &client,
+        "start_agent",
+        json!({
+            "projectId": project.id,
+            "agentId": fake.id,
+            "taskId": task.id,
+            "worktreeId": made.id,
+            "prompt": "Work in the worktree",
+        }),
+    )
+    .await
+    .unwrap();
+    let instance = started["instanceId"].as_str().unwrap().parse().unwrap();
+    assert_eq!(started["worktreeId"], json!(made.id));
+    let info = client.instance(instance).await.unwrap();
+    assert_eq!(info.worktree_id, made.id);
+    assert_eq!(info.worktree_name, "card");
+
+    let children = board(&client, "list_subagents", json!({ "projectId": project.id, "taskId": task.id, "worktreeId": made.id })).await.unwrap();
+    assert_eq!(children[0]["worktreeId"], json!(made.id));
+    assert_eq!(children[0]["sessions"].as_array().unwrap().len(), 1);
+    let none_here = board(&client, "list_subagents", json!({ "projectId": project.id, "taskId": task.id, "worktreeId": project.id })).await.unwrap();
+    assert_eq!(none_here, json!([]));
+
+    // The agent runs in the worktree's folder: the fake agent writes a file
+    // there when it is told to, and the project's checkout does not see it.
+    let session = started["sessionId"].as_str().unwrap().to_owned();
+    let mut acp = Acp { socket: client.acp(instance).await.unwrap(), next_id: 0 };
+    let init = acp.request("initialize", json!({ "protocolVersion": 1, "clientCapabilities": {} })).await;
+    acp.until_response(init, &mut Vec::new()).await;
+    let prompt = acp.request("session/prompt", json!({ "sessionId": session, "prompt": [{ "type": "text", "text": "make a file" }] })).await;
+    let answer = acp.until_response(prompt, &mut Vec::new()).await;
+    assert_eq!(answer["result"]["stopReason"], "end_turn");
+    assert!(std::path::Path::new(&made.path).join("hello.txt").is_file());
+    assert!(!repo.path().join("hello.txt").exists());
 }

@@ -1,7 +1,7 @@
 //! A project's page: where it came from, the agents running in it, and its
 //! conversations. New conversations and the review start here too.
 
-use aiddiction_api::{InstanceState, ProjectId, ProjectState, Task, TaskStatus};
+use aiddiction_api::{InstanceState, Project, ProjectId, ProjectState, Task, TaskStatus, Worktree};
 use gpui_adaptive::prim::column;
 use gpui_adaptive::{
     ActiveScale, Banner, Busy, Code, Collection, Command, Confirm, Empty, Env, Icon, IconName, ItemActions, ListRow, Note, Screen,
@@ -11,7 +11,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::{AppContext, Context, Entity, SharedString, Window};
 
 use super::board::{Board, BoardColumn, Card};
-use super::forms::{ProjectForm, TaskForm, open_form};
+use super::forms::{ProjectForm, TaskForm, WorktreeForm, open_form};
 use super::shell::{Page, Shell};
 use crate::server::ServerConnection;
 
@@ -20,10 +20,16 @@ impl Shell {
         let env = Env::of(window, cx);
         let gone = || Screen::new("project-gone", "").scrolls(false).content(Empty::new(IconName::Folder, "This project is gone."));
         let Some(server) = self.server_of(id, cx) else { return gone() };
-        let (project, instances, tasks) = {
+        let (project, instances, tasks, worktrees) = {
             let server = server.read(cx);
             let Some(project) = server.project(id).cloned() else { return gone() };
-            (project, server.instances.get(&id).cloned().unwrap_or_default(), server.tasks.get(&id).cloned().unwrap_or_default())
+            let worktrees = server
+                .worktrees
+                .get(&id)
+                .filter(|worktrees| !worktrees.is_empty())
+                .cloned()
+                .unwrap_or_else(|| vec![super::new_session::main_checkout(&project)]);
+            (project, server.instances.get(&id).cloned().unwrap_or_default(), server.tasks.get(&id).cloned().unwrap_or_default(), worktrees)
         };
         let ready = project.state == ProjectState::Ready;
 
@@ -31,10 +37,13 @@ impl Shell {
         let screen = Screen::new("project", project.name.clone())
             .subtitle(super::inbox::origin(&project))
             .when(ready, |screen| {
-                let (review, start) = (shell.clone(), shell.clone());
+                let (review, start, worktree) = (shell.clone(), shell.clone(), shell.clone());
                 screen
                     .command(Command::new("review", "Review changes").icon(IconName::FileText).on_trigger(move |window, cx| {
                         review.update(cx, |shell, cx| shell.open_review(id, window, cx)).ok();
+                    }))
+                    .command(Command::new("new-worktree", "New worktree").icon(IconName::Plus).on_trigger(move |window, cx| {
+                        worktree.update(cx, |shell, cx| shell.new_worktree(id, window, cx)).ok();
                     }))
                     .command(
                         Command::new("project-new-chat", "New conversation").icon(IconName::Plus).primary().on_trigger(
@@ -84,6 +93,12 @@ impl Shell {
                                 InstanceState::Failed => Some(Signal::Waiting(Tone::Danger)),
                                 InstanceState::Ready | InstanceState::Exited => None,
                             };
+                            // Which checkout it works in, when it is not the project's own.
+                            let state: SharedString = if instance.worktree_id != id && !instance.worktree_name.is_empty() {
+                                format!("{state} · {}", instance.worktree_name).into()
+                            } else {
+                                state
+                            };
                             let (stopped, stop_server) = (instance.clone(), server.clone());
                             let stop = Command::new(SharedString::from(format!("stop-{}", instance.id)), if alive { "Stop the agent" } else { "Dismiss" })
                                 .icon(if alive { IconName::Pause } else { IconName::Close })
@@ -120,6 +135,7 @@ impl Shell {
                 page = page.child(
                     column().gap(cx.scale().space_s).child(SectionHeader::new("Tasks")).child(self.render_board(&server, id, &tasks, cx)),
                 );
+                page = page.child(self.render_checkouts(&project, &worktrees, env, cx));
                 let conversations = Collection::new("project-conversations");
                 let conversations = if listed.is_empty() {
                     conversations
@@ -247,6 +263,80 @@ impl Shell {
             });
             true
         }, window, cx);
+    }
+
+    /// The project's checkouts: its own, then the worktrees the server made,
+    /// with the branch each one has. A worktree can be removed here.
+    fn render_checkouts(
+        &mut self,
+        project: &Project,
+        worktrees: &[Worktree],
+        env: Env,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let project_id = project.id;
+        let rows: Vec<ListRow> = worktrees
+            .iter()
+            .map(|worktree| {
+                let subtitle = if worktree.main {
+                    "the project's own checkout".to_owned()
+                } else {
+                    worktree.branch.clone().unwrap_or_else(|| worktree.path.clone())
+                };
+                let row = ListRow::new(SharedString::from(format!("worktree-{}", worktree.id)), worktree.name.clone())
+                    .leading(Icon::new(IconName::Folder))
+                    .subtitle(subtitle);
+                if worktree.main {
+                    return row.muted(true);
+                }
+                let removed = worktree.clone();
+                let shell = cx.entity().downgrade();
+                let remove = Command::new(SharedString::from(format!("worktree-{}-remove", worktree.id)), "Remove worktree")
+                    .icon(IconName::Delete)
+                    .destructive()
+                    .on_trigger(move |window, cx| {
+                        shell
+                            .update(cx, |shell, cx| shell.delete_worktree(project_id, removed.clone(), window, cx))
+                            .ok();
+                    });
+                row.trailing(remove.icon_button(env))
+            })
+            .collect();
+        column()
+            .gap(cx.scale().space_s)
+            .child(SectionHeader::new("Checkouts"))
+            .child(Collection::new("project-worktrees").children(rows))
+    }
+
+    /// Asks for a branch and makes a worktree the server keeps outside the
+    /// project's own checkout.
+    fn new_worktree(&mut self, project: ProjectId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(server) = self.server_of(project, cx) else { return };
+        let form = cx.new(|cx| WorktreeForm::new(window, cx));
+        let first = form.read(cx).first(cx);
+        open_form("New worktree", "Create", form, Some(first), move |form, _, cx| {
+            let Some(input) = form.input(cx) else { return false };
+            server.update(cx, |server, cx| {
+                server.create_worktree(project, input, cx, |result, cx| {
+                    if let Err(error) = result {
+                        crate::ui::toast_error(format!("Could not make the worktree: {error}"), cx);
+                    }
+                })
+            });
+            true
+        }, window, cx);
+    }
+
+    /// Asks before removing a worktree: the agent must be stopped and the
+    /// files committed; its branch stays.
+    fn delete_worktree(&mut self, project: ProjectId, worktree: Worktree, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(server) = self.server_of(project, cx) else { return };
+        Confirm::new("remove-worktree-confirm", format!("Remove the worktree “{}”?", worktree.name))
+            .body("Its branch stays in the repository. Stop the agents working in it and commit what is there first.")
+            .confirm(Command::new("remove-worktree-yes", "Remove").destructive().on_trigger(move |_, cx| {
+                server.update(cx, |server, cx| server.delete_worktree(project, worktree.id, cx));
+            }))
+            .open(window, cx);
     }
 
     fn delete_project(&mut self, id: ProjectId, window: &mut Window, cx: &mut Context<Self>) {

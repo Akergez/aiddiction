@@ -1,0 +1,66 @@
+# A project's checkouts: a worktree made from the form, a conversation
+# started in it, and the worktree removed.
+# size: 1100x760
+until:page=inbox
+until:projects=1
+wait:800
+click:28,140
+until:page=projects
+click:220,60
+until:page=project
+wait:500
+expect:worktrees=1
+shot:worktrees-main
+# New worktree: a name is enough; the branch and the base have defaults.
+click:865,18
+until:dialog=open
+wait:300
+type:fix-login
+wait:300
+shot:worktrees-form
+key:enter
+until:worktrees=2
+wait:600
+shot:worktrees-created
+# A conversation in it: the checkout is a choice of its own.
+click:992,18
+until:dialog=open
+wait:400
+click:550,272
+wait:400
+shot:worktrees-choice
+click:550,338
+wait:300
+# The fake agent, by typing in its list.
+click:550,217
+wait:300
+type:fake
+key:enter
+wait:300
+click:550,356
+type:please make a file
+key:enter
+until:page=chat
+until:sessions=1
+wait:800
+shot:worktrees-chat
+# Back to the project: the agent works in the worktree.
+click:28,140
+until:page=projects
+click:220,60
+until:page=project
+wait:800
+shot:worktrees-running
+# Stop the agent, then the worktree can go.
+click:1060,110
+wait:1200
+shot:worktrees-stopped
+click:1062,391
+until:dialog=open
+wait:400
+shot:worktrees-remove-confirm
+click:659,205
+until:worktrees=1
+wait:800
+shot:worktrees-removed
+quit

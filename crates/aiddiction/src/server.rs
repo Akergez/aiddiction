@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use aiddiction_api::{
-    Agent, AgentInput, Instance, InstanceId, NewProject, PermissionAnswer, Project, ProjectId, ServerEvent, ServerInfo, Task,
-    TaskId, TaskInput, TaskStatus,
+    Agent, AgentInput, Instance, InstanceId, NewProject, NewWorktree, PermissionAnswer, Project, ProjectId, ServerEvent, ServerInfo,
+    Task, TaskId, TaskInput, TaskStatus, Worktree, WorktreeId,
 };
 use aiddiction_client::{Error, ServerClient};
 use gpui_kit::{App, Context};
@@ -33,6 +33,8 @@ pub struct ServerConnection {
     pub agents: Vec<Agent>,
     pub instances: HashMap<ProjectId, Vec<Instance>>,
     pub tasks: HashMap<ProjectId, Vec<Task>>,
+    /// Every project's checkouts, its own first; read with the projects.
+    pub worktrees: HashMap<ProjectId, Vec<Worktree>>,
     /// Bumped on every (re)connection, so a stale event loop stops.
     generation: u64,
 }
@@ -52,6 +54,7 @@ impl ServerConnection {
             agents: Vec::new(),
             instances: HashMap::new(),
             tasks: HashMap::new(),
+            worktrees: HashMap::new(),
             generation: 0,
         };
         this.connect(cx);
@@ -86,8 +89,7 @@ impl ServerConnection {
                         this.refresh_projects(cx);
                         this.refresh_agents(cx);
                         this.refresh_all_instances(cx);
-                        this.listen(generation, cx);
-                    }
+                        this.listen(generation, cx);                    }
                     Err(error) => this.went_offline(error, generation, cx),
                 }
                 cx.notify();
@@ -159,6 +161,7 @@ impl ServerConnection {
             ServerEvent::AgentsChanged => self.refresh_agents(cx),
             ServerEvent::InstancesChanged { project_id } => self.refresh_instances(project_id, cx),
             ServerEvent::TasksChanged { project_id } => self.refresh_tasks(project_id, cx),
+            ServerEvent::WorktreesChanged { project_id } => self.refresh_worktrees(project_id, cx),
         }
     }
 
@@ -191,6 +194,7 @@ impl ServerConnection {
                 projects.sort_by_key(|project| std::cmp::Reverse(project.created_at_ms));
                 this.projects = projects;
                 this.refresh_all_tasks(cx);
+                this.refresh_all_worktrees(cx);
             }
             Err(error) => tracing::warn!("could not read the projects: {error}"),
         });
@@ -265,6 +269,46 @@ impl ServerConnection {
                 this.tasks.insert(project, tasks);
             }
             Err(error) => tracing::warn!("could not read the tasks: {error}"),
+        });
+    }
+
+    /// Every known project's checkouts: called once the projects are read.
+    pub fn refresh_all_worktrees(&mut self, cx: &mut Context<Self>) {
+        let projects = self.projects.iter().map(|project| project.id).collect::<Vec<_>>();
+        self.worktrees.retain(|project, _| projects.contains(project));
+        for project in projects {
+            self.refresh_worktrees(project, cx);
+        }
+    }
+
+    pub fn refresh_worktrees(&mut self, project: ProjectId, cx: &mut Context<Self>) {
+        self.call(cx, move |client| async move { client.worktrees(project).await }, move |this, result, _| match result {
+            Ok(worktrees) => {
+                this.worktrees.insert(project, worktrees);
+            }
+            Err(error) => tracing::warn!("could not read the worktrees: {error}"),
+        });
+    }
+
+    pub fn create_worktree(
+        &mut self,
+        project: ProjectId,
+        input: NewWorktree,
+        cx: &mut Context<Self>,
+        done: impl FnOnce(Result<Worktree, Error>, &mut App) + 'static,
+    ) {
+        self.call(cx, move |client| async move { client.create_worktree(project, &input).await }, move |this, result, cx| {
+            this.refresh_worktrees(project, cx);
+            cx.defer(move |cx| done(result, cx));
+        });
+    }
+
+    pub fn delete_worktree(&mut self, project: ProjectId, worktree: WorktreeId, cx: &mut Context<Self>) {
+        self.call(cx, move |client| async move { client.delete_worktree(project, worktree).await }, move |this, result, cx| {
+            if let Err(error) = result {
+                crate::ui::toast_error(format!("Could not remove the worktree: {error}"), cx);
+            }
+            this.refresh_worktrees(project, cx);
         });
     }
 
@@ -384,12 +428,13 @@ impl ServerConnection {
         &mut self,
         project: ProjectId,
         agent_id: String,
+        worktree: Option<WorktreeId>,
         cx: &mut Context<Self>,
         done: impl FnOnce(Result<Instance, Error>, &mut App) + 'static,
     ) {
         self.call(
             cx,
-            move |client| async move { client.start_instance(project, &agent_id).await },
+            move |client| async move { client.start_instance(project, &agent_id, worktree).await },
             move |this, result, cx| {
                 this.refresh_instances(project, cx);
                 // After this update, so `done` may update this entity again.

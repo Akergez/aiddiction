@@ -13,7 +13,7 @@ wait:400
 type:fake
 key:enter
 wait:300
-click:550,300
+click:550,350
 type:hello
 key:enter
 until:page=chat

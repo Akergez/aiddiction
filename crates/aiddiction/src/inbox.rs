@@ -164,6 +164,8 @@ mod tests {
         Instance {
             id: uuid::Uuid::now_v7(),
             project_id: project.id,
+            worktree_id: project.id,
+            worktree_name: project.dir_name.clone(),
             agent_id: "fake".into(),
             agent_name: "Fake".into(),
             state,

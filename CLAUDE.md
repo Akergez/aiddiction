@@ -100,7 +100,7 @@ and linker (host clang + the NDK's sysroot + rust-lld).
 |---|---|
 | `aiddiction-paths` | Where both programs keep files: an XDG variable if set, else the platform's standard directory. |
 | `aiddiction-api` | REST/event DTOs and the names of the proxy's ACP extensions (`_aiddiction/attach`, `_aiddiction/prompt_finished`, `_aiddiction/request_resolved`, `_meta.aiddictionSeq`) and of the adapters' `_auth/status_update`. No Tokio, no UI. `SessionSummary` carries what a list of conversations shows: busy, the agent's open questions, a preview, the last sequence number (and the card an agent was started on); `Task::session` names the thread started on a card. |
-| `aiddiction-server` | The server: `config`, `store` (JSON files), `agents` (catalogue), `projects` (dirs, git clone), `instances` (agent processes), `login` (an agent's terminal sign-in), `proxy` (ACP), `orchestrate` (starting an agent from MCP), `http` (routes). |
+| `aiddiction-server` | The server: `config`, `store` (JSON files), `agents` (catalogue), `projects` (dirs, git clone), `worktrees` (checkouts of a project), `instances` (agent processes), `login` (an agent's terminal sign-in), `proxy` (ACP), `orchestrate` (starting an agent from MCP), `http` (routes). |
 | `aiddiction-client` | REST + event socket + ACP socket on Tokio. No UI, and it must stay that way. |
 | `aiddiction` | The application: a library (Android loads it) and a thin `main.rs`. |
 | `aiddiction-fake-agent` | A scripted ACP agent (stdio) for tests and the demo. |
@@ -143,7 +143,8 @@ kept per agent id in `agent-profiles.json` (`Supervisor::profile`); a
 changed command makes the profile stale. The settings an agent last gave
 in `session/new` are read from the running instance, not stored.
 
-`start_agent` (`orchestrate.rs`) starts or reuses the project's instance,
+`start_agent` (`orchestrate.rs`) starts or reuses the project's instance in
+the checkout asked for (`worktreeId`, the project's own when left out),
 waits for its `initialize`, opens a session as the server itself
 (`Proxy::open_session`), applies `settings` in the order given, sends the
 prompt and returns the ids — not the turn. A setting the agent refuses is
@@ -198,6 +199,27 @@ A project is a folder: made under the projects root (empty or `git clone`),
 or an existing folder adopted as it is (`Project::path` set). Deleting a
 project removes a folder only if the server made it.
 
+### Checkouts
+
+A project has one main checkout — its own folder, whose `Worktree` id is the
+project's id — and any number of git worktrees the server makes
+(`worktrees.rs`, `POST /projects/{id}/worktrees`). A worktree is made on a
+new branch (`aiddiction/<name>` by default) from `HEAD` or a given commit,
+in `<projects root>/.aiddiction-worktrees/<project id>/<name>`, outside the
+main checkout; its record is kept in `worktrees.json`. It shares the
+repository's objects and refs with the main checkout and has its own files
+and index.
+
+An agent instance is per `(project, worktree, agent)` (`Supervisor::start`),
+and the proxy's root is the worktree, so `fs/*`, the session's `cwd` and the
+agent's own command all stay in that checkout. Threads are not moved
+between checkouts: a new conversation picks one (`NewSessionForm`), and
+`StartInstance`/`start_agent` take a `worktreeId` (the main checkout when
+left out). Removing a worktree (`DELETE /projects/{id}/worktrees/{id}`) is
+refused while an instance runs there (409) or while it has uncommitted or
+untracked files (409); its branch is kept. Deleting a project stops its
+agents and takes the server-made worktrees with it.
+
 ### Appearance
 
 The theme engine is the libraries money-manager-ng and matterfast use —
@@ -220,7 +242,10 @@ registry.
   only whose projects and agents the columns list. A project's page, review
   and conversations find their server by the project (`Shell::server_of`;
   project ids are unique across servers), and opening a project makes its
-  server the active one.
+  server the active one. The server's worktrees are read with its projects
+  and kept fresh by `WorktreesChanged`; a project's page lists them and can
+  make and remove one, and a new conversation chooses one (its main checkout
+  by default).
 - `server::ServerConnection` (entity) is one server's only owner of the REST
   client and the event socket. Its methods take a `done` callback; that callback runs
   *after* the entity's update (`cx.defer`), so it may update it again.
@@ -257,7 +282,7 @@ registry.
   each conversation a `ListRow` with its agent (and server, with several),
   which answers the agent's questions in place (`Ask` in the row's body). A new conversation
   is one form (`ui/new_session.rs`: searchable project and agent `Choice`s,
-  the first message, sent once the session is ready). Read the gpui-kit
+  the project's checkout, the first message, sent once the session is ready). Read the gpui-kit
   skill's Coding Guides before changing structure.
 - The chat sums a run of tool calls up in one line (`thread::summarize`,
   `Thread::run_start`); its list redraws from a run's first entry. The plan

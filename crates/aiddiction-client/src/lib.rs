@@ -5,8 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aiddiction_api::{
-    Agent, AgentInput, DirListing, ErrorBody, Health, Instance, InstanceId, Login, LoginInput, NewProject, PermissionAnswer, Project,
-    ProjectId, ServerEvent, ServerInfo, StartInstance, StartLogin, Task, TaskId, TaskInput,
+    Agent, AgentInput, DirListing, ErrorBody, Health, Instance, InstanceId, Login, LoginInput, NewProject, NewWorktree,
+    PermissionAnswer, Project, ProjectId, ServerEvent, ServerInfo, StartInstance, StartLogin, Task, TaskId, TaskInput, Worktree,
+    WorktreeId,
 };
 use futures::{SinkExt as _, StreamExt as _};
 use reqwest::{Method, StatusCode};
@@ -177,6 +178,22 @@ impl ServerClient {
         self.call(Method::GET, &format!("/projects/{project}/instances"), None).await
     }
 
+    /// The project's checkouts: its own first, then the worktrees the server
+    /// made.
+    pub async fn worktrees(&self, project: ProjectId) -> Result<Vec<Worktree>> {
+        self.call(Method::GET, &format!("/projects/{project}/worktrees"), None).await
+    }
+
+    /// Makes a worktree on a new branch, outside the project's own checkout.
+    pub async fn create_worktree(&self, project: ProjectId, input: &NewWorktree) -> Result<Worktree> {
+        self.call(Method::POST, &format!("/projects/{project}/worktrees"), Some(serde_json::to_value(input).unwrap())).await
+    }
+
+    /// Removes a worktree the server made; its branch stays.
+    pub async fn delete_worktree(&self, project: ProjectId, worktree: WorktreeId) -> Result<()> {
+        self.call(Method::DELETE, &format!("/projects/{project}/worktrees/{worktree}"), None).await
+    }
+
     /// Every project's instances at once.
     pub async fn all_instances(&self) -> Result<Vec<Instance>> {
         self.call(Method::GET, "/instances", None).await
@@ -208,8 +225,8 @@ impl ServerClient {
         self.call(Method::DELETE, &format!("/instances/{instance}/login"), None).await
     }
 
-    pub async fn start_instance(&self, project: ProjectId, agent_id: &str) -> Result<Instance> {
-        let body = serde_json::to_value(StartInstance { agent_id: agent_id.to_owned() }).unwrap();
+    pub async fn start_instance(&self, project: ProjectId, agent_id: &str, worktree: Option<WorktreeId>) -> Result<Instance> {
+        let body = serde_json::to_value(StartInstance { agent_id: agent_id.to_owned(), worktree_id: worktree }).unwrap();
         self.call(Method::POST, &format!("/projects/{project}/instances"), Some(body)).await
     }
 

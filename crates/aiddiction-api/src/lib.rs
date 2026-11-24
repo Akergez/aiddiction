@@ -38,6 +38,7 @@ pub mod ext {
 pub type ProjectId = Uuid;
 pub type InstanceId = Uuid;
 pub type TaskId = Uuid;
+pub type WorktreeId = Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -171,6 +172,44 @@ pub enum ProjectSource {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         token: Option<String>,
     },
+}
+
+/// A checkout of a project an agent can work in: the project's own folder
+/// (`main`) or a git worktree the server made beside it, with its own branch
+/// and working files, sharing the repository's objects and refs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Worktree {
+    /// The project's own id for the main checkout, so it is stable too.
+    pub id: WorktreeId,
+    pub project_id: ProjectId,
+    /// The folder the project was made in, rather than one made for it.
+    pub main: bool,
+    /// Its name in a list: the checkout's folder name, or the one chosen.
+    pub name: String,
+    /// The branch it has checked out; `None` when git cannot say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// The commit it was made from, for a worktree the server made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_commit: Option<String>,
+    /// Its folder on the server.
+    pub path: String,
+    pub created_at_ms: u64,
+}
+
+/// Body of `POST /projects/{id}/worktrees`. A worktree is made from a new
+/// branch (`branch`, or `aiddiction/<name>`) at `base` (or the main
+/// checkout's `HEAD`), in a folder outside the main checkout.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewWorktree {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
 }
 
 /// `POST /projects/{id}/review/diff` answers with the unified diff the
@@ -321,6 +360,11 @@ pub struct PermissionAnswer {
 pub struct Instance {
     pub id: InstanceId,
     pub project_id: ProjectId,
+    /// The checkout it works in: the project's own folder, or a worktree.
+    #[serde(default)]
+    pub worktree_id: WorktreeId,
+    #[serde(default)]
+    pub worktree_name: String,
     pub agent_id: String,
     pub agent_name: String,
     pub state: InstanceState,
@@ -336,6 +380,9 @@ pub struct Instance {
 #[serde(rename_all = "camelCase")]
 pub struct StartInstance {
     pub agent_id: String,
+    /// The checkout to work in; none for the project's main one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_id: Option<WorktreeId>,
 }
 
 /// Body of `POST /instances/{id}/login`: one of the agent's `authMethods`
@@ -376,6 +423,7 @@ pub enum ServerEvent {
     AgentsChanged,
     InstancesChanged { project_id: ProjectId },
     TasksChanged { project_id: ProjectId },
+    WorktreesChanged { project_id: ProjectId },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

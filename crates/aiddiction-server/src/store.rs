@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use aiddiction_api::{Agent, AgentProfile, Project, Task};
+use aiddiction_api::{Agent, AgentProfile, Project, Task, Worktree};
 use anyhow::Context as _;
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -45,6 +45,16 @@ impl Store {
 
     pub fn save_agent_profiles(&self, profiles: &BTreeMap<String, AgentProfile>) -> anyhow::Result<()> {
         self.write("agent-profiles.json", profiles)
+    }
+
+    /// The worktrees the server made, for every project (the main checkouts
+    /// are the projects themselves and are not stored).
+    pub fn worktrees(&self) -> anyhow::Result<Vec<Worktree>> {
+        self.read("worktrees.json")
+    }
+
+    pub fn save_worktrees(&self, worktrees: &[Worktree]) -> anyhow::Result<()> {
+        self.write("worktrees.json", worktrees)
     }
 
     /// The access token: the one stored here, or a new one stored now.
