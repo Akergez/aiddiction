@@ -66,8 +66,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/instances/{id}/acp", get(acp_socket))
         .route("/events", get(event_socket))
         .route("/mcp", axum::routing::post(mcp))
+        .route("/projects/{id}/files", get(list_files))
         .layer(middleware::from_fn_with_state(state.clone(), authorize));
     Router::new()
+        .route("/files/{token}", get(download_file))
         .route("/api/v1/health", get(health))
         .nest("/api/v1", api)
         .with_state(state)
@@ -515,4 +517,20 @@ async fn event_socket(State(state): Shared, upgrade: WebSocketUpgrade) -> Respon
             }
         }
     })
+}
+
+
+async fn list_files(Path(id): Path<ProjectId>, State(state): Shared) -> Result<Json<Vec<crate::files::SharedFile>>> {
+ let project=state.projects.get(id).ok_or(ProjectError::NotFound)?;
+ Ok(Json(crate::files::list(&state.projects.dir(&project), "")))
+}
+
+async fn download_file(Path(token): Path<String>, State(state): Shared) -> Response {
+ for project in state.projects.list() {
+  if let Some((path,name))=crate::files::find(&state.projects.dir(&project).join(".aiddiction-files"), &token) {
+   let Ok(body)=tokio::fs::read(path).await else { return StatusCode::NOT_FOUND.into_response() };
+   return ([(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}\""))], body).into_response();
+  }
+ }
+ StatusCode::NOT_FOUND.into_response()
 }

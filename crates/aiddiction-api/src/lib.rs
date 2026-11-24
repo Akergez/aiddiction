@@ -502,3 +502,7 @@ mod tests {
         assert!(matches!(source, ProjectSource::Git { branch: None, .. }));
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedFile { pub name: String, pub size: u64, pub token: String, pub url: String }

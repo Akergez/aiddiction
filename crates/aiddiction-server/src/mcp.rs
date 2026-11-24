@@ -83,6 +83,7 @@ fn tools(for_agent: bool) -> Value {
             "description": "List a project's task cards.",
             "inputSchema": { "type": "object", "required": ["projectId"], "properties": { "projectId": project } },
         }),
+        json!({"name":"share_file","description":"Publish a file from the project and return a tokenized download URL.","inputSchema":{"type":"object","required":["projectId","path"],"properties":{"projectId":project,"path":{"type":"string","description":"Path to a file in the project"},"name":{"type":"string"}}}}),
         json!({
             "name": "create_task",
             "description": "Create a task card; it goes to Todo unless a status is given.",
@@ -252,6 +253,7 @@ async fn call(
         }
         "start_agent" => start(projects, catalog, supervisor, orchestration, worktrees, caller, &arguments).await,
         "list_tasks" => project_of(&arguments, caller).and_then(|project| Ok(json!(projects.tasks(project)?))),
+        "share_file" => (|| { let project=project_of(&arguments, caller)?; let path=text(&arguments,"path").ok_or_else(||ToolError("path is required".into()))?; let name=text(&arguments,"name"); let p=projects.list().into_iter().find(|x|x.id==project).ok_or_else(||ToolError("project not found".into()))?; let file=crate::files::share(&projects.dir(&p), &path, name.as_deref(), "").map_err(ToolError)?; Ok(json!(file)) })(),
         "create_task" => (|| {
             let project = project_of(&arguments, caller)?;
             let input = TaskInput {

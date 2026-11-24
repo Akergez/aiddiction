@@ -10,6 +10,7 @@
 
 mod agents;
 mod config;
+mod files;
 mod http;
 mod install;
 mod instances;

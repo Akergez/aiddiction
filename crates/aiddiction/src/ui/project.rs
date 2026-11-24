@@ -20,7 +20,7 @@ impl Shell {
         let env = Env::of(window, cx);
         let gone = || Screen::new("project-gone", "").scrolls(false).content(Empty::new(IconName::Folder, "This project is gone."));
         let Some(server) = self.server_of(id, cx) else { return gone() };
-        let (project, instances, tasks, worktrees) = {
+        let (project, instances, tasks, worktrees, files) = {
             let server = server.read(cx);
             let Some(project) = server.project(id).cloned() else { return gone() };
             let worktrees = server
@@ -29,7 +29,7 @@ impl Shell {
                 .filter(|worktrees| !worktrees.is_empty())
                 .cloned()
                 .unwrap_or_else(|| vec![super::new_session::main_checkout(&project)]);
-            (project, server.instances.get(&id).cloned().unwrap_or_default(), server.tasks.get(&id).cloned().unwrap_or_default(), worktrees)
+            (project, server.instances.get(&id).cloned().unwrap_or_default(), server.tasks.get(&id).cloned().unwrap_or_default(), worktrees, server.files.get(&id).cloned().unwrap_or_default())
         };
         let ready = project.state == ProjectState::Ready;
 
@@ -136,6 +136,8 @@ impl Shell {
                     column().gap(cx.scale().space_s).child(SectionHeader::new("Tasks")).child(self.render_board(&server, id, &tasks, cx)),
                 );
                 page = page.child(self.render_checkouts(&project, &worktrees, env, cx));
+                let file_rows = files.iter().map(|file| ListRow::new(SharedString::from(format!("file-{}", file.token)), file.name.clone()).leading(Icon::new(IconName::File)).subtitle(format!("{} bytes · {}", file.size, file.url))).collect::<Vec<_>>();
+                page = page.child(Collection::new("project-files").section(SectionHeader::new("Shared files"), file_rows));
                 let conversations = Collection::new("project-conversations");
                 let conversations = if listed.is_empty() {
                     conversations

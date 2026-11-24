@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use aiddiction_api::{
     Agent, AgentInput, Instance, InstanceId, NewProject, NewWorktree, PermissionAnswer, Project, ProjectId, ServerEvent, ServerInfo,
-    Task, TaskId, TaskInput, TaskStatus, Worktree, WorktreeId,
+    Task, TaskId, TaskInput, TaskStatus, SharedFile, Worktree, WorktreeId,
 };
 use aiddiction_client::{Error, ServerClient};
 use gpui_kit::{App, Context};
@@ -33,6 +33,7 @@ pub struct ServerConnection {
     pub agents: Vec<Agent>,
     pub instances: HashMap<ProjectId, Vec<Instance>>,
     pub tasks: HashMap<ProjectId, Vec<Task>>,
+    pub files: HashMap<ProjectId, Vec<SharedFile>>,
     /// Every project's checkouts, its own first; read with the projects.
     pub worktrees: HashMap<ProjectId, Vec<Worktree>>,
     /// Bumped on every (re)connection, so a stale event loop stops.
@@ -54,6 +55,7 @@ impl ServerConnection {
             agents: Vec::new(),
             instances: HashMap::new(),
             tasks: HashMap::new(),
+            files: HashMap::new(),
             worktrees: HashMap::new(),
             generation: 0,
         };
@@ -259,6 +261,7 @@ impl ServerConnection {
         self.tasks.retain(|project, _| projects.contains(project));
         for project in projects {
             self.refresh_tasks(project, cx);
+            self.refresh_files(project, cx);
         }
     }
 
@@ -279,6 +282,12 @@ impl ServerConnection {
         for project in projects {
             self.refresh_worktrees(project, cx);
         }
+    }
+
+    pub fn refresh_files(&mut self, project: ProjectId, cx: &mut Context<Self>) {
+        self.call(cx, move |client| async move { client.files(project).await }, move |this, result, _| {
+            if let Ok(files) = result { this.files.insert(project, files); }
+        });
     }
 
     pub fn refresh_worktrees(&mut self, project: ProjectId, cx: &mut Context<Self>) {
