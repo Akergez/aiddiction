@@ -4,7 +4,7 @@
 //! directory, see `aiddiction-paths`), every key optional:
 //!
 //! ```toml
-//! listen = "127.0.0.1:7878"
+//! listen = ["127.0.0.1:7878", "[::1]:7878"]
 //! projects_root = "~/aiddiction-projects"
 //! token = "…"                 # otherwise generated once into the data dir
 //!
@@ -26,7 +26,8 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct File {
-    listen: Option<SocketAddr>,
+    #[serde(default, deserialize_with = "deserialize_listen")]
+    listen: Vec<SocketAddr>,
     projects_root: Option<String>,
     token: Option<String>,
     #[serde(default)]
@@ -47,7 +48,7 @@ pub struct ConfigAgent {
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub listen: SocketAddr,
+    pub listen: Vec<SocketAddr>,
     pub projects_root: PathBuf,
     pub data_dir: PathBuf,
     pub token: Option<String>,
@@ -59,19 +60,25 @@ impl Config {
     /// `AIDDICTION_PROJECTS_ROOT`, `AIDDICTION_DATA_DIR` and `AIDDICTION_TOKEN`
     /// override it, which is what tests and the demo mode use.
     pub fn load(path: Option<&Path>) -> anyhow::Result<Self> {
-        let path = path
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| aiddiction_paths::config_dir("aiddiction-server").join("config.toml"));
+        let path = path.map(Path::to_path_buf).unwrap_or_else(|| {
+            aiddiction_paths::config_dir("aiddiction-server").join("config.toml")
+        });
         let file: File = match std::fs::read_to_string(&path) {
-            Ok(text) => toml::from_str(&text).with_context(|| format!("reading {}", path.display()))?,
+            Ok(text) => {
+                toml::from_str(&text).with_context(|| format!("reading {}", path.display()))?
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => File::default(),
             Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
         };
 
         let env = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
         let listen = match env("AIDDICTION_LISTEN") {
-            Some(listen) => listen.parse().context("AIDDICTION_LISTEN")?,
-            None => file.listen.unwrap_or_else(|| ([127, 0, 0, 1], 7878).into()),
+            Some(listen) => listen
+                .split(',')
+                .map(|value| value.trim().parse().context("AIDDICTION_LISTEN"))
+                .collect::<anyhow::Result<Vec<_>>>()?,
+            None if file.listen.is_empty() => vec![([127, 0, 0, 1], 7878).into()],
+            None => file.listen,
         };
         let projects_root = env("AIDDICTION_PROJECTS_ROOT")
             .or(file.projects_root)
@@ -89,4 +96,20 @@ impl Config {
             agents: file.agents,
         })
     }
+}
+
+fn deserialize_listen<'de, D>(deserializer: D) -> Result<Vec<SocketAddr>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        One(SocketAddr),
+        Many(Vec<SocketAddr>),
+    }
+    Ok(match Value::deserialize(deserializer)? {
+        Value::One(value) => vec![value],
+        Value::Many(values) => values,
+    })
 }

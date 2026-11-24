@@ -45,7 +45,9 @@ pub struct Options {
 const EXAMPLE_CONFIG: &str = include_str!("../../../data/aiddiction-server.example.toml");
 
 fn unit_path() -> PathBuf {
-    aiddiction_paths::config_dir("systemd").join("user").join(UNIT)
+    aiddiction_paths::config_dir("systemd")
+        .join("user")
+        .join(UNIT)
 }
 
 /// `$XDG_BIN_HOME`, or `~/.local/bin`.
@@ -63,16 +65,25 @@ pub fn install(options: Options) -> anyhow::Result<()> {
     let current = std::env::current_exe().context("finding this program")?;
     let binary = bin_dir().join("aiddiction-server");
     if current.canonicalize().ok() != binary.canonicalize().ok() {
-        std::fs::create_dir_all(bin_dir()).with_context(|| format!("creating {}", bin_dir().display()))?;
+        std::fs::create_dir_all(bin_dir())
+            .with_context(|| format!("creating {}", bin_dir().display()))?;
         // Beside it, then over it: a running copy keeps its old file.
         let partial = binary.with_extension("new");
-        std::fs::copy(&current, &partial).with_context(|| format!("copying to {}", partial.display()))?;
-        std::fs::rename(&partial, &binary).with_context(|| format!("installing {}", binary.display()))?;
+        std::fs::copy(&current, &partial)
+            .with_context(|| format!("copying to {}", partial.display()))?;
+        std::fs::rename(&partial, &binary)
+            .with_context(|| format!("installing {}", binary.display()))?;
         println!("installed {}", binary.display());
     }
 
-    let config_path = options.config.as_deref().map(std::path::absolute).transpose()?;
-    let file = config_path.clone().unwrap_or_else(|| aiddiction_paths::config_dir("aiddiction-server").join("config.toml"));
+    let config_path = options
+        .config
+        .as_deref()
+        .map(std::path::absolute)
+        .transpose()?;
+    let file = config_path
+        .clone()
+        .unwrap_or_else(|| aiddiction_paths::config_dir("aiddiction-server").join("config.toml"));
     if !file.exists() || options.listen.is_some() {
         let current = std::fs::read_to_string(&file).unwrap_or_else(|_| EXAMPLE_CONFIG.to_owned());
         let text = match options.listen {
@@ -92,10 +103,18 @@ pub fn install(options: Options) -> anyhow::Result<()> {
     };
 
     let path = std::env::var("PATH").unwrap_or_default();
-    if !path.split(':').any(|dir| Path::new(dir).join("node").is_file()) {
-        eprintln!("warning: no `node` on this PATH; Claude Code and Codex are started with npx and will not run");
+    if !path
+        .split(':')
+        .any(|dir| Path::new(dir).join("node").is_file())
+    {
+        eprintln!(
+            "warning: no `node` on this PATH; Claude Code and Codex are started with npx and will not run"
+        );
     }
-    if !path.split(':').any(|dir| Path::new(dir).join("git").is_file()) {
+    if !path
+        .split(':')
+        .any(|dir| Path::new(dir).join("git").is_file())
+    {
         eprintln!("warning: no `git` on this PATH; projects cannot be cloned");
     }
 
@@ -118,17 +137,37 @@ pub fn install(options: Options) -> anyhow::Result<()> {
     }
 
     println!();
-    println!("aiddiction-server is running on http://{}", config.listen);
+    println!(
+        "aiddiction-server is running on {}",
+        config
+            .listen
+            .iter()
+            .map(|address| format!("http://{address}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     println!("token: {token}");
     println!();
     println!("status:  systemctl --user status aiddiction-server");
     println!("log:     journalctl --user -u aiddiction-server -f");
-    if config.listen.ip().is_loopback() {
+    if config
+        .listen
+        .iter()
+        .all(|address| address.ip().is_loopback())
+    {
         println!("it listens on this machine only; to reach it from a phone:");
-        println!("  aiddiction-server install --listen 0.0.0.0:{}", config.listen.port());
+        println!(
+            "  aiddiction-server install --listen 0.0.0.0:{}",
+            config
+                .listen
+                .first()
+                .map_or(7878, std::net::SocketAddr::port)
+        );
     }
     if !options.linger {
-        println!("it stops when you log out; `aiddiction-server install --linger` keeps it running");
+        println!(
+            "it stops when you log out; `aiddiction-server install --linger` keeps it running"
+        );
     }
     Ok(())
 }
@@ -154,9 +193,14 @@ pub fn uninstall() -> anyhow::Result<()> {
 
 fn require_systemd() -> anyhow::Result<()> {
     if !cfg!(target_os = "linux") {
-        bail!("installing as a service needs systemd, which this system does not have; run `aiddiction-server` directly");
+        bail!(
+            "installing as a service needs systemd, which this system does not have; run `aiddiction-server` directly"
+        );
     }
-    let available = Command::new("systemctl").args(["--user", "--version"]).output().is_ok_and(|out| out.status.success());
+    let available = Command::new("systemctl")
+        .args(["--user", "--version"])
+        .output()
+        .is_ok_and(|out| out.status.success());
     if !available {
         bail!("`systemctl --user` is not available here");
     }
@@ -170,7 +214,10 @@ fn systemctl(args: &[&str]) -> anyhow::Result<()> {
 }
 
 fn run(program: &str, args: &[&str]) -> anyhow::Result<()> {
-    let status = Command::new(program).args(args).status().with_context(|| format!("running {program}"))?;
+    let status = Command::new(program)
+        .args(args)
+        .status()
+        .with_context(|| format!("running {program}"))?;
     if !status.success() {
         bail!("`{program} {}` failed ({status})", args.join(" "));
     }
@@ -183,11 +230,19 @@ fn with_listen(text: &str, listen: std::net::SocketAddr) -> String {
     let line = format!("listen = \"{listen}\"");
     let is_listen = |row: &str, commented: bool| {
         let row = row.trim_start();
-        let row = if commented { row.strip_prefix('#').map(str::trim_start).unwrap_or("") } else { row };
-        row.strip_prefix("listen").is_some_and(|rest| rest.trim_start().starts_with('='))
+        let row = if commented {
+            row.strip_prefix('#').map(str::trim_start).unwrap_or("")
+        } else {
+            row
+        };
+        row.strip_prefix("listen")
+            .is_some_and(|rest| rest.trim_start().starts_with('='))
     };
     let mut rows: Vec<String> = text.lines().map(str::to_owned).collect();
-    let at = rows.iter().position(|row| is_listen(row, false)).or_else(|| rows.iter().position(|row| is_listen(row, true)));
+    let at = rows
+        .iter()
+        .position(|row| is_listen(row, false))
+        .or_else(|| rows.iter().position(|row| is_listen(row, true)));
     match at {
         Some(at) => rows[at] = line,
         None => rows.insert(0, line),
@@ -228,7 +283,11 @@ fn render_unit(binary: &Path, config: Option<&Path>, path: &str) -> String {
 
 /// A double-quoted systemd string.
 fn quote(text: &str) -> String {
-    let escaped = text.replace('\\', "\\\\").replace('"', "\\\"").replace('%', "%%").replace('$', "$$");
+    let escaped = text
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('%', "%%")
+        .replace('$', "$$");
     format!("\"{escaped}\"")
 }
 
@@ -243,8 +302,12 @@ mod tests {
             Some(Path::new("/etc/aiddiction.toml")),
             "/home/a b/.nvm/versions/node/v25/bin:/usr/bin",
         );
-        assert!(unit.contains(r#"ExecStart="/home/a b/.local/bin/aiddiction-server" --config "/etc/aiddiction.toml""#));
-        assert!(unit.contains(r#"Environment="PATH=/home/a b/.nvm/versions/node/v25/bin:/usr/bin""#));
+        assert!(unit.contains(
+            r#"ExecStart="/home/a b/.local/bin/aiddiction-server" --config "/etc/aiddiction.toml""#
+        ));
+        assert!(
+            unit.contains(r#"Environment="PATH=/home/a b/.nvm/versions/node/v25/bin:/usr/bin""#)
+        );
         assert!(unit.contains("WantedBy=default.target"));
     }
 
@@ -252,7 +315,13 @@ mod tests {
     fn the_listen_line_is_set_where_it_was() {
         let address: std::net::SocketAddr = "0.0.0.0:7878".parse().unwrap();
         let from_example = with_listen(EXAMPLE_CONFIG, address);
-        assert_eq!(from_example.lines().filter(|line| line.starts_with("listen")).count(), 1);
+        assert_eq!(
+            from_example
+                .lines()
+                .filter(|line| line.starts_with("listen"))
+                .count(),
+            1
+        );
         assert!(from_example.contains("listen = \"0.0.0.0:7878\""));
         assert!(!from_example.contains("# listen ="));
         let config: toml::Value = toml::from_str(&from_example).unwrap();

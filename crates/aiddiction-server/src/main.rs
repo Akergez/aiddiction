@@ -54,9 +54,18 @@ fn main() -> anyhow::Result<()> {
             "--config" => config_path = Some(args.next().context("--config needs a path")?),
             "token" | "install" | "uninstall" if command.is_none() => command = Some(arg),
             "--linger" => linger = true,
-            "--listen" => listen = Some(args.next().context("--listen needs an address, like 0.0.0.0:7878")?.parse().context("--listen")?),
+            "--listen" => {
+                listen = Some(
+                    args.next()
+                        .context("--listen needs an address, like 0.0.0.0:7878")?
+                        .parse()
+                        .context("--listen")?,
+                )
+            }
             "--help" | "-h" => {
-                println!("usage: aiddiction-server [--config FILE] [token | install [--linger] [--listen ADDRESS] | uninstall]");
+                println!(
+                    "usage: aiddiction-server [--config FILE] [token | install [--linger] [--listen ADDRESS] | uninstall]"
+                );
                 return Ok(());
             }
             other => anyhow::bail!("unknown argument: {other}"),
@@ -65,7 +74,11 @@ fn main() -> anyhow::Result<()> {
     match command.as_deref() {
         Some("install") => {
             let config = config_path.map(std::path::PathBuf::from);
-            return install::install(install::Options { linger, config, listen });
+            return install::install(install::Options {
+                linger,
+                config,
+                listen,
+            });
         }
         Some("uninstall") => return install::uninstall(),
         _ if linger || listen.is_some() => anyhow::bail!("--linger and --listen go with install"),
@@ -90,15 +103,37 @@ fn main() -> anyhow::Result<()> {
         .block_on(serve(config, store, token, new_token))
 }
 
-async fn serve(config: Config, store: Arc<Store>, token: String, new_token: bool) -> anyhow::Result<()> {
+async fn serve(
+    config: Config,
+    store: Arc<Store>,
+    token: String,
+    new_token: bool,
+) -> anyhow::Result<()> {
+    if config.listen.is_empty() {
+        anyhow::bail!("at least one listen address is required");
+    }
     let (events, _) = broadcast::channel(256);
     let catalog = Catalog::new(&config.agents, store.custom_agents()?);
-    let projects = Arc::new(Projects::open(&config.projects_root, &config.data_dir, store.clone(), events.clone())?);
+    let projects = Arc::new(Projects::open(
+        &config.projects_root,
+        &config.data_dir,
+        store.clone(),
+        events.clone(),
+    )?);
 
-    let listener = tokio::net::TcpListener::bind(config.listen)
-        .await
-        .with_context(|| format!("listening on {}", config.listen))?;
-    let address = listener.local_addr()?;
+    let mut listeners = Vec::new();
+    for address in &config.listen {
+        listeners.push(
+            tokio::net::TcpListener::bind(address)
+                .await
+                .with_context(|| format!("listening on {address}"))?,
+        );
+    }
+    let addresses = listeners
+        .iter()
+        .map(tokio::net::TcpListener::local_addr)
+        .collect::<Result<Vec<_>, _>>()?;
+    let address = addresses[0];
     // The agents the server starts reach it from this machine: the address
     // it listens on, or the loopback one when it listens on all of them.
     let mcp_url = format!("http://{}/api/v1/mcp", reachable_at(address));
@@ -112,36 +147,66 @@ async fn serve(config: Config, store: Arc<Store>, token: String, new_token: bool
         worktrees: crate::worktrees::Worktrees::open(&config.projects_root, store, events.clone())?,
         events,
     });
-    tracing::info!("listening on http://{address}, projects in {}", config.projects_root.display());
+    tracing::info!(
+        "listening on {}, projects in {}",
+        addresses
+            .iter()
+            .map(|address| format!("http://{address}"))
+            .collect::<Vec<_>>()
+            .join(", "),
+        config.projects_root.display()
+    );
     if new_token {
         tracing::info!("a new access token was made: {token}");
     }
-    if !address.ip().is_loopback() {
-        tracing::warn!("listening beyond this machine without TLS: put it behind a TLS proxy or a VPN");
+    if addresses.iter().any(|address| !address.ip().is_loopback()) {
+        tracing::warn!(
+            "listening beyond this machine without TLS: put it behind a TLS proxy or a VPN"
+        );
     }
 
     let app = http::router(state.clone());
+    let (shutdown_tx, _) = tokio::sync::watch::channel(false);
+    let mut servers = tokio::task::JoinSet::new();
+    for listener in listeners {
+        let app = app.clone();
+        let mut shutdown = shutdown_tx.subscribe();
+        servers.spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown.changed().await;
+                })
+                .await
+        });
+    }
     let deadline_state = state.clone();
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+    let shutdown_tx_task = shutdown_tx.clone();
+    tokio::spawn(async move {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
                 .expect("a SIGTERM handler");
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {}
-                _ = terminate.recv() => {}
-            }
-            // A graceful shutdown waits for every connection to close, and a
-            // client's event socket need never close: past this, the server
-            // stops its agents and goes regardless.
-            tokio::spawn(async move {
-                tokio::time::sleep(SHUTDOWN_DEADLINE).await;
-                tracing::warn!("connections still open after {} s; stopping anyway", SHUTDOWN_DEADLINE.as_secs());
-                deadline_state.supervisor.stop_all();
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                std::process::exit(0);
-            });
-        })
-        .await?;
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = terminate.recv() => {}
+        }
+        // A graceful shutdown waits for every connection to close, and a
+        // client's event socket need never close: past this, the server
+        // stops its agents and goes regardless.
+        let _ = shutdown_tx_task.send(true);
+        tokio::spawn(async move {
+            tokio::time::sleep(SHUTDOWN_DEADLINE).await;
+            tracing::warn!(
+                "connections still open after {} s; stopping anyway",
+                SHUTDOWN_DEADLINE.as_secs()
+            );
+            deadline_state.supervisor.stop_all();
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            std::process::exit(0);
+        });
+    });
+    while let Some(result) = servers.join_next().await {
+        result??;
+    }
     state.supervisor.stop_all();
     // Give the agents the moment `stop` promises them.
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -152,7 +217,9 @@ async fn serve(config: Config, store: Arc<Store>, token: String, new_token: bool
 /// the loopback one when it listens on every interface.
 fn reachable_at(address: std::net::SocketAddr) -> String {
     match address {
-        std::net::SocketAddr::V4(v4) if v4.ip().is_unspecified() => format!("127.0.0.1:{}", v4.port()),
+        std::net::SocketAddr::V4(v4) if v4.ip().is_unspecified() => {
+            format!("127.0.0.1:{}", v4.port())
+        }
         std::net::SocketAddr::V4(v4) => v4.to_string(),
         std::net::SocketAddr::V6(v6) if v6.ip().is_unspecified() => format!("[::1]:{}", v6.port()),
         std::net::SocketAddr::V6(v6) => format!("[{}]:{}", v6.ip(), v6.port()),

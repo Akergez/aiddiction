@@ -4,7 +4,8 @@
 
 # Where to listen. To reach the server from a phone, an address the phone can
 # reach — a VPN such as Tailscale, or the LAN — preferably behind a TLS proxy.
-# listen = "127.0.0.1:7878"
+# listen = ["127.0.0.1:7878", "[::1]:7878"]
+# AIDDICTION_LISTEN also accepts a comma-separated list of addresses.
 
 # Where new projects are made. Existing folders can be projects wherever
 # they are.
