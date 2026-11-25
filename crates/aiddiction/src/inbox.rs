@@ -152,6 +152,7 @@ mod tests {
             preview: String::new(),
             error: None,
             task_id: None,
+            usage: None,
         }
     }
 

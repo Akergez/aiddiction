@@ -28,6 +28,8 @@ struct Agent {
     sign_in: Option<PathBuf>,
     /// Each session's configuration options, the model and the effort.
     config_options: HashMap<String, Value>,
+    /// How many prompts each session has had, for its context update.
+    turns: HashMap<String, u64>,
 }
 
 fn main() {
@@ -48,6 +50,7 @@ fn main() {
         cwd: String::new(),
         delay: Duration::from_millis(delay),
         config_options: HashMap::new(),
+        turns: HashMap::new(),
     };
     while let Some(message) = agent.next_message() {
         agent.handle(message);
@@ -333,6 +336,22 @@ impl Agent {
         if lower.contains("crash") {
             std::process::exit(3);
         }
+
+        // The context grows with every turn; the client can follow it.
+        let turn = {
+            let turns = self.turns.entry(session.clone()).or_insert(0);
+            *turns += 1;
+            *turns
+        };
+        update(
+            &session,
+            json!({
+                "sessionUpdate": "usage_update",
+                "used": turn * 1000,
+                "size": 200_000,
+                "cost": { "amount": turn as f64 / 100.0, "currency": "USD" },
+            }),
+        );
 
         update(
             &session,

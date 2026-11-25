@@ -604,6 +604,159 @@ async fn start_agent_puts_a_child_thread_in_the_common_list_on_its_card() {
     assert!(agent["lastChoices"]["configOptions"].is_array());
 }
 
+/// A message to an agent already started is another turn of the same
+/// conversation: no second session, the card stays, and the context it
+/// reports grows with every turn.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_continues_the_same_conversation_and_says_how_full_it_is() {
+    aiddiction_client::install_crypto_provider();
+    let server = start_server().await;
+    let client = ServerClient::new(&server.url, "secret").unwrap();
+    let _fake = fake_agent_on(&client, "Chatty child").await;
+    let fake = client
+        .agents()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|agent| agent.name == "Chatty child")
+        .unwrap();
+    let project = client
+        .create_project(&NewProject {
+            name: "Continue".into(),
+            source: ProjectSource::Empty,
+        })
+        .await
+        .unwrap();
+    let task = client
+        .create_task(
+            project.id,
+            &TaskInput {
+                title: "Keep going".into(),
+                markdown: String::new(),
+                status: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let started = board(
+        &client,
+        "start_agent",
+        json!({
+            "projectId": project.id,
+            "agentId": fake.id,
+            "taskId": task.id,
+            "prompt": "First turn",
+        }),
+    )
+    .await
+    .unwrap();
+    let session = started["sessionId"].as_str().unwrap().to_owned();
+    let instance: aiddiction_api::InstanceId =
+        started["instanceId"].as_str().unwrap().parse().unwrap();
+
+    let idle = |info: &aiddiction_api::Instance| {
+        info.sessions
+            .iter()
+            .find(|shown| shown.session_id == session)
+            .filter(|shown| !shown.busy)
+            .cloned()
+    };
+    let mut info = client.instance(instance).await.unwrap();
+    for _ in 0..100 {
+        if idle(&info).is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        info = client.instance(instance).await.unwrap();
+    }
+    let first = idle(&info).expect("the first turn ended");
+    let usage = first.usage.clone().expect("the agent says how full it is");
+    assert_eq!((usage.used, usage.size), (1_000, 200_000));
+    assert_eq!(usage.cost.unwrap().currency, "USD");
+
+    // The same conversation takes another message, no new agent or session.
+    let sent = board(
+        &client,
+        "send_message",
+        json!({
+            "projectId": project.id,
+            "sessionId": session,
+            "prompt": "Second turn",
+            "requestId": "m1",
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(sent["sessionId"], json!(session));
+    assert_eq!(sent["instanceId"], json!(instance));
+    assert_eq!(sent["taskId"], json!(task.id));
+    assert_eq!(sent["sent"], true);
+    // What the context was before this message was sent.
+    assert_eq!(sent["usage"]["used"], json!(1_000));
+
+    let mut info = client.instance(instance).await.unwrap();
+    for _ in 0..100 {
+        if idle(&info).is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        info = client.instance(instance).await.unwrap();
+    }
+    let second = idle(&info).expect("the second turn ended");
+    assert_eq!(
+        info.sessions.len(),
+        1,
+        "a message does not open another conversation"
+    );
+    assert_eq!(second.title, "First turn", "the first words name it");
+    assert_eq!(second.usage.unwrap().used, 2_000, "the context grew");
+
+    // The conversation list gives an orchestrator the same reading.
+    let children = board(
+        &client,
+        "list_subagents",
+        json!({ "projectId": project.id, "taskId": task.id }),
+    )
+    .await
+    .unwrap();
+    let shown = &children[0]["sessions"][0];
+    assert_eq!(shown["usage"]["used"], json!(2_000));
+    assert_eq!(shown["usage"]["size"], json!(200_000));
+    assert_eq!(shown["busy"], false);
+    assert_eq!(shown["taskId"], json!(task.id));
+
+    // A retry is the same message, not a third turn.
+    let before = client.instance(instance).await.unwrap().sessions[0].last_seq;
+    let again = board(
+        &client,
+        "send_message",
+        json!({
+            "projectId": project.id,
+            "sessionId": session,
+            "prompt": "Second turn",
+            "requestId": "m1",
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(again, sent);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let after = client.instance(instance).await.unwrap();
+    assert_eq!(after.sessions.len(), 1);
+    assert_eq!(after.sessions[0].last_seq, before, "a retry sends nothing");
+
+    // A conversation nobody started is named as missing, not started anew.
+    let missing = board(
+        &client,
+        "send_message",
+        json!({ "sessionId": "no-such-session", "prompt": "Hello?" }),
+    )
+    .await
+    .unwrap_err();
+    assert!(missing.contains("no conversation"), "{missing}");
+}
+
 fn git_in(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
     std::process::Command::new("git")
         .args(args)

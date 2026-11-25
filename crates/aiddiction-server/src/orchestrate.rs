@@ -12,7 +12,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use aiddiction_api::{
-    InstanceId, Project, ProjectId, ProjectState, Task, TaskId, TaskSession, WorktreeId,
+    InstanceId, InstanceState, Project, ProjectId, ProjectState, Task, TaskId, TaskSession,
+    WorktreeId,
 };
 use serde_json::{Value, json};
 
@@ -69,6 +70,21 @@ pub struct StartRequest {
     pub settings: Vec<(String, Value)>,
     /// Ties a retry to the call it repeats, so a lost answer does not start
     /// a second agent.
+    pub request_id: Option<String>,
+}
+
+/// What the caller of `send_message` asks for: another turn of a conversation
+/// that is already running, instead of a new agent.
+#[derive(Debug, Clone)]
+pub struct SendRequest {
+    /// The project named by the caller, when it named one.
+    pub project: Option<ProjectId>,
+    /// The instance named by the caller, when the session id is not enough.
+    pub instance: Option<InstanceId>,
+    pub session: String,
+    pub prompt: String,
+    /// The card to work on now; the conversation's own card when left out.
+    pub task_id: Option<TaskId>,
     pub request_id: Option<String>,
 }
 
@@ -297,15 +313,170 @@ impl Orchestrator {
             "board": scoped,
         });
         if let Some(key) = repeat {
-            let mut started = self.started.lock().unwrap();
-            // A lifetime's worth of calls is not worth keeping; the newest
-            // thousand answers are plenty to retry against.
-            if started.len() > 1000 {
-                started.clear();
-            }
-            started.insert(key, answer.clone());
+            self.remember_answer(key, &answer);
         }
         Ok(answer)
+    }
+
+    /// Sends another message to a conversation that is already running, so
+    /// the agent keeps its context instead of a new one being started.
+    pub async fn send(
+        &self,
+        projects: &Projects,
+        supervisor: &Supervisor,
+        caller: &str,
+        request: SendRequest,
+    ) -> Result<Value, String> {
+        let repeat = request
+            .request_id
+            .as_ref()
+            .map(|id| format!("send:{caller}:{id}"));
+        if let Some(previous) = repeat
+            .as_ref()
+            .and_then(|key| self.started.lock().unwrap().get(key).cloned())
+        {
+            return Ok(previous);
+        }
+        if request.prompt.trim().is_empty() {
+            return Err("prompt is required".to_owned());
+        }
+
+        let found: Vec<_> = supervisor
+            .all()
+            .into_iter()
+            .filter(|instance| {
+                request
+                    .project
+                    .is_none_or(|project| instance.project_id == project)
+                    && request
+                        .instance
+                        .is_none_or(|instance_id| instance.id == instance_id)
+            })
+            .filter(|instance| {
+                instance
+                    .info()
+                    .sessions
+                    .iter()
+                    .any(|session| session.session_id == request.session)
+            })
+            .collect();
+        let instance = match found.as_slice() {
+            [] => {
+                return Err(format!(
+                    "no conversation {} is running: its agent has gone, list_subagents shows the live ones, \
+                     and start_agent starts a new one",
+                    request.session
+                ));
+            }
+            [only] => only.clone(),
+            many => {
+                let ids = many
+                    .iter()
+                    .map(|instance| format!("{} ({})", instance.id, instance.agent.id))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(format!(
+                    "the conversation is in more than one agent: {ids}; name its instanceId"
+                ));
+            }
+        };
+        let info = instance.info();
+        if info.state != InstanceState::Ready {
+            return Err(format!(
+                "the agent of this conversation is {:?}, not running; start_agent starts a new one",
+                info.state
+            ));
+        }
+        let session = info
+            .sessions
+            .iter()
+            .find(|session| session.session_id == request.session)
+            .cloned()
+            .ok_or("no such conversation")?;
+        if session.busy {
+            let doing = if session.preview.is_empty() {
+                "a turn is running".to_owned()
+            } else {
+                format!("it is doing: {}", session.preview)
+            };
+            return Err(format!(
+                "the conversation is still working ({doing}); send the message when its turn ends"
+            ));
+        }
+
+        let project = projects.get(instance.project_id).ok_or("no such project")?;
+        let tasks = projects
+            .tasks(project.id)
+            .map_err(|error| format!("{error:#}"))?;
+        let asked = match request.task_id {
+            Some(id) => Some(
+                tasks
+                    .iter()
+                    .find(|task| task.id == id)
+                    .cloned()
+                    .ok_or("no such task in the project")?,
+            ),
+            None => None,
+        };
+        // The card the conversation works on: the one named now, or the one
+        // it was started on.
+        let task = asked.or_else(|| {
+            session
+                .task_id
+                .and_then(|id| tasks.iter().find(|task| task.id == id).cloned())
+        });
+        let board = instance.proxy.has_board(&request.session);
+        let text = prompt_text(&request.prompt, &project, task.as_ref(), board);
+
+        if let Some(task) = &task
+            && let Err(error) = projects.link_session(
+                project.id,
+                task.id,
+                TaskSession {
+                    instance_id: instance.id,
+                    session_id: request.session.clone(),
+                    agent_id: instance.agent.id.clone(),
+                    started_at_ms: now_ms(),
+                },
+            )
+        {
+            tracing::warn!(
+                "could not link {} to {}: {error:#}",
+                task.id,
+                request.session
+            );
+        }
+
+        instance
+            .proxy
+            .prompt(&request.session, &text, task.as_ref().map(|task| task.id))
+            .await;
+
+        let answer = json!({
+            "projectId": project.id,
+            "taskId": task.as_ref().map(|task| task.id),
+            "agentId": instance.agent.id,
+            "instanceId": instance.id,
+            "sessionId": request.session,
+            "worktreeId": instance.worktree_id,
+            "sent": true,
+            // How full the context was before this message; the turn grows it.
+            "usage": session.usage,
+        });
+        if let Some(key) = repeat {
+            self.remember_answer(key, &answer);
+        }
+        Ok(answer)
+    }
+
+    fn remember_answer(&self, key: String, answer: &Value) {
+        let mut started = self.started.lock().unwrap();
+        // A lifetime's worth of calls is not worth keeping; the newest
+        // thousand answers are plenty to retry against.
+        if started.len() > 1000 {
+            started.clear();
+        }
+        started.insert(key, answer.clone());
     }
 }
 

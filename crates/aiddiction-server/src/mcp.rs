@@ -13,14 +13,14 @@
 //! result (`isError`), as MCP wants, rather than as a protocol error.
 
 use aiddiction_api::{
-    Agent, AgentProfile, InstanceState, NewWorktree, ProjectId, TaskId, TaskInput, TaskStatus,
-    WorktreeId,
+    Agent, AgentProfile, InstanceId, InstanceState, NewWorktree, ProjectId, TaskId, TaskInput,
+    TaskStatus, WorktreeId,
 };
 use serde_json::{Value, json};
 
 use crate::agents::Catalog;
 use crate::instances::Supervisor;
-use crate::orchestrate::{Caller, Orchestrator, StartRequest};
+use crate::orchestrate::{Caller, Orchestrator, SendRequest, StartRequest};
 use crate::projects::{ProjectError, Projects};
 use crate::worktrees::Worktrees;
 
@@ -82,7 +82,8 @@ fn initialize(params: &Value) -> Value {
         "serverInfo": { "name": "aiddiction", "version": env!("CARGO_PKG_VERSION") },
         "instructions": "Aiddiction's projects and their kanban boards of task cards. \
             list_projects gives the project ids the other tools take; a project's folder is its path. \
-            start_agent gives an agent a card to work on; list_subagents follows it.",
+            start_agent gives an agent a card to work on, send_message continues a conversation it started, \
+            and list_subagents follows them and tells how full a conversation's context is.",
     })
 }
 
@@ -150,7 +151,10 @@ fn tools(for_agent: bool) -> Value {
         tools.insert(2, json!({
             "name": "list_subagents",
             "description": "See the agents running for a project (or one of its checkouts) and their conversations, \
-                including the threads started by start_agent (a thread's taskId says which card it works on).",
+                including the threads started by start_agent (a thread's taskId says which card it works on). \
+                A thread says whether it is busy (`busy`), what it is doing (`preview`), why its last turn \
+                failed (`error`), and how full its context window is (`usage`: `used` and `size` in tokens, \
+                `cost` when the agent prices it).",
             "inputSchema": { "type": "object", "properties": {
                 "projectId": { "type": "string" },
                 "worktreeId": { "type": "string", "description": "Only agents working in this checkout" },
@@ -185,6 +189,27 @@ fn tools(for_agent: bool) -> Value {
                         },
                     },
                     "requestId": { "type": "string", "description": "Repeat this call with the same id and it is the same start" },
+                },
+            },
+        }));
+        tools.insert(4, json!({
+            "name": "send_message",
+            "description": "Send another message to a conversation that is already running, so the agent keeps its \
+                context instead of a new one being started: name the sessionId start_agent gave, or one from \
+                list_subagents. The turn grows the context: list_subagents says how full it is. Refused while the \
+                conversation is still working. Answers once the message is sent, not when the turn ends; the result \
+                comes to the card and the conversation. The answer's `usage` is how full the context was before \
+                this message.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["sessionId", "prompt"],
+                "properties": {
+                    "sessionId": { "type": "string", "description": "A conversation from start_agent or list_subagents" },
+                    "prompt": { "type": "string", "description": "What to do next; the card's context is added when it has one" },
+                    "projectId": { "type": "string", "description": "A project id, to look the conversation up in it" },
+                    "instanceId": { "type": "string", "description": "The agent instance, when the session id is not enough" },
+                    "taskId": { "type": "string", "description": "The card to work on now; the conversation's own card when left out" },
+                    "requestId": { "type": "string", "description": "Repeat this call with the same id and it is the same message" },
                 },
             },
         }));
@@ -253,6 +278,7 @@ async fn call(
             "list_agents"
                 | "list_subagents"
                 | "start_agent"
+                | "send_message"
                 | "list_worktrees"
                 | "create_worktree"
                 | "remove_worktree"
@@ -326,6 +352,7 @@ async fn call(
             Ok(json!(infos))
         }
         "start_agent" => start(projects, catalog, supervisor, orchestration, worktrees, caller, &arguments).await,
+        "send_message" => send(projects, supervisor, orchestration, caller, &arguments).await,
         "list_worktrees" => list_worktrees(projects, worktrees, caller, &arguments).await,
         "create_worktree" => create_worktree(projects, worktrees, caller, &arguments).await,
         "remove_worktree" => remove_worktree(projects, supervisor, worktrees, caller, &arguments).await,
@@ -435,6 +462,59 @@ async fn start(
             &caller_key,
             request,
         )
+        .await
+        .map_err(ToolError)
+}
+
+/// `send_message`: another turn of a conversation already started, so the
+/// agent keeps its context instead of a new one being spawned.
+async fn send(
+    projects: &Projects,
+    supervisor: &Supervisor,
+    orchestration: &Orchestrator,
+    caller: &Caller,
+    arguments: &Value,
+) -> Result<Value, ToolError> {
+    let session =
+        text(arguments, "sessionId").ok_or_else(|| ToolError("sessionId is required".into()))?;
+    let prompt = text(arguments, "prompt").ok_or_else(|| ToolError("prompt is required".into()))?;
+    let project = match arguments.get("projectId").and_then(Value::as_str) {
+        Some(project) => Some(
+            project
+                .parse::<ProjectId>()
+                .map_err(|_| ToolError("projectId is not an id".into()))?,
+        ),
+        None => None,
+    };
+    let instance = match arguments.get("instanceId").and_then(Value::as_str) {
+        Some(instance) => Some(
+            instance
+                .parse::<InstanceId>()
+                .map_err(|_| ToolError("instanceId is not an id".into()))?,
+        ),
+        None => None,
+    };
+    let task_id = match arguments.get("taskId").and_then(Value::as_str) {
+        Some(task) => Some(
+            task.parse::<TaskId>()
+                .map_err(|_| ToolError("taskId is not an id".into()))?,
+        ),
+        None => None,
+    };
+    let request = SendRequest {
+        project,
+        instance,
+        session,
+        prompt,
+        task_id,
+        request_id: text(arguments, "requestId"),
+    };
+    let caller_key = match caller {
+        Caller::User => "user".to_owned(),
+        Caller::Agent(scope) => scope.token.clone(),
+    };
+    orchestration
+        .send(projects, supervisor, &caller_key, request)
         .await
         .map_err(ToolError)
 }
@@ -940,6 +1020,7 @@ mod tests {
             "an agent cannot start further agents: {names:?}"
         );
         assert!(!names.contains(&"list_subagents"));
+        assert!(!names.contains(&"send_message"));
 
         let seen = request(
             &projects,

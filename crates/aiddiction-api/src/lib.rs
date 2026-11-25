@@ -341,6 +341,33 @@ pub struct SessionSummary {
     /// The card an orchestrated agent was started on, when it was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<TaskId>,
+    /// How full the conversation's context window is, as the agent last said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<ContextUsage>,
+}
+
+/// What a conversation occupies of its context window, from the agent's
+/// `usage_update`: what an orchestrator reads to decide whether the thread can
+/// take more work or a new one is due.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextUsage {
+    /// Tokens currently in the conversation's context.
+    pub used: u64,
+    /// The context window's size in tokens.
+    pub size: u64,
+    /// What the session has cost so far, when the agent prices it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<UsageCost>,
+}
+
+/// A conversation's cumulative cost, in the agent's own unit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageCost {
+    pub amount: f64,
+    /// An ISO 4217 code for money, or another unit such as "credits".
+    pub currency: String,
 }
 
 /// A `session/request_permission` the agent is waiting on.

@@ -137,11 +137,12 @@ list shows that changes fires `InstancesChanged`.
 
 An agent already talking to the board (`/api/v1/mcp`) can start another one
 on a task card: `list_agents` (with `projectId` for the model and settings
-the agent last offered there), `start_agent`, `list_subagents`. The
-capabilities in `list_agents` come from the agent's last `initialize`,
-kept per agent id in `agent-profiles.json` (`Supervisor::profile`); a
-changed command makes the profile stale. The settings an agent last gave
-in `session/new` are read from the running instance, not stored.
+the agent last offered there), `start_agent`, `send_message`,
+`list_subagents`. The capabilities in `list_agents` come from the agent's
+last `initialize`, kept per agent id in `agent-profiles.json`
+(`Supervisor::profile`); a changed command makes the profile stale. The
+settings an agent last gave in `session/new` are read from the running
+instance, not stored.
 
 `start_agent` (`orchestrate.rs`) starts or reuses the project's instance in
 the checkout asked for (`worktreeId`, the project's own when left out),
@@ -154,6 +155,17 @@ session in the common list (`SessionSummary::task_id` says which card), so
 the person opens it from the inbox or from the card's "Open conversation",
 answers permissions and stops it as usual; the caller only gets metadata
 and reads the card for the result.
+
+`send_message` (`Orchestrator::send`) is another turn of a conversation that
+is already running: it finds the thread by `sessionId` (optionally
+`projectId`/`instanceId`), refuses while the thread is busy or its agent is
+not running, and sends a prompt with the same card text as `start_agent`.
+No new instance or session is made, `requestId` makes a retry the same
+message, and the answer carries the `usage` the context had before the new
+turn. `SessionSummary::usage` (`ContextUsage`: `used`, `size`, optional
+`cost`) is kept from the agent's `usage_update` (`proxy.rs`,
+`State::follow`), so `list_subagents` tells an orchestrator how full each
+child's context is.
 
 A checkout the caller made itself is passed as `worktreePath` (absolute,
 relative to the project, or `~/…`, read as the server's home): `Worktrees::adopt`
@@ -191,7 +203,8 @@ UI's New worktree makes, for agents that run beside the server.)
 
 An agent started this way gets a token of its own (`Orchestrator::scope`):
 it reaches `/mcp` only and only its project's board, without `list_agents`,
-`list_subagents` or `start_agent`, and cannot delete the card it works on.
+`list_subagents`, `start_agent` or `send_message`, and cannot delete the
+card it works on.
 The person's own bearer still opens everything; a separate token per
 person's client is not there yet.
 

@@ -26,8 +26,8 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aiddiction_api::{
-    AttachParams, AttachResult, PendingPermission, PermissionChoice, PromptFinished,
-    SessionSummary, TaskId, ext,
+    AttachParams, AttachResult, ContextUsage, PendingPermission, PermissionChoice, PromptFinished,
+    SessionSummary, TaskId, UsageCost, ext,
 };
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -135,6 +135,10 @@ struct Session {
     config_options: Value,
     /// The card an orchestrated agent works on, when one was given.
     task_id: Option<TaskId>,
+    /// The agent's last `usage_update`: how full its context window is.
+    usage: Option<ContextUsage>,
+    /// Whether the server opened this session with a board token of its own.
+    board: bool,
 }
 
 impl Session {
@@ -157,6 +161,8 @@ impl Session {
             modes: Value::Null,
             config_options: Value::Null,
             task_id: None,
+            usage: None,
+            board: false,
         }
     }
 
@@ -264,11 +270,34 @@ impl Proxy {
             "mcpServers": mcp_servers,
         });
         let result = reply(self.internal_request("session/new", params)).await?;
-        result
+        let session = result
             .pointer("/sessionId")
             .and_then(Value::as_str)
             .map(str::to_owned)
-            .ok_or_else(|| "the agent made a session without an id".to_owned())
+            .ok_or_else(|| "the agent made a session without an id".to_owned())?;
+        let board = mcp_servers
+            .as_array()
+            .is_some_and(|servers| !servers.is_empty());
+        {
+            let mut state = self.state.lock().unwrap();
+            state
+                .sessions
+                .entry(session.clone())
+                .or_insert_with(Session::new)
+                .board = board;
+        }
+        Ok(session)
+    }
+
+    /// Whether the session was opened with a board token of its own: an
+    /// orchestrated agent can write to the card, one a client started cannot.
+    pub fn has_board(&self, session: &str) -> bool {
+        self.state
+            .lock()
+            .unwrap()
+            .sessions
+            .get(session)
+            .is_some_and(|session| session.board)
     }
 
     /// Sets one of the session's configuration options as a client would.
@@ -297,11 +326,15 @@ impl Proxy {
     pub fn begin(&self, session: &str, text: &str, task_id: Option<TaskId>) {
         {
             let mut state = self.state.lock().unwrap();
-            state
+            let entry = state
                 .sessions
                 .entry(session.to_owned())
-                .or_insert_with(Session::new)
-                .task_id = task_id;
+                .or_insert_with(Session::new);
+            // A later message keeps the card the conversation was started on
+            // unless it names another.
+            if task_id.is_some() {
+                entry.task_id = task_id;
+            }
             state.begin_prompt(session, text);
         }
         (self.on_sessions_changed)();
@@ -1138,6 +1171,26 @@ impl State {
                 entry.remember_choices(update);
                 false
             }
+            "usage_update" => {
+                let (Some(used), Some(size)) = (
+                    update.get("used").and_then(Value::as_u64),
+                    update.get("size").and_then(Value::as_u64),
+                ) else {
+                    return false;
+                };
+                let cost = update.get("cost").and_then(|cost| {
+                    Some(UsageCost {
+                        amount: cost.get("amount")?.as_f64()?,
+                        currency: cost.get("currency")?.as_str()?.to_owned(),
+                    })
+                });
+                let usage = ContextUsage { used, size, cost };
+                if entry.usage.as_ref() == Some(&usage) {
+                    return false;
+                }
+                entry.usage = Some(usage);
+                true
+            }
             _ => false,
         }
     }
@@ -1176,6 +1229,7 @@ impl State {
                     },
                     error: session.error.clone(),
                     task_id: session.task_id,
+                    usage: session.usage.clone(),
                 })
             })
             .collect()
@@ -1519,6 +1573,50 @@ mod tests {
             3
         );
         assert_eq!(attached["result"]["configOptions"][0]["currentValue"], "b");
+    }
+
+    #[test]
+    fn a_usage_update_says_how_full_the_context_is() {
+        let mut h = harness();
+        h.ready();
+        let (a, mut a_rx) = h.proxy.connect().unwrap();
+        h.proxy.on_client_line(
+            a,
+            r#"{"jsonrpc":"2.0","id":1,"method":"session/new","params":{}}"#,
+        );
+        let new = json_of(h.agent.try_recv().unwrap());
+        h.proxy.on_agent_line(
+            &json!({ "jsonrpc": "2.0", "id": new["id"], "result": { "sessionId": "s" } })
+                .to_string(),
+        );
+        a_rx.try_recv().unwrap();
+
+        let update = |update: Value| {
+            json!({ "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "s", "update": update } }).to_string()
+        };
+        h.proxy.on_agent_line(&update(json!({
+            "sessionUpdate": "usage_update",
+            "used": 12_345,
+            "size": 200_000,
+            "cost": { "amount": 0.5, "currency": "USD" },
+        })));
+        let usage = h.proxy.sessions()[0].usage.clone().unwrap();
+        assert_eq!((usage.used, usage.size), (12_345, 200_000));
+        assert_eq!(
+            usage.cost,
+            Some(UsageCost {
+                amount: 0.5,
+                currency: "USD".into()
+            })
+        );
+
+        // A later update replaces the earlier one whole.
+        h.proxy.on_agent_line(&update(
+            json!({ "sessionUpdate": "usage_update", "used": 1, "size": 2 }),
+        ));
+        let usage = h.proxy.sessions()[0].usage.clone().unwrap();
+        assert_eq!((usage.used, usage.size), (1, 2));
+        assert!(usage.cost.is_none());
     }
 
     #[test]
