@@ -1459,3 +1459,156 @@ async fn worktrees_are_made_listed_and_removed_from_the_board() {
     .unwrap();
     assert_eq!(listed.as_array().unwrap().len(), 1);
 }
+
+/// A checkout follows the base it was made from: the base moves in the
+/// project's own checkout, and both a clone and a shared worktree take it.
+/// A dirty checkout and one with an agent in it are refused, and a merge
+/// that conflicts is aborted, leaving the checkout as it was.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_checkout_follows_the_base_that_moved_and_a_conflict_is_aborted() {
+    aiddiction_client::install_crypto_provider();
+    let server = start_server().await;
+    let client = ServerClient::new(&server.url, "secret").unwrap();
+    let fake = fake_agent_on(&client, "Update agent").await;
+
+    let repo = tempfile::tempdir().unwrap();
+    assert!(
+        git_in(repo.path(), &["init", "-q", "-b", "main"])
+            .status
+            .success()
+    );
+    std::fs::write(repo.path().join("a.txt"), "one\n").unwrap();
+    assert!(git_in(repo.path(), &["add", "."]).status.success());
+    assert!(
+        git_in(repo.path(), &["commit", "-q", "-m", "first"])
+            .status
+            .success()
+    );
+    let project = client
+        .create_project(&NewProject {
+            name: "Follow the base".into(),
+            source: ProjectSource::Existing {
+                path: repo.path().display().to_string(),
+            },
+        })
+        .await
+        .unwrap();
+
+    let mut checkouts = Vec::new();
+    for (name, mode) in [("clone", "clone"), ("shared", "worktree")] {
+        let made = board(
+            &client,
+            "create_worktree",
+            json!({ "projectId": project.id, "name": name, "mode": mode }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(made["base"], "main", "the branch it follows: {made}");
+        checkouts.push((
+            made["worktreeId"]
+                .as_str()
+                .unwrap()
+                .parse::<aiddiction_api::WorktreeId>()
+                .unwrap(),
+            PathBuf::from(made["path"].as_str().unwrap()),
+        ));
+    }
+
+    // The base moves in the project's own checkout.
+    std::fs::write(repo.path().join("base.txt"), "from the base\n").unwrap();
+    assert!(git_in(repo.path(), &["add", "."]).status.success());
+    assert!(
+        git_in(repo.path(), &["commit", "-q", "-m", "base moves"])
+            .status
+            .success()
+    );
+
+    for (id, path) in &checkouts {
+        let updated = board(
+            &client,
+            "update_worktree",
+            json!({ "projectId": project.id, "worktreeId": id }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated["base"], "main");
+        assert_eq!(updated["changed"], true);
+        assert_eq!(
+            std::fs::read_to_string(path.join("base.txt")).unwrap(),
+            "from the base\n"
+        );
+    }
+    let (clone, clone_path) = &checkouts[0];
+    let again = board(
+        &client,
+        "update_worktree",
+        json!({ "projectId": project.id, "worktreeId": clone }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(again["changed"], false, "nothing new to take: {again}");
+
+    // Uncommitted work is not thrown into a merge.
+    std::fs::write(clone_path.join("scratch.txt"), "wip\n").unwrap();
+    let dirty = board(
+        &client,
+        "update_worktree",
+        json!({ "projectId": project.id, "worktreeId": clone }),
+    )
+    .await
+    .unwrap_err();
+    assert!(dirty.contains("changes"), "{dirty}");
+    std::fs::remove_file(clone_path.join("scratch.txt")).unwrap();
+
+    // Both sides change the same file: the merge is named and taken back.
+    std::fs::write(clone_path.join("a.txt"), "the checkout\n").unwrap();
+    assert!(git_in(clone_path, &["add", "."]).status.success());
+    assert!(
+        git_in(clone_path, &["commit", "-q", "-m", "checkout"])
+            .status
+            .success()
+    );
+    std::fs::write(repo.path().join("a.txt"), "the base\n").unwrap();
+    assert!(git_in(repo.path(), &["add", "."]).status.success());
+    assert!(
+        git_in(repo.path(), &["commit", "-q", "-m", "base changes it"])
+            .status
+            .success()
+    );
+    let conflict = board(
+        &client,
+        "update_worktree",
+        json!({ "projectId": project.id, "worktreeId": clone }),
+    )
+    .await
+    .unwrap_err();
+    assert!(conflict.contains("a.txt"), "{conflict}");
+    assert!(conflict.contains("aborted"), "{conflict}");
+    assert_eq!(
+        std::fs::read_to_string(clone_path.join("a.txt")).unwrap(),
+        "the checkout\n",
+        "the aborted merge leaves the work as it was"
+    );
+    assert!(
+        git_in(clone_path, &["status", "--porcelain"])
+            .stdout
+            .is_empty(),
+        "no half-merged files are left"
+    );
+    assert!(!clone_path.join(".git").join("MERGE_HEAD").exists());
+
+    // Not under a running agent.
+    let instance = client
+        .start_instance(project.id, &fake.id, Some(*clone))
+        .await
+        .unwrap();
+    let busy = board(
+        &client,
+        "update_worktree",
+        json!({ "projectId": project.id, "worktreeId": clone }),
+    )
+    .await
+    .unwrap_err();
+    assert!(busy.contains("still working"), "{busy}");
+    client.stop_instance(instance.id).await.unwrap();
+}

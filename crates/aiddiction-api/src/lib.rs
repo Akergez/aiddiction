@@ -200,6 +200,11 @@ pub struct Worktree {
     /// The commit it was made from, for a worktree the server made.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_commit: Option<String>,
+    /// The branch (or commit) it was made from, as it was named, so a later
+    /// `update_worktree` can follow the branch as it moves. `None` for the
+    /// main checkout, one the person made, and records written before this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
     /// Its folder on the server.
     pub path: String,
     pub created_at_ms: u64,

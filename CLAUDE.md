@@ -191,9 +191,13 @@ accepted. The turn is recorded in the journal like a prompt
 (`Proxy::begin`).
 
 The board also makes, lists and removes checkouts itself: `list_worktrees`
-gives ids, names, branches and paths, `create_worktree` makes one on a new
-branch, `remove_worktree` takes one away (refused while an agent works in it;
-an adopted checkout is only forgotten). An orchestrator that cannot see the
+gives ids, names, branches, the base each follows and paths,
+`create_worktree` makes one on a new
+branch, `update_worktree` merges the base branch as it is now into the
+checkout's branch (a clone fetches it from the project first; a merge that
+conflicts is aborted and the files named), `remove_worktree` takes one away
+(refused while an agent works in it; an adopted checkout is only forgotten).
+An orchestrator that cannot see the
 server's files works with ids alone. `create_worktree` makes a **clone**: its
 `.git` is its own, so an agent in a container can work and commit in it
 without reaching the project's checkout. Its branch reaches the project by

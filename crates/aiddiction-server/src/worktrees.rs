@@ -37,7 +37,7 @@ pub struct Worktrees {
 pub enum WorktreeError {
     #[error("no such worktree")]
     NotFound,
-    #[error("the project's own checkout is not a worktree to remove")]
+    #[error("the project's own checkout cannot be updated or removed this way")]
     Main,
     #[error("{0}")]
     Invalid(String),
@@ -113,7 +113,7 @@ impl Worktrees {
         input: NewWorktree,
     ) -> Result<Worktree, WorktreeError> {
         let _changing = self.changing.lock().await;
-        let (name, branch, base_commit) = self.prepare(project, dir, &input).await?;
+        let (name, branch, base, base_commit) = self.prepare(project, dir, &input).await?;
 
         let path = self.path_of(project.id, &name);
         if path.exists() {
@@ -149,6 +149,7 @@ impl Worktrees {
             name,
             branch: Some(branch),
             base_commit: Some(base_commit),
+            base: Some(base),
             path: path_text,
             created_at_ms: now_ms(),
         };
@@ -199,14 +200,15 @@ impl Worktrees {
         Ok(worktree)
     }
 
-    /// A name, a branch and the commit a new checkout starts from, checked
-    /// against the project; both kinds of checkout share them.
+    /// A name, a branch, the base it follows and the commit a new checkout
+    /// starts from, checked against the project; both kinds of checkout share
+    /// them.
     async fn prepare(
         &self,
         project: &Project,
         dir: &Path,
         input: &NewWorktree,
-    ) -> Result<(String, String, String), WorktreeError> {
+    ) -> Result<(String, String, String, String), WorktreeError> {
         let name = match (
             input
                 .name
@@ -261,6 +263,13 @@ impl Worktrees {
             .filter(|base| !base.is_empty())
             .unwrap_or("HEAD")
             .to_owned();
+        // A caller who names no base means the branch the main checkout is
+        // on: that is what moves, where a commit would stay where it is.
+        let base_ref = if base == "HEAD" {
+            branch_of(dir).await.unwrap_or_else(|| base.clone())
+        } else {
+            base.clone()
+        };
         let base_commit = match git(
             dir,
             &["rev-parse", "--verify", &format!("{base}^{{commit}}")],
@@ -276,7 +285,7 @@ impl Worktrees {
                 )));
             }
         };
-        Ok((name, branch, base_commit))
+        Ok((name, branch, base_ref, base_commit))
     }
 
     /// Makes a clone of the project on a new branch. Unlike a worktree it is
@@ -290,7 +299,7 @@ impl Worktrees {
         input: NewWorktree,
     ) -> Result<Worktree, WorktreeError> {
         let _changing = self.changing.lock().await;
-        let (name, branch, base_commit) = self.prepare(project, dir, &input).await?;
+        let (name, branch, base, base_commit) = self.prepare(project, dir, &input).await?;
         let path = self.path_of(project.id, &name);
         // A folder left by an attempt that failed is not a checkout of ours
         // (a record would have stopped the name above): it goes.
@@ -342,6 +351,7 @@ impl Worktrees {
             name,
             branch: Some(branch),
             base_commit: Some(base_commit),
+            base: Some(base),
             path: path_text,
             created_at_ms: now_ms(),
         };
@@ -412,6 +422,107 @@ impl Worktrees {
             String::new()
         };
         Ok((branch, commit))
+    }
+
+    /// Brings a checkout's branch up to date with the base it was made from:
+    /// a clone fetches it from the project's own checkout first, a shared
+    /// worktree has it already, and both merge it into their branch. A dirty
+    /// checkout is left alone, and a merge that conflicts is aborted, so the
+    /// checkout stays as it was and the caller sees what clashed.
+    pub async fn update(
+        &self,
+        project: &Project,
+        dir: &Path,
+        id: WorktreeId,
+        base: Option<&str>,
+    ) -> Result<(String, String, String, bool), WorktreeError> {
+        let _changing = self.changing.lock().await;
+        if id == project.id {
+            return Err(WorktreeError::Main);
+        }
+        let worktree = self
+            .list
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|worktree| worktree.id == id && worktree.project_id == project.id)
+            .cloned()
+            .ok_or(WorktreeError::NotFound)?;
+        let Some(branch) = worktree.branch.clone() else {
+            return Err(WorktreeError::Invalid(
+                "the checkout is on no branch".into(),
+            ));
+        };
+        let base = base
+            .map(str::trim)
+            .filter(|base| !base.is_empty())
+            .map(str::to_owned)
+            .or_else(|| worktree.base.clone())
+            .ok_or_else(|| {
+                WorktreeError::Invalid(
+                    "the checkout does not say what it was made from; name a base".into(),
+                )
+            })?;
+        let path = PathBuf::from(&worktree.path);
+        if !path.is_dir() {
+            return Err(WorktreeError::Invalid(format!("{} is gone", worktree.path)));
+        }
+        if dirty(&path).await? {
+            return Err(WorktreeError::Dirty);
+        }
+        let source = if Self::is_clone(&worktree) {
+            // Its own repository may not have the branch the base names; the
+            // project's checkout does.
+            let output = git(&path, &["fetch", "--quiet", &dir.to_string_lossy(), &base]).await?;
+            if !output.status.success() {
+                return Err(WorktreeError::Invalid(format!(
+                    "could not fetch {base} from the project: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                )));
+            }
+            "FETCH_HEAD".to_owned()
+        } else {
+            base.clone()
+        };
+        let before = head_of(&path).await?;
+        // A merge may write a commit: give it an identity of its own rather
+        // than depend on the person's git config, which a server may lack.
+        let output = git(
+            &path,
+            &[
+                "-c",
+                "user.name=Aiddiction",
+                "-c",
+                "user.email=aiddiction@localhost",
+                "-c",
+                "commit.gpgsign=false",
+                "merge",
+                "--no-edit",
+                source.as_str(),
+            ],
+        )
+        .await?;
+        if !output.status.success() {
+            let conflicts = git(&path, &["diff", "--name-only", "--diff-filter=U"]).await?;
+            let names = String::from_utf8_lossy(&conflicts.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = git(&path, &["merge", "--abort"]).await;
+            if names.is_empty() {
+                return Err(WorktreeError::Invalid(format!(
+                    "could not merge {base}: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                )));
+            }
+            return Err(WorktreeError::Invalid(format!(
+                "merging {base} conflicts in {names}; the merge was aborted"
+            )));
+        }
+        let commit = head_of(&path).await?;
+        Ok((branch, base, commit.clone(), commit != before))
     }
 
     /// A checkout the person made — a git worktree of this project's
@@ -492,6 +603,7 @@ impl Worktrees {
             name,
             branch: branch_of(&wanted).await,
             base_commit: None,
+            base: None,
             path: wanted.to_string_lossy().into_owned(),
             created_at_ms: now_ms(),
         };
@@ -643,6 +755,7 @@ fn main(project: &Project, dir: &Path, branch: Option<String>) -> Worktree {
         name: "Main checkout".to_owned(),
         branch,
         base_commit: None,
+        base: None,
         path: dir.to_string_lossy().into_owned(),
         created_at_ms: project.created_at_ms,
     }
@@ -732,6 +845,18 @@ async fn branch_of(dir: &Path) -> Option<String> {
         .success()
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
         .filter(|branch| !branch.is_empty())
+}
+
+/// The commit checked out in `dir`.
+async fn head_of(dir: &Path) -> Result<String, WorktreeError> {
+    let output = git(dir, &["rev-parse", "HEAD"]).await?;
+    if !output.status.success() {
+        return Err(WorktreeError::Invalid(format!(
+            "git rev-parse HEAD: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 /// Whether the checkout has anything uncommitted, untracked files included.

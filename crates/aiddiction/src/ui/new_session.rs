@@ -297,6 +297,7 @@ pub(super) fn main_checkout(project: &aiddiction_api::Project) -> aiddiction_api
         name: "Main checkout".to_owned(),
         branch: None,
         base_commit: None,
+        base: None,
         path: String::new(),
         created_at_ms: project.created_at_ms,
     }
