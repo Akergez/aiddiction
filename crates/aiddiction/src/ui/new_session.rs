@@ -298,6 +298,7 @@ pub(super) fn main_checkout(project: &aiddiction_api::Project) -> aiddiction_api
         branch: None,
         base_commit: None,
         base: None,
+        last_result: None,
         path: String::new(),
         created_at_ms: project.created_at_ms,
     }

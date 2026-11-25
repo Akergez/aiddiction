@@ -486,10 +486,11 @@ impl Shell {
                 let subtitle = if worktree.main {
                     "the project's own checkout".to_owned()
                 } else {
-                    worktree
-                        .branch
-                        .clone()
-                        .unwrap_or_else(|| worktree.path.clone())
+                    match (&worktree.branch, &worktree.last_result) {
+                        (Some(branch), _) => branch.clone(),
+                        (None, Some(result)) => format!("result: {result}"),
+                        (None, None) => "no round in progress".to_owned(),
+                    }
                 };
                 let row = ListRow::new(
                     SharedString::from(format!("worktree-{}", worktree.id)),

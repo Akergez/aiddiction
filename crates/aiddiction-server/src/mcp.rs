@@ -215,52 +215,54 @@ fn tools(for_agent: bool) -> Value {
         }));
         tools.push(json!({
             "name": "list_worktrees",
-            "description": "The checkouts of a project: its own and the ones the server made or adopted, with the \
-                branch each has. An agent can be started in any of them by worktreeId.",
+            "description": "The checkouts of a project: its own and the ones the server made or adopted. A checkout \
+                that works on it says the temporary branch of the round (`branch`), the base it follows, the last \
+                branch handed to the project (`lastResult`), and whether it is a clone. An agent can be started in \
+                any by worktreeId.",
             "inputSchema": { "type": "object", "required": ["projectId"], "properties": {
                 "projectId": { "type": "string" },
             }},
         }));
         tools.push(json!({
             "name": "create_worktree",
-            "description": "Make a clone of the project on a new branch, outside its own checkout, and answer \
-                with its id: agents started there work in their own files and branch. Its .git is its own, so it \
-                works where the project's checkout cannot be reached; its commits come back by sync_worktree. The \
-                branch is kept when the clone goes.",
+            "description": "Make a clone of the project outside its own checkout, on a temporary branch of its own \
+                (named from the base and an id), and answer with its id: agents started there work in their own \
+                files and commit to that branch. Its .git is its own, so it works where the project's checkout \
+                cannot be reached; get_worktree_results takes the branch into the project.",
             "inputSchema": { "type": "object", "required": ["projectId"], "properties": {
                 "projectId": { "type": "string" },
-                "name": { "type": "string", "description": "Its name in a list; also the folder when there is no branch" },
-                "branch": { "type": "string", "description": "The branch to make; aiddiction/<name> when left out" },
-                "base": { "type": "string", "description": "The commit or branch to start from; the project's HEAD when left out" },
+                "name": { "type": "string", "description": "Its name in a list; also the folder" },
+                "base": { "type": "string", "description": "The branch or commit to start from; the project's HEAD when left out" },
             }},
         }));
         tools.push(json!({
-            "name": "sync_worktree",
-            "description": "Bring the commits of a clone checkout into the project's repository, branch and all, so it \
-                can be merged in the main checkout like any other branch. A worktree shares the repository already \
-                and needs nothing.",
+            "name": "get_worktree_results",
+            "description": "Take a round's work out of a checkout: its temporary branch goes into the project's \
+                repository for the orchestrator to merge there, and the checkout is left without that branch, so no \
+                stale temporary branches pile up. A clone's branch is fetched; a shared worktree's is already in the \
+                repository and only stops being checked out. Refused with uncommitted changes. The answer names the \
+                branch and the commit to merge.",
             "inputSchema": { "type": "object", "required": ["projectId", "worktreeId"], "properties": {
                 "projectId": { "type": "string" },
                 "worktreeId": { "type": "string", "description": "An id from list_worktrees" },
             }},
         }));
         tools.push(json!({
-            "name": "update_worktree",
-            "description": "Bring a checkout's branch up to date with the base it was made from, after that base \
-                moved: a clone fetches the base from the project's own checkout first, a shared worktree has it \
-                already, and both merge it into their branch. Refused while an agent runs in it or it has \
-                uncommitted changes; a merge that conflicts is aborted and the files are named, so nothing half \
-                merged is left.",
+            "name": "start_new_worktree_work",
+            "description": "Start a new round in a checkout: a fresh temporary branch from the base as the main \
+                checkout has it now (a clone fetches that base first). Only after get_worktree_results took the \
+                previous round; refused while the checkout still has work or uncommitted changes.",
             "inputSchema": { "type": "object", "required": ["projectId", "worktreeId"], "properties": {
                 "projectId": { "type": "string" },
                 "worktreeId": { "type": "string", "description": "An id from list_worktrees" },
-                "base": { "type": "string", "description": "The branch or commit to follow; the one the checkout was made from when left out" },
+                "base": { "type": "string", "description": "The branch to start from; the one the checkout was made from when left out" },
             }},
         }));
         tools.push(json!({
             "name": "remove_worktree",
             "description": "Remove a worktree the server made, or forget an adopted one. Refused while an agent is \
-                working in it; the branch stays in the repository.",
+                working in it; a clone whose work was not taken by get_worktree_results is refused too. Branches \
+                that reached the project stay in the repository.",
             "inputSchema": { "type": "object", "required": ["projectId", "worktreeId"], "properties": {
                 "projectId": { "type": "string" },
                 "worktreeId": { "type": "string", "description": "An id from list_worktrees" },
@@ -294,8 +296,8 @@ async fn call(
                 | "send_message"
                 | "list_worktrees"
                 | "create_worktree"
-                | "sync_worktree"
-                | "update_worktree"
+                | "get_worktree_results"
+                | "start_new_worktree_work"
                 | "remove_worktree"
         )
     {
@@ -370,9 +372,9 @@ async fn call(
         "send_message" => send(projects, supervisor, orchestration, caller, &arguments).await,
         "list_worktrees" => list_worktrees(projects, worktrees, caller, &arguments).await,
         "create_worktree" => create_worktree(projects, worktrees, caller, &arguments).await,
-        "update_worktree" => update_worktree(projects, supervisor, worktrees, caller, &arguments).await,
+        "get_worktree_results" => get_worktree_results(projects, supervisor, worktrees, caller, &arguments).await,
+        "start_new_worktree_work" => start_new_worktree_work(projects, supervisor, worktrees, caller, &arguments).await,
         "remove_worktree" => remove_worktree(projects, supervisor, worktrees, caller, &arguments).await,
-        "sync_worktree" => sync_worktree(projects, worktrees, caller, &arguments).await,
         "list_tasks" => project_of(&arguments, caller).and_then(|project| Ok(json!(projects.tasks(project)?))),
         "share_file" => (|| { let project=project_of(&arguments, caller)?; let path=text(&arguments,"path").ok_or_else(||ToolError("path is required".into()))?; let name=text(&arguments,"name"); let p=projects.list().into_iter().find(|x|x.id==project).ok_or_else(||ToolError("project not found".into()))?; let file=crate::files::share(&projects.dir(&p), &path, name.as_deref(), "").map_err(ToolError)?; Ok(json!(file)) })(),
         "create_task" => (|| {
@@ -569,6 +571,7 @@ async fn list_worktrees(
                 "branch": worktree.branch,
                 "baseCommit": worktree.base_commit,
                 "base": worktree.base,
+                "lastResult": worktree.last_result,
                 "path": worktree.path,
                 "main": worktree.main,
                 "managed": worktree.managed,
@@ -588,7 +591,6 @@ async fn create_worktree(
     let (project, dir) = seen_project(projects, caller, arguments)?;
     let input = NewWorktree {
         name: text(arguments, "name"),
-        branch: text(arguments, "branch"),
         base: text(arguments, "base"),
     };
     let clone = match text(arguments, "mode").as_deref() {
@@ -609,6 +611,7 @@ async fn create_worktree(
         "branch": made.branch,
         "baseCommit": made.base_commit,
         "base": made.base,
+        "lastResult": made.last_result,
         "path": made.path,
         "clone": Worktrees::is_clone(&made),
     }))
@@ -628,8 +631,10 @@ async fn remove_worktree(
         .ok_or_else(|| ToolError("worktreeId is required".into()))?
         .parse()
         .map_err(|_| ToolError("worktreeId is not an id".into()))?;
-    if working_in(supervisor, project.id, worktree) {
-        return Err(ToolError("the agent is still working in it".into()));
+    if running_in(supervisor, project.id, worktree) {
+        return Err(ToolError(
+            "an agent is still running in it; stop it first".into(),
+        ));
     }
     worktrees
         .remove(&project, &dir, worktree)
@@ -638,8 +643,9 @@ async fn remove_worktree(
     Ok(json!({ "worktreeId": worktree, "removed": true }))
 }
 
-/// `update_worktree`: the base that moved merged into the checkout's branch.
-async fn update_worktree(
+/// `get_worktree_results`: the round's branch into the project, out of the
+/// checkout.
+async fn get_worktree_results(
     projects: &Projects,
     supervisor: &Supervisor,
     worktrees: &Worktrees,
@@ -651,24 +657,55 @@ async fn update_worktree(
         .ok_or_else(|| ToolError("worktreeId is required".into()))?
         .parse()
         .map_err(|_| ToolError("worktreeId is not an id".into()))?;
-    if working_in(supervisor, project.id, worktree) {
-        return Err(ToolError("the agent is still working in it".into()));
+    if let Some(instance) = working_in(supervisor, project.id, worktree) {
+        return Err(ToolError(format!(
+            "the agent {instance} is in a turn there; take the results when it ends"
+        )));
     }
-    let (branch, base, commit, changed) = worktrees
-        .update(&project, &dir, worktree, text(arguments, "base").as_deref())
+    let (branch, commit) = worktrees
+        .get_results(&project, &dir, worktree)
+        .await
+        .map_err(|error| ToolError(format!("{error}")))?;
+    Ok(json!({
+        "worktreeId": worktree,
+        "branch": branch,
+        "commit": commit,
+    }))
+}
+
+/// `start_new_worktree_work`: a fresh temporary branch from the base as it
+/// is now.
+async fn start_new_worktree_work(
+    projects: &Projects,
+    supervisor: &Supervisor,
+    worktrees: &Worktrees,
+    caller: &Caller,
+    arguments: &Value,
+) -> Result<Value, ToolError> {
+    let (project, dir) = seen_project(projects, caller, arguments)?;
+    let worktree: WorktreeId = text(arguments, "worktreeId")
+        .ok_or_else(|| ToolError("worktreeId is required".into()))?
+        .parse()
+        .map_err(|_| ToolError("worktreeId is not an id".into()))?;
+    if let Some(instance) = working_in(supervisor, project.id, worktree) {
+        return Err(ToolError(format!(
+            "the agent {instance} is in a turn there; start new work when it ends"
+        )));
+    }
+    let (branch, base, base_commit) = worktrees
+        .start_new_work(&project, &dir, worktree, text(arguments, "base").as_deref())
         .await
         .map_err(|error| ToolError(format!("{error}")))?;
     Ok(json!({
         "worktreeId": worktree,
         "branch": branch,
         "base": base,
-        "commit": commit,
-        "changed": changed,
+        "baseCommit": base_commit,
     }))
 }
 
-/// Whether an agent of the project is running in that checkout.
-fn working_in(supervisor: &Supervisor, project: ProjectId, worktree: WorktreeId) -> bool {
+/// Whether an agent of the project is running in that checkout at all.
+fn running_in(supervisor: &Supervisor, project: ProjectId, worktree: WorktreeId) -> bool {
     supervisor
         .for_worktree(project, worktree)
         .iter()
@@ -680,23 +717,21 @@ fn working_in(supervisor: &Supervisor, project: ProjectId, worktree: WorktreeId)
         })
 }
 
-/// `sync_worktree`: a clone's branch into the project's repository.
-async fn sync_worktree(
-    projects: &Projects,
-    worktrees: &Worktrees,
-    caller: &Caller,
-    arguments: &Value,
-) -> Result<Value, ToolError> {
-    let (project, dir) = seen_project(projects, caller, arguments)?;
-    let worktree: WorktreeId = text(arguments, "worktreeId")
-        .ok_or_else(|| ToolError("worktreeId is required".into()))?
-        .parse()
-        .map_err(|_| ToolError("worktreeId is not an id".into()))?;
-    let (branch, commit) = worktrees
-        .sync(&project, &dir, worktree)
-        .await
-        .map_err(|error| ToolError(format!("{error}")))?;
-    Ok(json!({ "worktreeId": worktree, "branch": branch, "commit": commit }))
+/// The agent that is starting or in a turn in that checkout. An idle process
+/// is not work: its context may be old, but it is not changing files.
+fn working_in(
+    supervisor: &Supervisor,
+    project: ProjectId,
+    worktree: WorktreeId,
+) -> Option<InstanceId> {
+    supervisor
+        .for_worktree(project, worktree)
+        .into_iter()
+        .find_map(|instance| {
+            let starting = instance.state() == InstanceState::Starting;
+            let busy = instance.info().sessions.iter().any(|session| session.busy);
+            (starting || busy).then_some(instance.id)
+        })
 }
 
 fn agent_summary(
@@ -1072,8 +1107,8 @@ mod tests {
         );
         assert!(!names.contains(&"list_subagents"));
         assert!(!names.contains(&"send_message"));
-        assert!(!names.contains(&"update_worktree"));
-        assert!(!names.contains(&"sync_worktree"));
+        assert!(!names.contains(&"get_worktree_results"));
+        assert!(!names.contains(&"start_new_worktree_work"));
 
         let seen = request(
             &projects,

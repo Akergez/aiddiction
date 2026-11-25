@@ -194,17 +194,24 @@ pub struct Worktree {
     pub managed: bool,
     /// Its name in a list: the checkout's folder name, or the one chosen.
     pub name: String,
-    /// The branch it has checked out; `None` when git cannot say.
+    /// The temporary branch the checkout works on, if a round is in
+    /// progress; `None` after its results were taken and before the next
+    /// round starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
     /// The commit it was made from, for a worktree the server made.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_commit: Option<String>,
-    /// The branch (or commit) it was made from, as it was named, so a later
-    /// `update_worktree` can follow the branch as it moves. `None` for the
-    /// main checkout, one the person made, and records written before this.
+    /// The branch it was made from, as it was named; a later round starts
+    /// from it as it is then. `None` for the main checkout, one the person
+    /// made, and records written before this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
+    /// The branch the last round handed to the project's repository, for
+    /// the orchestrator to merge. It stays there after the checkout is
+    /// detached from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_result: Option<String>,
     /// Its folder on the server.
     pub path: String,
     pub created_at_ms: u64,
@@ -215,16 +222,14 @@ fn managed_by_default() -> bool {
     true
 }
 
-/// Body of `POST /projects/{id}/worktrees`. A worktree is made from a new
-/// branch (`branch`, or `aiddiction/<name>`) at `base` (or the main
+/// Body of `POST /projects/{id}/worktrees`. A worktree gets a temporary
+/// branch of its own (`aiddiction/<base>-<id>`) at `base` (or the main
 /// checkout's `HEAD`), in a folder outside the main checkout.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewWorktree {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub branch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
 }

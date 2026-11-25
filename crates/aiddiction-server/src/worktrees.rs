@@ -45,6 +45,8 @@ pub enum WorktreeError {
     Busy,
     #[error("it has changes; commit them or remove the worktree yourself")]
     Dirty,
+    #[error("the checkout still has work; take its results first")]
+    Unfinished,
     #[error(transparent)]
     Io(#[from] anyhow::Error),
 }
@@ -113,7 +115,9 @@ impl Worktrees {
         input: NewWorktree,
     ) -> Result<Worktree, WorktreeError> {
         let _changing = self.changing.lock().await;
-        let (name, branch, base, base_commit) = self.prepare(project, dir, &input).await?;
+        let (name, base, base_commit) = self.prepare(project, dir, &input).await?;
+        let branch = temp_branch(&base);
+        checkout_branch(&branch)?;
 
         let path = self.path_of(project.id, &name);
         if path.exists() {
@@ -150,6 +154,7 @@ impl Worktrees {
             branch: Some(branch),
             base_commit: Some(base_commit),
             base: Some(base),
+            last_result: None,
             path: path_text,
             created_at_ms: now_ms(),
         };
@@ -200,35 +205,23 @@ impl Worktrees {
         Ok(worktree)
     }
 
-    /// A name, a branch, the base it follows and the commit a new checkout
-    /// starts from, checked against the project; both kinds of checkout share
-    /// them.
+    /// A name, the base it follows and the commit a new checkout starts
+    /// from, checked against the project; both kinds of checkout share them.
+    /// The temporary branch is made by the caller, since every round gets a
+    /// new one.
     async fn prepare(
         &self,
         project: &Project,
         dir: &Path,
         input: &NewWorktree,
-    ) -> Result<(String, String, String, String), WorktreeError> {
-        let name = match (
-            input
-                .name
-                .as_deref()
-                .map(str::trim)
-                .filter(|name| !name.is_empty()),
-            input.branch.as_deref(),
-        ) {
-            (Some(name), _) => slug(name, "worktree"),
-            (None, Some(branch)) => slug(branch, "worktree"),
-            (None, None) => format!("worktree-{}", &uuid::Uuid::now_v7().to_string()[..8]),
-        };
-        let branch = input
-            .branch
+    ) -> Result<(String, String, String), WorktreeError> {
+        let name = input
+            .name
             .as_deref()
             .map(str::trim)
-            .filter(|branch| !branch.is_empty())
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!("aiddiction/{name}"));
-        checkout_branch(&branch)?;
+            .filter(|name| !name.is_empty())
+            .map(|name| slug(name, "worktree"))
+            .unwrap_or_else(|| format!("worktree-{}", &uuid::Uuid::now_v7().to_string()[..8]));
         if self
             .list
             .lock()
@@ -238,22 +231,6 @@ impl Worktrees {
         {
             return Err(WorktreeError::Invalid(format!(
                 "the project already has a worktree called {name}"
-            )));
-        }
-        if let Ok(output) = git(
-            dir,
-            &[
-                "rev-parse",
-                "--verify",
-                "--quiet",
-                &format!("refs/heads/{branch}"),
-            ],
-        )
-        .await
-            && output.status.success()
-        {
-            return Err(WorktreeError::Invalid(format!(
-                "the branch {branch} already exists"
             )));
         }
         let base = input
@@ -285,13 +262,13 @@ impl Worktrees {
                 )));
             }
         };
-        Ok((name, branch, base_ref, base_commit))
+        Ok((name, base_ref, base_commit))
     }
 
     /// Makes a clone of the project on a new branch. Unlike a worktree it is
     /// self-contained — its `.git` is its own — so it can be handed to an
     /// agent in a container that never sees the project's checkout. Its
-    /// commits reach the project by `sync`.
+    /// commits reach the project by `get_results`.
     pub async fn create_clone(
         &self,
         project: &Project,
@@ -299,7 +276,9 @@ impl Worktrees {
         input: NewWorktree,
     ) -> Result<Worktree, WorktreeError> {
         let _changing = self.changing.lock().await;
-        let (name, branch, base, base_commit) = self.prepare(project, dir, &input).await?;
+        let (name, base, base_commit) = self.prepare(project, dir, &input).await?;
+        let branch = temp_branch(&base);
+        checkout_branch(&branch)?;
         let path = self.path_of(project.id, &name);
         // A folder left by an attempt that failed is not a checkout of ours
         // (a record would have stopped the name above): it goes.
@@ -335,6 +314,9 @@ impl Worktrees {
                 String::from_utf8_lossy(&output.stderr).trim()
             )));
         }
+        // The clone comes on the default branch; the round's temporary
+        // branch is the only one it should have, and the one HEAD is on.
+        let default = branch_of(&path).await;
         let switched = git(&path, &["switch", "--quiet", "-c", &branch, &base_commit]).await?;
         if !switched.status.success() {
             let _ = std::fs::remove_dir_all(&path);
@@ -342,6 +324,16 @@ impl Worktrees {
                 "could not make the branch {branch}: {}",
                 String::from_utf8_lossy(&switched.stderr).trim()
             )));
+        }
+        if let Some(default) = default.filter(|default| default != &branch) {
+            let gone = git(&path, &["branch", "-D", &default]).await?;
+            if !gone.status.success() {
+                let _ = std::fs::remove_dir_all(&path);
+                return Err(WorktreeError::Invalid(format!(
+                    "could not leave only the temporary branch: {}",
+                    String::from_utf8_lossy(&gone.stderr).trim()
+                )));
+            }
         }
         let worktree = Worktree {
             id: uuid::Uuid::now_v7(),
@@ -352,6 +344,7 @@ impl Worktrees {
             branch: Some(branch),
             base_commit: Some(base_commit),
             base: Some(base),
+            last_result: None,
             path: path_text,
             created_at_ms: now_ms(),
         };
@@ -379,63 +372,18 @@ impl Worktrees {
         Path::new(&worktree.path).join(".git").is_dir()
     }
 
-    /// Brings the commits of a clone into the project's repository: the
-    /// branch lands there, so the person merges it in the main checkout like
-    /// any other. A worktree shares the repository already and needs nothing.
-    pub async fn sync(
+    /// Takes a round's work out of a checkout: the temporary branch goes
+    /// into the project's repository, where the orchestrator merges it, and
+    /// the checkout is left without a branch, so no stale temporary branches
+    /// pile up there. A clone fetches its branch into the project first; a
+    /// shared worktree already has the ref there. Nothing is taken while the
+    /// checkout has uncommitted changes.
+    pub async fn get_results(
         &self,
         project: &Project,
         dir: &Path,
         id: WorktreeId,
     ) -> Result<(String, String), WorktreeError> {
-        let worktree = self.get(project, dir, id).await?;
-        if !Self::is_clone(&worktree) {
-            return Err(WorktreeError::Invalid(
-                "this checkout shares the project's repository already".into(),
-            ));
-        }
-        let Some(branch) = worktree.branch.clone() else {
-            return Err(WorktreeError::Invalid(
-                "the checkout is on no branch".into(),
-            ));
-        };
-        let output = git(
-            dir,
-            &[
-                "fetch",
-                "--quiet",
-                &worktree.path,
-                &format!("+{branch}:{branch}"),
-            ],
-        )
-        .await?;
-        if !output.status.success() {
-            return Err(WorktreeError::Invalid(format!(
-                "could not fetch {branch}: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
-        }
-        let head = git(Path::new(&worktree.path), &["rev-parse", "HEAD"]).await?;
-        let commit = if head.status.success() {
-            String::from_utf8_lossy(&head.stdout).trim().to_owned()
-        } else {
-            String::new()
-        };
-        Ok((branch, commit))
-    }
-
-    /// Brings a checkout's branch up to date with the base it was made from:
-    /// a clone fetches it from the project's own checkout first, a shared
-    /// worktree has it already, and both merge it into their branch. A dirty
-    /// checkout is left alone, and a merge that conflicts is aborted, so the
-    /// checkout stays as it was and the caller sees what clashed.
-    pub async fn update(
-        &self,
-        project: &Project,
-        dir: &Path,
-        id: WorktreeId,
-        base: Option<&str>,
-    ) -> Result<(String, String, String, bool), WorktreeError> {
         let _changing = self.changing.lock().await;
         if id == project.id {
             return Err(WorktreeError::Main);
@@ -450,19 +398,9 @@ impl Worktrees {
             .ok_or(WorktreeError::NotFound)?;
         let Some(branch) = worktree.branch.clone() else {
             return Err(WorktreeError::Invalid(
-                "the checkout is on no branch".into(),
+                "the checkout has no work to take; start a new round first".into(),
             ));
         };
-        let base = base
-            .map(str::trim)
-            .filter(|base| !base.is_empty())
-            .map(str::to_owned)
-            .or_else(|| worktree.base.clone())
-            .ok_or_else(|| {
-                WorktreeError::Invalid(
-                    "the checkout does not say what it was made from; name a base".into(),
-                )
-            })?;
         let path = PathBuf::from(&worktree.path);
         if !path.is_dir() {
             return Err(WorktreeError::Invalid(format!("{} is gone", worktree.path)));
@@ -470,8 +408,114 @@ impl Worktrees {
         if dirty(&path).await? {
             return Err(WorktreeError::Dirty);
         }
+        let commit = head_of(&path).await?;
+        if Self::is_clone(&worktree) {
+            let output = git(
+                dir,
+                &[
+                    "fetch",
+                    "--quiet",
+                    &worktree.path,
+                    &format!("+{branch}:{branch}"),
+                ],
+            )
+            .await?;
+            if !output.status.success() {
+                return Err(WorktreeError::Invalid(format!(
+                    "could not fetch {branch}: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                )));
+            }
+        }
+        // The ref is a result now: the checkout keeps no copy of it.
+        let detached = git(&path, &["switch", "--quiet", "--detach", &branch]).await?;
+        if !detached.status.success() {
+            return Err(WorktreeError::Invalid(format!(
+                "could not leave the branch {branch}: {}",
+                String::from_utf8_lossy(&detached.stderr).trim()
+            )));
+        }
+        if Self::is_clone(&worktree) {
+            let gone = git(&path, &["branch", "-D", &branch]).await?;
+            if !gone.status.success() {
+                return Err(WorktreeError::Invalid(format!(
+                    "could not take the branch {branch} out of the clone: {}",
+                    String::from_utf8_lossy(&gone.stderr).trim()
+                )));
+            }
+        }
+        let mut updated = worktree;
+        updated.branch = None;
+        updated.last_result = Some(branch.clone());
+        self.keep(updated)?;
+        let _ = self.events.send(ServerEvent::WorktreesChanged {
+            project_id: project.id,
+        });
+        Ok((branch, commit))
+    }
+
+    /// Starts a new round: a fresh temporary branch from the base as the
+    /// main checkout has it now. The previous round must have been taken by
+    /// `get_results` first, and the checkout must have nothing uncommitted.
+    pub async fn start_new_work(
+        &self,
+        project: &Project,
+        dir: &Path,
+        id: WorktreeId,
+        base: Option<&str>,
+    ) -> Result<(String, String, String), WorktreeError> {
+        let _changing = self.changing.lock().await;
+        if id == project.id {
+            return Err(WorktreeError::Main);
+        }
+        let worktree = self
+            .list
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|worktree| worktree.id == id && worktree.project_id == project.id)
+            .cloned()
+            .ok_or(WorktreeError::NotFound)?;
+        if worktree.branch.is_some() {
+            return Err(WorktreeError::Unfinished);
+        }
+        let path = PathBuf::from(&worktree.path);
+        if !path.is_dir() {
+            return Err(WorktreeError::Invalid(format!("{} is gone", worktree.path)));
+        }
+        if dirty(&path).await? {
+            return Err(WorktreeError::Dirty);
+        }
+        let named = base
+            .map(str::trim)
+            .filter(|base| !base.is_empty())
+            .map(str::to_owned)
+            .or_else(|| worktree.base.clone());
+        let base = match named {
+            Some(base) => base,
+            None => branch_of(dir).await.ok_or_else(|| {
+                WorktreeError::Invalid(
+                    "the main checkout is on no branch; name a base to start from".into(),
+                )
+            })?,
+        };
+        let base_commit = match git(
+            dir,
+            &["rev-parse", "--verify", &format!("{base}^{{commit}}")],
+        )
+        .await
+        {
+            Ok(output) if output.status.success() => {
+                String::from_utf8_lossy(&output.stdout).trim().to_owned()
+            }
+            _ => {
+                return Err(WorktreeError::Invalid(format!(
+                    "{base} is not a commit in the project"
+                )));
+            }
+        };
         let source = if Self::is_clone(&worktree) {
-            // Its own repository may not have the branch the base names; the
+            // The clone's own repository may not have the base branch; the
             // project's checkout does.
             let output = git(&path, &["fetch", "--quiet", &dir.to_string_lossy(), &base]).await?;
             if !output.status.success() {
@@ -484,45 +528,40 @@ impl Worktrees {
         } else {
             base.clone()
         };
-        let before = head_of(&path).await?;
-        // A merge may write a commit: give it an identity of its own rather
-        // than depend on the person's git config, which a server may lack.
-        let output = git(
-            &path,
-            &[
-                "-c",
-                "user.name=Aiddiction",
-                "-c",
-                "user.email=aiddiction@localhost",
-                "-c",
-                "commit.gpgsign=false",
-                "merge",
-                "--no-edit",
-                source.as_str(),
-            ],
-        )
-        .await?;
-        if !output.status.success() {
-            let conflicts = git(&path, &["diff", "--name-only", "--diff-filter=U"]).await?;
-            let names = String::from_utf8_lossy(&conflicts.stdout)
-                .lines()
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .collect::<Vec<_>>()
-                .join(", ");
-            let _ = git(&path, &["merge", "--abort"]).await;
-            if names.is_empty() {
-                return Err(WorktreeError::Invalid(format!(
-                    "could not merge {base}: {}",
-                    String::from_utf8_lossy(&output.stderr).trim()
-                )));
-            }
+        let branch = temp_branch(&base);
+        checkout_branch(&branch)?;
+        let switched = git(&path, &["switch", "--quiet", "-c", &branch, &source]).await?;
+        if !switched.status.success() {
             return Err(WorktreeError::Invalid(format!(
-                "merging {base} conflicts in {names}; the merge was aborted"
+                "could not make the branch {branch}: {}",
+                String::from_utf8_lossy(&switched.stderr).trim()
             )));
         }
-        let commit = head_of(&path).await?;
-        Ok((branch, base, commit.clone(), commit != before))
+        let mut updated = worktree;
+        updated.branch = Some(branch.clone());
+        updated.base = Some(base.clone());
+        updated.base_commit = Some(base_commit.clone());
+        self.keep(updated)?;
+        let _ = self.events.send(ServerEvent::WorktreesChanged {
+            project_id: project.id,
+        });
+        Ok((branch, base, base_commit))
+    }
+
+    /// Replaces a record with the one it became, keeping the list as a whole
+    /// only when it could be saved.
+    fn keep(&self, worktree: Worktree) -> Result<(), WorktreeError> {
+        let mut list = self.list.lock().unwrap();
+        let mut next = list.clone();
+        let Some(entry) = next.iter_mut().find(|entry| entry.id == worktree.id) else {
+            return Err(WorktreeError::NotFound);
+        };
+        *entry = worktree;
+        self.store
+            .save_worktrees(&next)
+            .map_err(WorktreeError::Io)?;
+        *list = next;
+        Ok(())
     }
 
     /// A checkout the person made — a git worktree of this project's
@@ -604,6 +643,7 @@ impl Worktrees {
             branch: branch_of(&wanted).await,
             base_commit: None,
             base: None,
+            last_result: None,
             path: wanted.to_string_lossy().into_owned(),
             created_at_ms: now_ms(),
         };
@@ -654,7 +694,12 @@ impl Worktrees {
         }
         if Self::is_clone(&worktree) {
             // A clone is the server's own as well: its folder goes, and the
-            // project keeps whatever was fetched from it.
+            // project keeps whatever was fetched from it. Until the round's
+            // results are taken, the branch lives only in the clone, so the
+            // folder is not taken with it.
+            if worktree.branch.is_some() {
+                return Err(WorktreeError::Unfinished);
+            }
             let path = PathBuf::from(&worktree.path);
             if path.is_dir() {
                 std::fs::remove_dir_all(&path).map_err(|error| {
@@ -756,9 +801,17 @@ fn main(project: &Project, dir: &Path, branch: Option<String>) -> Worktree {
         branch,
         base_commit: None,
         base: None,
+        last_result: None,
         path: dir.to_string_lossy().into_owned(),
         created_at_ms: project.created_at_ms,
     }
+}
+
+/// The temporary branch of one round: the base it starts from and an id of
+/// its own, so results of earlier rounds keep their names in the project.
+fn temp_branch(base: &str) -> String {
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    format!("aiddiction/{}-{}", slug(base, "base"), &id[..8])
 }
 
 /// A branch name git accepts.
@@ -955,7 +1008,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(made.name, "feature");
-        assert_eq!(made.branch.as_deref(), Some("aiddiction/feature"));
+        let branch = made.branch.clone().unwrap();
+        assert!(branch.starts_with("aiddiction/main-"), "{branch}");
         assert!(!Path::new(&made.path).starts_with(&dir));
         assert!(Path::new(&made.path).join("a.txt").is_file());
         std::fs::write(Path::new(&made.path).join("b.txt"), "two\n").unwrap();
@@ -978,7 +1032,7 @@ mod tests {
         // The branch was kept.
         let output = git(
             &dir,
-            &["rev-parse", "--verify", "refs/heads/aiddiction/feature"],
+            &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
         )
         .await
         .unwrap();
@@ -992,29 +1046,97 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_branch_that_is_there_already_is_refused() {
+    async fn a_round_goes_to_the_project_and_a_new_one_starts_from_the_base() {
         let (root, _data, store, project, events) = setup().await;
         let dir = root.path().join("demo");
         let worktrees = Worktrees::open(root.path(), store, events).unwrap();
         let made = worktrees
-            .create(&project, &dir, NewWorktree::default())
-            .await
-            .unwrap();
-        let again = worktrees
-            .create(
+            .create_clone(
                 &project,
                 &dir,
                 NewWorktree {
-                    name: Some("other".into()),
-                    branch: made.branch.clone(),
+                    name: Some("rounds".into()),
                     ..NewWorktree::default()
                 },
             )
-            .await;
+            .await
+            .unwrap();
+        let first = made.branch.clone().unwrap();
+        let path = Path::new(&made.path);
+        assert!(first.starts_with("aiddiction/main-"), "{first}");
+        assert_eq!(branch_of(path).await.as_deref(), Some(first.as_str()));
+        // The clone has no other branch: the round's is the only one.
+        let branches = git(
+            path,
+            &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+        )
+        .await
+        .unwrap();
+        assert_eq!(String::from_utf8_lossy(&branches.stdout).trim(), first);
+
+        std::fs::write(path.join("b.txt"), "two\n").unwrap();
+        git_blocking(path, &["add", "."]);
+        git_blocking(path, &["commit", "-q", "-m", "round one"]);
+
+        // The branch reaches the project, the clone keeps none of it.
+        let (taken, commit) = worktrees
+            .get_results(&project, &dir, made.id)
+            .await
+            .unwrap();
+        assert_eq!(taken, first);
+        assert_eq!(head_of(path).await.unwrap(), commit);
+        assert_eq!(branch_of(path).await, None);
         assert!(
-            matches!(again, Err(WorktreeError::Invalid(message)) if message.contains("already exists"))
+            git(
+                &dir,
+                &["rev-parse", "--verify", &format!("refs/heads/{first}")]
+            )
+            .await
+            .unwrap()
+            .status
+            .success(),
+            "the project has the round's branch"
         );
-        worktrees.remove(&project, &dir, made.id).await.unwrap();
+        let in_clone = git(
+            path,
+            &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+        )
+        .await
+        .unwrap();
+        assert!(String::from_utf8_lossy(&in_clone.stdout).trim().is_empty());
+        let after = worktrees.get(&project, &dir, made.id).await.unwrap();
+        assert_eq!(after.branch, None);
+        assert_eq!(after.last_result.as_deref(), Some(first.as_str()));
+        // Nothing left to take twice.
+        assert!(matches!(
+            worktrees.get_results(&project, &dir, made.id).await,
+            Err(WorktreeError::Invalid(_))
+        ));
+
+        // The orchestrator merges the result; a new round starts from that.
+        git_blocking(&dir, &["merge", "--no-ff", "--no-edit", &first]);
+        let (second, base, base_commit) = worktrees
+            .start_new_work(&project, &dir, made.id, None)
+            .await
+            .unwrap();
+        assert!(second.starts_with("aiddiction/main-"), "{second}");
+        assert_ne!(second, first);
+        assert_eq!(base, "main");
+        assert_eq!(head_of(path).await.unwrap(), base_commit);
+        assert_eq!(branch_of(path).await.as_deref(), Some(second.as_str()));
+        assert!(path.join("b.txt").is_file(), "the new round has the merge");
+
+        // A round is in progress: neither another one nor removal.
+        assert!(matches!(
+            worktrees
+                .start_new_work(&project, &dir, made.id, None)
+                .await,
+            Err(WorktreeError::Unfinished)
+        ));
+        assert!(matches!(
+            worktrees.remove(&project, &dir, made.id).await,
+            Err(WorktreeError::Unfinished)
+        ));
     }
 
     #[test]

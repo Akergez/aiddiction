@@ -560,11 +560,10 @@ impl Render for TaskForm {
     }
 }
 
-/// A worktree of a project: a branch of its own, made from `base`, in a
-/// folder the server keeps outside the project's own checkout.
+/// A worktree of a project: a temporary branch of its own, made from `base`,
+/// in a folder the server keeps outside the project's own checkout.
 pub struct WorktreeForm {
     name: Entity<TextFieldState>,
-    branch: Entity<TextFieldState>,
     base: Entity<TextFieldState>,
 }
 
@@ -572,7 +571,6 @@ impl WorktreeForm {
     pub fn new(window: &mut Window, cx: &mut App) -> Self {
         Self {
             name: line(Purpose::Message, "fix-login", "", window, cx),
-            branch: line(Purpose::Message, "aiddiction/fix-login", "", window, cx),
             base: line(Purpose::Message, "HEAD", "", window, cx),
         }
     }
@@ -589,11 +587,9 @@ impl WorktreeForm {
             wrong(&self.name, "The worktree needs a name.", cx);
             return None;
         }
-        let branch = text(&self.branch, cx);
         let base = text(&self.base, cx);
         Some(NewWorktree {
             name: Some(name),
-            branch: (!branch.is_empty()).then_some(branch),
             base: (!base.is_empty()).then_some(base),
         })
     }
@@ -603,7 +599,6 @@ impl Render for WorktreeForm {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         Fields::new()
             .child(TextField::new(&self.name).label("Name"))
-            .child(TextField::new(&self.branch).label("Branch"))
             .child(TextField::new(&self.base).label("From"))
     }
 }

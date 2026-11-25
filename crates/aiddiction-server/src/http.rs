@@ -156,6 +156,7 @@ impl From<WorktreeError> for Failure {
             WorktreeError::Invalid(_) => (StatusCode::BAD_REQUEST, "invalid"),
             WorktreeError::Busy => (StatusCode::CONFLICT, "worktree_busy"),
             WorktreeError::Dirty => (StatusCode::CONFLICT, "worktree_dirty"),
+            WorktreeError::Unfinished => (StatusCode::CONFLICT, "worktree_unfinished"),
             WorktreeError::Io(_) => (StatusCode::INTERNAL_SERVER_ERROR, "io"),
         };
         Failure(status, code, format!("{error:#}"))

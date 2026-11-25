@@ -190,20 +190,23 @@ answer is waited for 15 seconds and after that the goal is taken as
 accepted. The turn is recorded in the journal like a prompt
 (`Proxy::begin`).
 
-The board also makes, lists and removes checkouts itself: `list_worktrees`
-gives ids, names, branches, the base each follows and paths,
-`create_worktree` makes one on a new
-branch, `update_worktree` merges the base branch as it is now into the
-checkout's branch (a clone fetches it from the project first; a merge that
-conflicts is aborted and the files named), `remove_worktree` takes one away
-(refused while an agent works in it; an adopted checkout is only forgotten).
-An orchestrator that cannot see the
-server's files works with ids alone. `create_worktree` makes a **clone**: its
-`.git` is its own, so an agent in a container can work and commit in it
-without reaching the project's checkout. Its branch reaches the project by
-`sync_worktree`, which fetches the clone into the main checkout, where it is
-merged like any other branch. (A shared-`.git` worktree is still what the
-UI's New worktree makes, for agents that run beside the server.)
+The board also makes, lists and moves checkouts through their rounds:
+`list_worktrees` gives ids, names, the temporary branch of the round, the
+base it follows, the last result handed to the project and paths;
+`create_worktree` makes a clone on a temporary branch of its own,
+`aiddiction/<base>-<id>`, one per round; `get_worktree_results` takes that
+branch into the project's repository (a clone fetches it, a shared worktree
+already has it) and leaves the checkout without the branch, so stale
+temporary branches do not pile up; `start_new_worktree_work` makes the next
+round's branch from the base as the main checkout has it now. Uncommitted
+work is refused by both, and a clone is not removed before its results are
+taken. `remove_worktree` takes a server-made checkout away (refused while
+an agent runs in it; an adopted one is only forgotten). An orchestrator
+that cannot see the server's files works with ids alone. `create_worktree`
+makes a **clone**: its `.git` is its own, so an agent in a container can
+work and commit without reaching the project's checkout. (A shared-`.git`
+worktree is what the UI's New worktree makes, for agents that run beside
+the server.)
 
 An agent started this way gets a token of its own (`Orchestrator::scope`):
 it reaches `/mcp` only and only its project's board, without `list_agents`,
@@ -253,10 +256,14 @@ project removes a folder only if the server made it.
 
 A project has one main checkout — its own folder, whose `Worktree` id is the
 project's id — and any number of git worktrees the server makes
-(`worktrees.rs`, `POST /projects/{id}/worktrees`). A worktree is made on a
-new branch (`aiddiction/<name>` by default) from `HEAD` or a given commit,
-in `<projects root>/.aiddiction-worktrees/<project id>/<name>`, outside the
-main checkout; its record is kept in `worktrees.json`. It shares the
+(`worktrees.rs`, `POST /projects/{id}/worktrees`). A checkout works on one
+temporary branch per round (`aiddiction/<base>-<id>`), made from `HEAD` or a
+given commit, in `<projects root>/.aiddiction-worktrees/<project id>/<name>`,
+outside the main checkout; its record is kept in `worktrees.json` with the
+branch of the round in progress (`branch`, `None` between rounds), the base
+it follows, the commit it started from and the branch last handed to the
+project (`last_result`). A clone is made with `git clone --local
+--no-checkout` and keeps only that branch; a shared worktree shares the
 repository's objects and refs with the main checkout and has its own files
 and index.
 
@@ -267,8 +274,10 @@ between checkouts: a new conversation picks one (`NewSessionForm`), and
 `StartInstance`/`start_agent` take a `worktreeId` (the main checkout when
 left out). Removing a worktree (`DELETE /projects/{id}/worktrees/{id}`) is
 refused while an instance runs there (409) or while it has uncommitted or
-untracked files (409); its branch is kept. Deleting a project stops its
-agents and takes the server-made worktrees with it.
+untracked files (409); a clone whose round was not taken is refused too
+(409, `Unfinished`), since that branch lives only there. Shared worktrees
+keep their branches in the repository. Deleting a project stops its agents
+and takes the server-made worktrees with it.
 
 ### Appearance
 
