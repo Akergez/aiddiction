@@ -137,7 +137,7 @@ list shows that changes fires `InstancesChanged`.
 
 An agent already talking to the board (`/api/v1/mcp`) can start another one
 on a task card: `list_agents` (with `projectId` for the model and settings
-the agent last offered there), `start_agent`, `send_message`,
+the agent last offered there), `start_agent`, `send_message`, `set_goal`,
 `list_subagents`. The capabilities in `list_agents` come from the agent's
 last `initialize`, kept per agent id in `agent-profiles.json`
 (`Supervisor::profile`); a changed command makes the profile stale. The
@@ -181,14 +181,25 @@ reach that path at the same address — mounting only the worktree folder is
 not enough.
 
 A start can carry a `goal` instead of a prompt. It goes to the adapter's
-`_session/goal` extension (`Proxy::set_goal`), which Claude Code and Codex
-ACP have: the agent starts pursuing it as a turn of its own, and the prompt,
-when there is one, opens the objective; the card's text is appended as
-usual. An adapter without the extension refuses at once and the start
+`_session/goal` extension (`Proxy::control_goal`), which Claude Code and
+Codex ACP have: the agent starts pursuing it as a turn of its own, and the
+prompt, when there is one, opens the objective; the card's text is appended
+as usual. An adapter without the extension refuses at once and the start
 fails; one that takes the goal may answer only when its turn is over, so the
 answer is waited for 15 seconds and after that the goal is taken as
 accepted. The turn is recorded in the journal like a prompt
 (`Proxy::begin`).
+
+`set_goal` changes that on a conversation that already runs: `objective`
+sets a new one, `clear` stops the current one, by the same
+`_session/goal` (`set`/`clear`), so an agent in a turn takes it into that
+turn or starts one for it. The answer names the goal as it now is; the
+session's `SessionSummary::goal` (`objective`, `status`) is updated at once
+and refined by the agent's `session_info_update` under
+`_meta.jetbrains.air.goal`. The server declares the `goal` AIR capability in
+its own `initialize` for that reason. `list_subagents` shows the goal with
+the rest of a thread. `start_agent`'s goal, when accepted, fills the same
+field.
 
 The board also makes, lists and moves checkouts through their rounds:
 `list_worktrees` gives ids, names, the temporary branch of the round, the
@@ -210,8 +221,8 @@ the server.)
 
 An agent started this way gets a token of its own (`Orchestrator::scope`):
 it reaches `/mcp` only and only its project's board, without `list_agents`,
-`list_subagents`, `start_agent` or `send_message`, and cannot delete the
-card it works on.
+`list_subagents`, `start_agent`, `send_message` or `set_goal`, and cannot
+delete the card it works on.
 The person's own bearer still opens everything; a separate token per
 person's client is not there yet.
 

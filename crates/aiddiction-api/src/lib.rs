@@ -354,6 +354,22 @@ pub struct SessionSummary {
     /// How full the conversation's context window is, as the agent last said.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<ContextUsage>,
+    /// The objective the agent is pursuing, as last set or as the agent
+    /// reported it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<SessionGoal>,
+}
+
+/// An objective a conversation is pursuing, from `_session/goal` or the
+/// agent's own report.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionGoal {
+    pub objective: String,
+    /// `active`, `paused`, `blocked`, `limited` or `complete`, when the agent
+    /// says; `active` right after a goal was set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
 }
 
 /// What a conversation occupies of its context window, from the agent's

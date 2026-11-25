@@ -27,7 +27,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aiddiction_api::{
     AttachParams, AttachResult, ContextUsage, PendingPermission, PermissionChoice, PromptFinished,
-    SessionSummary, TaskId, UsageCost, ext,
+    SessionGoal, SessionSummary, TaskId, UsageCost, ext,
 };
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -137,6 +137,8 @@ struct Session {
     task_id: Option<TaskId>,
     /// The agent's last `usage_update`: how full its context window is.
     usage: Option<ContextUsage>,
+    /// The objective it pursues, when one was set or the agent reported it.
+    goal: Option<SessionGoal>,
     /// Whether the server opened this session with a board token of its own.
     board: bool,
 }
@@ -162,6 +164,7 @@ impl Session {
             config_options: Value::Null,
             task_id: None,
             usage: None,
+            goal: None,
             board: false,
         }
     }
@@ -340,24 +343,53 @@ impl Proxy {
         (self.on_sessions_changed)();
     }
 
-    /// Sets the session's goal, the `_session/goal` extension Claude Code and
-    /// Codex ACP have: the agent starts pursuing it. An adapter without the
-    /// extension refuses at once; one that is already working on the goal may
-    /// not answer until its turn is over, so only `wait` is waited for.
-    pub async fn set_goal(
+    /// Sets or clears a session's goal through `_session/goal`, the extension
+    /// Claude Code and Codex ACP have. An adapter that is busy may take the
+    /// goal into the running turn, and an idle one may start a turn for its
+    /// `/goal` command and answer only when that ends, so the wait is bounded
+    /// and a timeout is taken as accepted. The summary is updated at once;
+    /// the agent's own reports refine it.
+    pub async fn control_goal(
         &self,
         session: &str,
-        objective: &str,
+        action: &str,
+        objective: Option<&str>,
         wait: Duration,
     ) -> Result<(), String> {
-        let params = json!({ "sessionId": session, "action": "set", "objective": objective });
-        match tokio::time::timeout(wait, reply(self.internal_request("_session/goal", params)))
-            .await
+        let params = match action {
+            "clear" => json!({ "sessionId": session, "action": "clear" }),
+            "set" => {
+                let objective = objective.unwrap_or_default().trim();
+                if objective.is_empty() {
+                    return Err("a goal needs an objective".to_owned());
+                }
+                json!({ "sessionId": session, "action": "set", "objective": objective })
+            }
+            other => return Err(format!("goal action is set or clear, not {other}")),
+        };
+        let answer =
+            match tokio::time::timeout(wait, reply(self.internal_request("_session/goal", params)))
+                .await
+            {
+                Ok(answer) => answer.map(|_| ()),
+                // Taken: the agent is working on it already.
+                Err(_) => Ok(()),
+            };
+        answer?;
         {
-            Ok(answer) => answer.map(|_| ()),
-            // Taken: the agent is working on it already.
-            Err(_) => Ok(()),
+            let mut state = self.state.lock().unwrap();
+            if let Some(entry) = state.sessions.get_mut(session) {
+                entry.goal = match action {
+                    "set" => Some(SessionGoal {
+                        objective: objective.unwrap_or_default().trim().to_owned(),
+                        status: Some("active".to_owned()),
+                    }),
+                    _ => None,
+                };
+            }
         }
+        (self.on_sessions_changed)();
+        Ok(())
     }
 
     /// Closes a session the server opened but can no longer use, when the
@@ -455,6 +487,9 @@ impl Proxy {
                 // (`login.rs`); a sign-in page is shown by the client.
                 "auth": { "terminal": true },
                 "elicitation": { "url": {} },
+                // The goal extension under its AIR name: adapters then
+                // report the goal's status and its completion.
+                "_meta": { "jetbrains": { "air": { "version": 1, "capabilities": ["goal"] } } },
             },
             "clientInfo": { "name": "aiddiction-server", "version": env!("CARGO_PKG_VERSION") },
         });
@@ -1121,13 +1156,22 @@ impl State {
             .entry(session.to_owned())
             .or_insert_with(Session::new);
         match update["sessionUpdate"].as_str().unwrap_or_default() {
-            "session_info_update" => match update.get("title").and_then(Value::as_str) {
-                Some(title) if entry.title != title => {
+            "session_info_update" => {
+                let mut changed = false;
+                if let Some(title) = update.get("title").and_then(Value::as_str)
+                    && entry.title != title
+                {
                     entry.title = title.to_owned();
-                    true
+                    changed = true;
                 }
-                _ => false,
-            },
+                if let Some(goal) = goal_of(update)
+                    && entry.goal != goal
+                {
+                    entry.goal = goal;
+                    changed = true;
+                }
+                changed
+            }
             "agent_message_chunk" => {
                 if let Some(text) = update.pointer("/content/text").and_then(Value::as_str) {
                     let room = REPLY_LIMIT.saturating_sub(entry.reply.len());
@@ -1230,6 +1274,7 @@ impl State {
                     error: session.error.clone(),
                     task_id: session.task_id,
                     usage: session.usage.clone(),
+                    goal: session.goal.clone(),
                 })
             })
             .collect()
@@ -1248,6 +1293,27 @@ fn prompt_text(prompt: &Value) -> String {
         }
     }
     text
+}
+
+/// The goal in a `session_info_update`'s AIR meta: `Some(None)` when it was
+/// cleared, `Some(Some(_))` when the agent reports one, `None` when the
+/// update says nothing about it.
+fn goal_of(update: &Value) -> Option<Option<SessionGoal>> {
+    let goal = update.pointer("/_meta/jetbrains/air/goal")?;
+    if goal.is_null() {
+        return Some(None);
+    }
+    let objective = goal.get("objective")?.as_str()?.trim();
+    if objective.is_empty() {
+        return Some(None);
+    }
+    Some(Some(SessionGoal {
+        objective: objective.to_owned(),
+        status: goal
+            .get("status")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    }))
 }
 
 /// A `session/request_permission` line as a list shows it.
@@ -1617,6 +1683,60 @@ mod tests {
         let usage = h.proxy.sessions()[0].usage.clone().unwrap();
         assert_eq!((usage.used, usage.size), (1, 2));
         assert!(usage.cost.is_none());
+    }
+
+    #[test]
+    fn a_goal_update_says_what_the_agent_pursues() {
+        let mut h = harness();
+        h.ready();
+        let (a, mut a_rx) = h.proxy.connect().unwrap();
+        h.proxy.on_client_line(
+            a,
+            r#"{"jsonrpc":"2.0","id":1,"method":"session/new","params":{}}"#,
+        );
+        let new = json_of(h.agent.try_recv().unwrap());
+        h.proxy.on_agent_line(
+            &json!({ "jsonrpc": "2.0", "id": new["id"], "result": { "sessionId": "s" } })
+                .to_string(),
+        );
+        a_rx.try_recv().unwrap();
+
+        let update = |goal: Value| {
+            json!({
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": {
+                    "sessionId": "s",
+                    "update": {
+                        "sessionUpdate": "session_info_update",
+                        "_meta": { "jetbrains": { "air": { "version": 1, "goal": goal } } },
+                    },
+                },
+            })
+            .to_string()
+        };
+        h.proxy.on_agent_line(&update(
+            json!({ "objective": "Ship it", "status": "active" }),
+        ));
+        let goal = h.proxy.sessions()[0].goal.clone().unwrap();
+        assert_eq!(goal.objective, "Ship it");
+        assert_eq!(goal.status.as_deref(), Some("active"));
+
+        // The agent can say the goal is over, and can clear it.
+        h.proxy.on_agent_line(&update(
+            json!({ "objective": "Ship it", "status": "complete" }),
+        ));
+        assert_eq!(
+            h.proxy.sessions()[0]
+                .goal
+                .clone()
+                .unwrap()
+                .status
+                .as_deref(),
+            Some("complete")
+        );
+        h.proxy.on_agent_line(&update(Value::Null));
+        assert!(h.proxy.sessions()[0].goal.is_none());
     }
 
     #[test]

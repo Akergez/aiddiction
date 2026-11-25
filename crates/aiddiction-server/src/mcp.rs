@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 
 use crate::agents::Catalog;
 use crate::instances::Supervisor;
-use crate::orchestrate::{Caller, Orchestrator, SendRequest, StartRequest};
+use crate::orchestrate::{Caller, GoalRequest, Orchestrator, SendRequest, StartRequest};
 use crate::projects::{ProjectError, Projects};
 use crate::worktrees::Worktrees;
 
@@ -83,6 +83,7 @@ fn initialize(params: &Value) -> Value {
         "instructions": "Aiddiction's projects and their kanban boards of task cards. \
             list_projects gives the project ids the other tools take; a project's folder is its path. \
             start_agent gives an agent a card to work on, send_message continues a conversation it started, \
+            set_goal changes what a running agent pursues, \
             and list_subagents follows them and tells how full a conversation's context is.",
     })
 }
@@ -153,8 +154,9 @@ fn tools(for_agent: bool) -> Value {
             "description": "See the agents running for a project (or one of its checkouts) and their conversations, \
                 including the threads started by start_agent (a thread's taskId says which card it works on). \
                 A thread says whether it is busy (`busy`), what it is doing (`preview`), why its last turn \
-                failed (`error`), and how full its context window is (`usage`: `used` and `size` in tokens, \
-                `cost` when the agent prices it).",
+                failed (`error`), how full its context window is (`usage`: `used` and `size` in tokens, \
+                `cost` when the agent prices it), and the goal it pursues (`goal`: `objective` and \
+                `status`).",
             "inputSchema": { "type": "object", "properties": {
                 "projectId": { "type": "string" },
                 "worktreeId": { "type": "string", "description": "Only agents working in this checkout" },
@@ -210,6 +212,24 @@ fn tools(for_agent: bool) -> Value {
                     "instanceId": { "type": "string", "description": "The agent instance, when the session id is not enough" },
                     "taskId": { "type": "string", "description": "The card to work on now; the conversation's own card when left out" },
                     "requestId": { "type": "string", "description": "Repeat this call with the same id and it is the same message" },
+                },
+            },
+        }));
+        tools.insert(5, json!({
+            "name": "set_goal",
+            "description": "Set or clear the goal of a conversation that is already running (the sessionId from \
+                start_agent or list_subagents). The agent pursues it as its own objective: an idle adapter may \
+                start a turn for it, one in a turn may take it in. Answers once the goal is sent, not when the turn \
+                ends; list_subagents tells the goal and its status.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["sessionId"],
+                "properties": {
+                    "sessionId": { "type": "string", "description": "A conversation from start_agent or list_subagents" },
+                    "objective": { "type": "string", "description": "What to pursue; required unless clear is true" },
+                    "clear": { "type": "boolean", "description": "Stop pursuing the current goal instead" },
+                    "projectId": { "type": "string", "description": "A project id, to look the conversation up in it" },
+                    "instanceId": { "type": "string", "description": "The agent instance, when the session id is not enough" },
                 },
             },
         }));
@@ -294,6 +314,7 @@ async fn call(
                 | "list_subagents"
                 | "start_agent"
                 | "send_message"
+                | "set_goal"
                 | "list_worktrees"
                 | "create_worktree"
                 | "get_worktree_results"
@@ -370,6 +391,7 @@ async fn call(
         }
         "start_agent" => start(projects, catalog, supervisor, orchestration, worktrees, caller, &arguments).await,
         "send_message" => send(projects, supervisor, orchestration, caller, &arguments).await,
+        "set_goal" => set_goal(supervisor, orchestration, &arguments).await,
         "list_worktrees" => list_worktrees(projects, worktrees, caller, &arguments).await,
         "create_worktree" => create_worktree(projects, worktrees, caller, &arguments).await,
         "get_worktree_results" => get_worktree_results(projects, supervisor, worktrees, caller, &arguments).await,
@@ -533,6 +555,59 @@ async fn send(
     };
     orchestration
         .send(projects, supervisor, &caller_key, request)
+        .await
+        .map_err(ToolError)
+}
+
+/// `set_goal`: a new objective for a running conversation, or the end of the
+/// one it pursues.
+async fn set_goal(
+    supervisor: &Supervisor,
+    orchestration: &Orchestrator,
+    arguments: &Value,
+) -> Result<Value, ToolError> {
+    let session =
+        text(arguments, "sessionId").ok_or_else(|| ToolError("sessionId is required".into()))?;
+    let clear = arguments
+        .get("clear")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let objective = text(arguments, "objective")
+        .map(|objective| objective.trim().to_owned())
+        .filter(|objective| !objective.is_empty());
+    if clear && objective.is_some() {
+        return Err(ToolError("give an objective or clear, not both".into()));
+    }
+    if !clear && objective.is_none() {
+        return Err(ToolError(
+            "objective is required unless clear is true".into(),
+        ));
+    }
+    let project = match arguments.get("projectId").and_then(Value::as_str) {
+        Some(project) => Some(
+            project
+                .parse::<ProjectId>()
+                .map_err(|_| ToolError("projectId is not an id".into()))?,
+        ),
+        None => None,
+    };
+    let instance = match arguments.get("instanceId").and_then(Value::as_str) {
+        Some(instance) => Some(
+            instance
+                .parse::<InstanceId>()
+                .map_err(|_| ToolError("instanceId is not an id".into()))?,
+        ),
+        None => None,
+    };
+    let request = GoalRequest {
+        project,
+        instance,
+        session,
+        action: if clear { "clear" } else { "set" }.to_owned(),
+        objective,
+    };
+    orchestration
+        .goal(supervisor, request)
         .await
         .map_err(ToolError)
 }
@@ -1107,6 +1182,7 @@ mod tests {
         );
         assert!(!names.contains(&"list_subagents"));
         assert!(!names.contains(&"send_message"));
+        assert!(!names.contains(&"set_goal"));
         assert!(!names.contains(&"get_worktree_results"));
         assert!(!names.contains(&"start_new_worktree_work"));
 

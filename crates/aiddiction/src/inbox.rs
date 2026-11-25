@@ -153,6 +153,7 @@ mod tests {
             error: None,
             task_id: None,
             usage: None,
+            goal: None,
         }
     }
 

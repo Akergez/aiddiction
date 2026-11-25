@@ -8,17 +8,17 @@
 //! thread with `list_subagents` and reads the result on the card.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use aiddiction_api::{
-    InstanceId, InstanceState, Project, ProjectId, ProjectState, Task, TaskId, TaskSession,
-    WorktreeId,
+    InstanceId, InstanceState, Project, ProjectId, ProjectState, SessionSummary, Task, TaskId,
+    TaskSession, WorktreeId,
 };
 use serde_json::{Value, json};
 
 use crate::agents::Catalog;
-use crate::instances::Supervisor;
+use crate::instances::{Instance, Supervisor};
 use crate::projects::Projects;
 use crate::proxy::now_ms;
 use crate::worktrees::{WorktreeError, Worktrees};
@@ -86,6 +86,18 @@ pub struct SendRequest {
     /// The card to work on now; the conversation's own card when left out.
     pub task_id: Option<TaskId>,
     pub request_id: Option<String>,
+}
+
+/// What the caller of `set_goal` asks for: a new objective for a running
+/// conversation, or the end of the one it pursues.
+#[derive(Debug, Clone)]
+pub struct GoalRequest {
+    pub project: Option<ProjectId>,
+    pub instance: Option<InstanceId>,
+    pub session: String,
+    /// `set` or `clear`.
+    pub action: String,
+    pub objective: Option<String>,
 }
 
 pub struct Orchestrator {
@@ -272,7 +284,7 @@ impl Orchestrator {
                 instance.proxy.begin(&session, &text, request.task_id);
                 if let Err(error) = instance
                     .proxy
-                    .set_goal(&session, &text, GOAL_ANSWER_TIMEOUT)
+                    .control_goal(&session, "set", Some(&text), GOAL_ANSWER_TIMEOUT)
                     .await
                 {
                     instance.proxy.close_session(&session).await;
@@ -341,58 +353,12 @@ impl Orchestrator {
             return Err("prompt is required".to_owned());
         }
 
-        let found: Vec<_> = supervisor
-            .all()
-            .into_iter()
-            .filter(|instance| {
-                request
-                    .project
-                    .is_none_or(|project| instance.project_id == project)
-                    && request
-                        .instance
-                        .is_none_or(|instance_id| instance.id == instance_id)
-            })
-            .filter(|instance| {
-                instance
-                    .info()
-                    .sessions
-                    .iter()
-                    .any(|session| session.session_id == request.session)
-            })
-            .collect();
-        let instance = match found.as_slice() {
-            [] => {
-                return Err(format!(
-                    "no conversation {} is running: its agent has gone, list_subagents shows the live ones, \
-                     and start_agent starts a new one",
-                    request.session
-                ));
-            }
-            [only] => only.clone(),
-            many => {
-                let ids = many
-                    .iter()
-                    .map(|instance| format!("{} ({})", instance.id, instance.agent.id))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                return Err(format!(
-                    "the conversation is in more than one agent: {ids}; name its instanceId"
-                ));
-            }
-        };
-        let info = instance.info();
-        if info.state != InstanceState::Ready {
-            return Err(format!(
-                "the agent of this conversation is {:?}, not running; start_agent starts a new one",
-                info.state
-            ));
-        }
-        let session = info
-            .sessions
-            .iter()
-            .find(|session| session.session_id == request.session)
-            .cloned()
-            .ok_or("no such conversation")?;
+        let (instance, session) = find_session(
+            supervisor,
+            request.project,
+            request.instance,
+            &request.session,
+        )?;
         if session.busy {
             let doing = if session.preview.is_empty() {
                 "a turn is running".to_owned()
@@ -469,6 +435,48 @@ impl Orchestrator {
         Ok(answer)
     }
 
+    /// Sets or clears the goal of a conversation that is already running.
+    /// The agent may take it into the turn it is in or start a turn of its
+    /// own for it, so the answer comes once the goal is sent, not when the
+    /// turn ends.
+    pub async fn goal(
+        &self,
+        supervisor: &Supervisor,
+        request: GoalRequest,
+    ) -> Result<Value, String> {
+        let (instance, session) = find_session(
+            supervisor,
+            request.project,
+            request.instance,
+            &request.session,
+        )?;
+        instance
+            .proxy
+            .control_goal(
+                &request.session,
+                &request.action,
+                request.objective.as_deref(),
+                GOAL_ANSWER_TIMEOUT,
+            )
+            .await
+            .map_err(|error| format!("the agent did not take the goal: {error}"))?;
+        let goal = instance
+            .info()
+            .sessions
+            .into_iter()
+            .find(|session| session.session_id == request.session)
+            .and_then(|session| session.goal);
+        Ok(json!({
+            "projectId": instance.project_id,
+            "taskId": session.task_id,
+            "agentId": instance.agent.id,
+            "instanceId": instance.id,
+            "sessionId": request.session,
+            "worktreeId": instance.worktree_id,
+            "goal": goal,
+        }))
+    }
+
     fn remember_answer(&self, key: String, answer: &Value) {
         let mut started = self.started.lock().unwrap();
         // A lifetime's worth of calls is not worth keeping; the newest
@@ -478,6 +486,63 @@ impl Orchestrator {
         }
         started.insert(key, answer.clone());
     }
+}
+
+/// The running instance and the summary of a conversation, named by its
+/// session id, optionally narrowed to a project or an instance.
+fn find_session(
+    supervisor: &Supervisor,
+    project: Option<ProjectId>,
+    wanted_instance: Option<InstanceId>,
+    session: &str,
+) -> Result<(Arc<Instance>, SessionSummary), String> {
+    let found: Vec<_> = supervisor
+        .all()
+        .into_iter()
+        .filter(|instance| {
+            project.is_none_or(|project| instance.project_id == project)
+                && wanted_instance.is_none_or(|wanted| instance.id == wanted)
+        })
+        .filter(|instance| {
+            instance
+                .info()
+                .sessions
+                .iter()
+                .any(|shown| shown.session_id == session)
+        })
+        .collect();
+    let instance = match found.as_slice() {
+        [] => {
+            return Err(format!(
+                "no conversation {session} is running: its agent has gone, list_subagents shows the live ones, \
+                 and start_agent starts a new one"
+            ));
+        }
+        [only] => only.clone(),
+        many => {
+            let ids = many
+                .iter()
+                .map(|instance| format!("{} ({})", instance.id, instance.agent.id))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(format!(
+                "the conversation is in more than one agent: {ids}; name its instanceId"
+            ));
+        }
+    };
+    let info = instance.info();
+    if info.state != InstanceState::Ready {
+        return Err(format!(
+            "the agent of this conversation is {:?}, not running; start_agent starts a new one",
+            info.state
+        ));
+    }
+    let summary = info
+        .sessions
+        .into_iter()
+        .find(|shown| shown.session_id == session)
+        .ok_or("no such conversation")?;
+    Ok((instance, summary))
 }
 
 /// The text the child is given: the caller's words, then where the card is

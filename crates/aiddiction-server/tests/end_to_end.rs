@@ -1258,6 +1258,205 @@ async fn start_agent_sets_a_goal_when_asked() {
             .iter()
             .any(|one| one["sessionId"] == json!(session))
     );
+    // The agent's own report of the goal reaches the list.
+    let mut goal = Value::Null;
+    for _ in 0..50 {
+        let children = board(
+            &client,
+            "list_subagents",
+            json!({ "projectId": project.id, "taskId": task.id }),
+        )
+        .await
+        .unwrap();
+        goal = children[0]["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|one| one["sessionId"] == json!(session))
+            .and_then(|one| one.get("goal"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        if !goal.is_null() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(goal["status"], json!("active"));
+    assert!(
+        goal["objective"]
+            .as_str()
+            .unwrap()
+            .starts_with("Make MIG-08-079 green"),
+        "{goal}"
+    );
+}
+
+/// A goal can be changed or cleared on a conversation that already runs, not
+/// only at its start; the list says what the agent pursues.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_goal_can_be_set_and_cleared_on_a_running_conversation() {
+    aiddiction_client::install_crypto_provider();
+    let server = start_server().await;
+    let client = ServerClient::new(&server.url, "secret").unwrap();
+    let fake = fake_agent_on(&client, "Running goal").await;
+    let repo = tempfile::tempdir().unwrap();
+    assert!(
+        git_in(repo.path(), &["init", "-q", "-b", "main"])
+            .status
+            .success()
+    );
+    std::fs::write(repo.path().join("a.txt"), "one\n").unwrap();
+    assert!(git_in(repo.path(), &["add", "."]).status.success());
+    assert!(
+        git_in(repo.path(), &["commit", "-q", "-m", "first"])
+            .status
+            .success()
+    );
+    let project = client
+        .create_project(&NewProject {
+            name: "Running goals".into(),
+            source: ProjectSource::Existing {
+                path: repo.path().display().to_string(),
+            },
+        })
+        .await
+        .unwrap();
+
+    let started = board(
+        &client,
+        "start_agent",
+        json!({
+            "projectId": project.id,
+            "agentId": fake.id,
+            "prompt": "First, just say hello",
+        }),
+    )
+    .await
+    .unwrap();
+    let session = started["sessionId"].as_str().unwrap().to_owned();
+    let instance: aiddiction_api::InstanceId =
+        started["instanceId"].as_str().unwrap().parse().unwrap();
+    let mut info = client.instance(instance).await.unwrap();
+    for _ in 0..100 {
+        if info
+            .sessions
+            .iter()
+            .any(|one| one.session_id == session && !one.busy)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        info = client.instance(instance).await.unwrap();
+    }
+
+    let set = board(
+        &client,
+        "set_goal",
+        json!({
+            "projectId": project.id,
+            "sessionId": session,
+            "objective": "Keep the tests green",
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(set["sessionId"], json!(session));
+    assert_eq!(set["goal"]["objective"], json!("Keep the tests green"));
+    assert_eq!(set["goal"]["status"], json!("active"));
+
+    // The fake agent took it, and the list says so.
+    let goal_file = repo.path().join("goal.txt");
+    for _ in 0..50 {
+        if goal_file.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        std::fs::read_to_string(&goal_file).unwrap(),
+        "Keep the tests green"
+    );
+    let children = board(
+        &client,
+        "list_subagents",
+        json!({ "projectId": project.id }),
+    )
+    .await
+    .unwrap();
+    let shown = children[0]["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|one| one["sessionId"] == json!(session))
+        .unwrap();
+    assert_eq!(shown["goal"]["objective"], json!("Keep the tests green"));
+    assert_eq!(shown["goal"]["status"], json!("active"));
+
+    // It can be cleared, and the agent stops pursuing it.
+    let cleared = board(
+        &client,
+        "set_goal",
+        json!({
+            "projectId": project.id,
+            "sessionId": session,
+            "clear": true,
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(cleared["goal"], json!(null));
+    for _ in 0..50 {
+        if !goal_file.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(!goal_file.exists());
+    let children = board(
+        &client,
+        "list_subagents",
+        json!({ "projectId": project.id }),
+    )
+    .await
+    .unwrap();
+    let shown = children[0]["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|one| one["sessionId"] == json!(session))
+        .unwrap();
+    assert!(shown.get("goal").is_none_or(Value::is_null), "{shown}");
+
+    // What is asked for must be one thing: an objective or a clear.
+    let both = board(
+        &client,
+        "set_goal",
+        json!({
+            "projectId": project.id,
+            "sessionId": session,
+            "objective": "x",
+            "clear": true,
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert!(both.contains("not both"), "{both}");
+    let neither = board(
+        &client,
+        "set_goal",
+        json!({ "projectId": project.id, "sessionId": session }),
+    )
+    .await
+    .unwrap_err();
+    assert!(neither.contains("objective is required"), "{neither}");
+    let gone = board(
+        &client,
+        "set_goal",
+        json!({ "sessionId": "no-such-session", "objective": "x" }),
+    )
+    .await
+    .unwrap_err();
+    assert!(gone.contains("no conversation"), "{gone}");
 }
 
 /// A start with neither a prompt nor a goal is refused before an agent runs.

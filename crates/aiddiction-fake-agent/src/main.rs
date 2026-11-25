@@ -300,16 +300,40 @@ impl Agent {
                 );
             }
             Some("_session/goal") => {
-                let objective = message["params"]["objective"].as_str().unwrap_or_default();
+                let session = message["params"]["sessionId"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned();
                 if self.cwd.is_empty() {
                     send(json!({
                         "jsonrpc": "2.0", "id": id,
                         "error": { "code": -32602, "message": "no session" },
                     }));
                 } else {
-                    let _ =
-                        std::fs::write(std::path::Path::new(&self.cwd).join("goal.txt"), objective);
+                    let action = message["params"]["action"].as_str().unwrap_or("set");
+                    let goal = if action == "clear" {
+                        let _ =
+                            std::fs::remove_file(std::path::Path::new(&self.cwd).join("goal.txt"));
+                        Value::Null
+                    } else {
+                        let objective = message["params"]["objective"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned();
+                        let _ = std::fs::write(
+                            std::path::Path::new(&self.cwd).join("goal.txt"),
+                            &objective,
+                        );
+                        json!({ "objective": objective, "status": "active" })
+                    };
                     reply(json!({}));
+                    update(
+                        &session,
+                        json!({
+                            "sessionUpdate": "session_info_update",
+                            "_meta": { "jetbrains": { "air": { "version": 1, "goal": goal } } },
+                        }),
+                    );
                 }
             }
             Some("session/prompt") => {
