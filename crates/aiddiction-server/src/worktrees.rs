@@ -131,6 +131,7 @@ impl Worktrees {
                 WorktreeError::Invalid(format!("{}: {error}", parent.display()))
             })?;
         }
+        let uses_lfs = require_lfs_if_used(dir).await?;
         let path_text = path.to_string_lossy().into_owned();
         let output = git(
             dir,
@@ -139,11 +140,19 @@ impl Worktrees {
         .await
         .map_err(|error| WorktreeError::Invalid(format!("could not make the worktree: {error}")))?;
         if !output.status.success() {
+            // A failed checkout can leave a half-made worktree, its admin
+            // files and a branch behind; take them away so a retry starts
+            // clean. (A Git LFS filter that cannot run fails here.)
+            take_away(dir, &path, &branch).await;
             return Err(WorktreeError::Invalid(format!(
                 "could not make the worktree: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
             )));
         }
+        // A Git LFS checkout smudges what it can; make sure every LFS object
+        // is here so the fresh checkout has no phantom modifications.
+        materialize_lfs(&path, uses_lfs).await;
+        warn_if_dirty(&path, "worktree").await;
 
         let worktree = Worktree {
             id: uuid::Uuid::now_v7(),
@@ -221,7 +230,14 @@ impl Worktrees {
             .map(str::trim)
             .filter(|name| !name.is_empty())
             .map(|name| slug(name, "worktree"))
-            .unwrap_or_else(|| format!("worktree-{}", &uuid::Uuid::now_v7().to_string()[..8]));
+            // A random tail, not a timestamp: two auto-named makes in one
+            // breath must not collide on the name.
+            .unwrap_or_else(|| {
+                format!(
+                    "worktree-{}",
+                    &uuid::Uuid::new_v4().simple().to_string()[..8]
+                )
+            });
         if self
             .list
             .lock()
@@ -279,6 +295,7 @@ impl Worktrees {
         let (name, base, base_commit) = self.prepare(project, dir, &input).await?;
         let branch = temp_branch(&base);
         checkout_branch(&branch)?;
+        let uses_lfs = require_lfs_if_used(dir).await?;
         let path = self.path_of(project.id, &name);
         // A folder left by an attempt that failed is not a checkout of ours
         // (a record would have stopped the name above): it goes.
@@ -335,6 +352,13 @@ impl Worktrees {
                 )));
             }
         }
+        // A Git LFS checkout smudges what it can; make sure every LFS object
+        // is here so the fresh checkout has no phantom modifications. A
+        // `clone --local` does not carry the source's repo-local LFS filter
+        // config over, so Git LFS is pointed at the source repository's
+        // objects through its `origin`.
+        materialize_lfs(&path, uses_lfs).await;
+        warn_if_dirty(&path, "clone").await;
         let worktree = Worktree {
             id: uuid::Uuid::now_v7(),
             project_id: project.id,
@@ -912,6 +936,167 @@ async fn head_of(dir: &Path) -> Result<String, WorktreeError> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
+/// A project that needs Git LFS can't make a sound checkout without it: a
+/// missing `git-lfs` makes Git's `filter.lfs.*` hooks fail, which either
+/// stops the checkout or leaves LFS pointers and phantom modifications. When
+/// the project has no LFS files, nothing changes. Returns whether it uses
+/// LFS, so the caller can restore LFS content afterwards.
+async fn require_lfs_if_used(dir: &Path) -> Result<bool, WorktreeError> {
+    let uses_lfs = repo_uses_lfs(dir).await;
+    if uses_lfs && !git_lfs_available().await {
+        return Err(WorktreeError::Invalid(
+            "the project uses Git LFS, but git-lfs is not installed; \
+             install git-lfs and run `git lfs install`, then try again"
+                .into(),
+        ));
+    }
+    Ok(uses_lfs)
+}
+
+/// Whether any tracked file is marked `filter=lfs` in a `.gitattributes`
+/// (root, nested, or `.git/info/attributes`).
+async fn repo_uses_lfs(dir: &Path) -> bool {
+    let tracked = match git(dir, &["ls-files", "-z"]).await {
+        Ok(output) if output.status.success() => output.stdout,
+        _ => return false,
+    };
+    // `git check-attr` applies `.gitattributes` and `.git/info/attributes`;
+    // attribute matching doesn't need the files themselves to exist.
+    let names: Vec<&str> = tracked
+        .split(|byte| *byte == 0)
+        .filter_map(|name| std::str::from_utf8(name).ok())
+        .filter(|name| !name.is_empty())
+        .collect();
+    if names.is_empty() {
+        return false;
+    }
+    let mut query = String::new();
+    for name in &names {
+        query.push_str(name);
+        query.push('\0');
+    }
+    let mut command = Command::new("git");
+    command
+        .args(["check-attr", "-z", "filter", "--stdin"])
+        .current_dir(dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("LC_ALL", "C")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    let Ok(mut child) = command.spawn() else {
+        return false;
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        use tokio::io::AsyncWriteExt;
+        let _ = stdin.write_all(query.as_bytes()).await;
+        let _ = stdin.shutdown().await;
+    }
+    let Ok(output) = child.wait_with_output().await else {
+        return false;
+    };
+    // Triples `<path>\0filter\0<value>\0`; `lfs` (not `unspecified`, `unset`,
+    // `set`, or another filter's name) means a Git LFS file.
+    output
+        .stdout
+        .split(|byte| *byte == 0)
+        .collect::<Vec<_>>()
+        .chunks(3)
+        .any(|triple| triple.get(2).is_some_and(|value| value == b"lfs"))
+}
+
+/// `git-lfs` on PATH (`git lfs version` succeeds).
+async fn git_lfs_available() -> bool {
+    git(Path::new("."), &["lfs", "version"])
+        .await
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+/// Pulls every Git LFS object into a fresh checkout so it has real contents,
+/// not pointers, and nothing shows as modified. Best effort: a failed pull
+/// is reported, not fatal — the checkout itself is sound.
+async fn materialize_lfs(checkout: &Path, uses_lfs: bool) {
+    if !uses_lfs || !git_lfs_available().await {
+        return;
+    }
+    // `git lfs pull` skips object checkout unless Git LFS is installed for
+    // the repository. A `clone --local` does not inherit repo-local filter
+    // config, so make sure it is. `--local` keeps this checkout's settings
+    // out of the person's global gitconfig. Best effort: a failed pull is
+    // reported, not fatal — the checkout itself is sound.
+    match git(checkout, &["lfs", "install", "--local"]).await {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => tracing::warn!(
+            "git lfs install in {} did not succeed: {}",
+            checkout.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+        Err(error) => tracing::warn!(
+            "git lfs install in {} did not succeed: {error}",
+            checkout.display()
+        ),
+    }
+    match git(checkout, &["lfs", "pull"]).await {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => tracing::warn!(
+            "git lfs pull in {} did not succeed: {}",
+            checkout.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+        Err(error) => tracing::warn!(
+            "git lfs pull in {} did not succeed: {error}",
+            checkout.display()
+        ),
+    }
+}
+
+/// A fresh checkout should have nothing uncommitted; if anything is (Git LFS
+/// prints "should have been a pointer, but wasn't" for images committed
+/// without going through git-lfs), say so plainly instead of handing back a
+/// dirty checkout whose results would be refused later.
+async fn warn_if_dirty(checkout: &Path, kind: &str) {
+    match dirty(checkout).await {
+        Ok(false) => {}
+        Ok(true) => tracing::warn!(
+            "the {kind} {} is not clean after creation; \
+             `git status` shows changes (see `git lfs ls-files`; \
+             images marked filter=lfs but committed as raw binary need \
+             `git lfs migrate import` / `git add --renormalize`, \
+             and git-lfs needs to be installed and `git lfs install`ed)",
+            checkout.display()
+        ),
+        Err(error) => tracing::warn!(
+            "could not check the {kind} {} is clean: {error}",
+            checkout.display()
+        ),
+    }
+}
+
+/// Takes a partial checkout away again: its worktree admin files, its
+/// folder, and the branch `git worktree add -b` may have made.
+async fn take_away(dir: &Path, path: &Path, branch: &str) {
+    let path_text = path.to_string_lossy().into_owned();
+    match git(dir, &["worktree", "remove", "--force", &path_text]).await {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => tracing::warn!(
+            "could not take the worktree away: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+        Err(error) => tracing::warn!("could not take the worktree away: {error}"),
+    }
+    let _ = git(dir, &["worktree", "prune"]).await;
+    match git(dir, &["branch", "-D", branch]).await {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => tracing::warn!(
+            "could not delete the branch {branch}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+        Err(error) => tracing::warn!("could not delete the branch {branch}: {error}"),
+    }
+    let _ = std::fs::remove_dir_all(path);
+}
+
 /// Whether the checkout has anything uncommitted, untracked files included.
 async fn dirty(dir: &Path) -> Result<bool, WorktreeError> {
     let output = git(dir, &["status", "--porcelain"]).await?;
@@ -1307,5 +1492,161 @@ mod tests {
         .await
         .unwrap();
         assert!(!branch.status.success(), "the branch is taken away too");
+    }
+
+    /// A project marked `filter=lfs` in `.gitattributes` needs `git-lfs`;
+    /// without it no sound checkout can be made, and nothing is left behind.
+    /// (No `git-lfs` here: the attribute alone is enough to see the repo
+    /// uses LFS.) Both kinds of checkout refuse.
+    #[tokio::test]
+    async fn an_lfs_project_without_git_lfs_makes_no_checkout_and_leaves_nothing() {
+        let (root, _data, store, project, events) = setup().await;
+        let dir = root.path().join("demo");
+        // This is the no-`git-lfs` case; skipped where git-lfs is on PATH.
+        if git_lfs_available().await {
+            eprintln!("git-lfs on PATH; skipping");
+            return;
+        }
+        std::fs::write(
+            dir.join(".gitattributes"),
+            "*.png filter=lfs diff=lfs merge=lfs -text\n",
+        )
+        .unwrap();
+        // A PNG; without git-lfs it is committed as a raw binary.
+        std::fs::write(dir.join("pic.png"), [0x89, b'P', b'N', b'G', 1, 2, 3, 4, 5]).unwrap();
+        git_blocking(&dir, &["add", "."]);
+        git_blocking(&dir, &["commit", "-q", "-m", "lfs attributes"]);
+        let worktrees = Worktrees::open(root.path(), store, events).unwrap();
+
+        assert!(repo_uses_lfs(&dir).await);
+        for made in [
+            worktrees
+                .create(&project, &dir, NewWorktree::default())
+                .await,
+            worktrees
+                .create_clone(&project, &dir, NewWorktree::default())
+                .await,
+        ] {
+            let Err(WorktreeError::Invalid(message)) = made else {
+                panic!("an LFS project without git-lfs cannot make a checkout: {made:?}");
+            };
+            assert!(message.contains("git-lfs"), "{message}");
+            assert!(message.contains("Git LFS"), "{message}");
+        }
+        // Nothing was made: no checkout, no branch, nothing half done.
+        assert!(worktrees.known(project.id).is_empty());
+        let listed = git(&dir, &["worktree", "list"]).await.unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&listed.stdout).lines().count(),
+            1,
+            "only the main checkout"
+        );
+        let branches = git(
+            &dir,
+            &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+        )
+        .await
+        .unwrap();
+        assert_eq!(String::from_utf8_lossy(&branches.stdout).trim(), "main");
+        let made_root = root
+            .path()
+            .join(".aiddiction-worktrees")
+            .join(project.id.to_string());
+        assert!(!made_root.exists() || std::fs::read_dir(&made_root).unwrap().next().is_none());
+    }
+
+    /// With `git-lfs` on PATH, a project using Git LFS gets a checkout with
+    /// real image contents (not pointers) and nothing modified, both kinds.
+    /// Skipped where `git-lfs` is not installed.
+    #[tokio::test]
+    async fn an_lfs_project_gets_real_images_and_a_clean_checkout_with_git_lfs() {
+        let (root, _data, store, project, events) = setup().await;
+        let dir = root.path().join("demo");
+        if !git_lfs_available().await {
+            eprintln!("git-lfs not on PATH; skipping");
+            return;
+        }
+        git_blocking(&dir, &["lfs", "install", "--local"]);
+        std::fs::write(
+            dir.join(".gitattributes"),
+            "*.png filter=lfs diff=lfs merge=lfs -text\n",
+        )
+        .unwrap();
+        let png = [
+            0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 42, 42, 42, 42,
+        ];
+        std::fs::write(dir.join("pic.png"), png).unwrap();
+        git_blocking(&dir, &["add", "."]);
+        git_blocking(&dir, &["commit", "-q", "-m", "lfs image"]);
+        assert!(repo_uses_lfs(&dir).await);
+        let worktrees = Worktrees::open(root.path(), store, events).unwrap();
+
+        for made in [
+            worktrees
+                .create(&project, &dir, NewWorktree::default())
+                .await
+                .unwrap(),
+            worktrees
+                .create_clone(&project, &dir, NewWorktree::default())
+                .await
+                .unwrap(),
+        ] {
+            let path = Path::new(&made.path);
+            let image = std::fs::read(path.join("pic.png")).unwrap();
+            assert_eq!(
+                image, png,
+                "real image contents, not an LFS pointer, in {}",
+                made.path
+            );
+            assert!(
+                !dirty(path).await.unwrap(),
+                "nothing modified in {}",
+                made.path
+            );
+        }
+    }
+
+    /// `git worktree add` failing part way (here, a file sits where git wants
+    /// its worktree admin directory) leaves no checkout, admin files or
+    /// branch behind, so a retry is not blocked.
+    #[tokio::test]
+    async fn a_worktree_add_that_fails_leaves_nothing_behind() {
+        let (root, _data, store, project, events) = setup().await;
+        let dir = root.path().join("demo");
+        let worktrees = Worktrees::open(root.path(), store, events).unwrap();
+        let name = "doomed";
+        // A file sits where git wants its `.git/worktrees` admin directory.
+        std::fs::write(dir.join(".git").join("worktrees"), b"not a directory").unwrap();
+
+        let made = worktrees
+            .create(
+                &project,
+                &dir,
+                NewWorktree {
+                    name: Some(name.into()),
+                    ..NewWorktree::default()
+                },
+            )
+            .await;
+        assert!(made.is_err(), "{made:?}");
+        let path = root
+            .path()
+            .join(".aiddiction-worktrees")
+            .join(project.id.to_string())
+            .join(name);
+        assert!(!path.exists(), "no checkout is left behind");
+        let branches = git(
+            &dir,
+            &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+        )
+        .await
+        .unwrap();
+        let branches = String::from_utf8_lossy(&branches.stdout);
+        assert!(
+            branches
+                .lines()
+                .all(|branch| !branch.starts_with("aiddiction/")),
+            "no branch is left behind: {branches}"
+        );
     }
 }
